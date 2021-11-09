@@ -1277,19 +1277,10 @@ public final class StarlarkAttrTransitionProviderTest extends BuildViewTestCase 
 
     ConfiguredTarget test = getConfiguredTarget("//test");
 
-    List<String> affectedOptions = getCoreOptions(test).affectedByStarlarkTransition;
-
-    assertThat(affectedOptions).containsExactly("//command_line_option:foo");
-
     @SuppressWarnings("unchecked")
     ConfiguredTarget dep =
         Iterables.getOnlyElement(
             (List<ConfiguredTarget>) getMyInfoFromTarget(test).getValue("dep"));
-
-    affectedOptions = getCoreOptions(dep).affectedByStarlarkTransition;
-
-    assertThat(affectedOptions)
-        .containsExactly("//command_line_option:foo", "//command_line_option:bar");
 
     assertThat(getTransitionDirectoryNameFragment(test))
         .isEqualTo(
@@ -1459,7 +1450,7 @@ public final class StarlarkAttrTransitionProviderTest extends BuildViewTestCase 
     assertThat(getTransitionDirectoryNameFragment(dep)).isNotEmpty();
   }
 
-  /** See comment above {@link FunctionTransitionUtil#updateOutputDirectoryNameFragment} */
+  /** See comment above {@link FunctionTransitionUtil#computeOutputDirectoryNameFragment} */
   // TODO(bazel-team): This can be optimized. Make these the same configuration.
   @Test
   public void testOutputDirHash_starlarkOption_differentBoolRepresentationsNotEquals()
@@ -1619,10 +1610,6 @@ public final class StarlarkAttrTransitionProviderTest extends BuildViewTestCase 
         Iterables.getOnlyElement(
             (List<ConfiguredTarget>) getMyInfoFromTarget(test).getValue("dep"));
 
-    List<String> affectedOptions =
-        getConfiguration(dep).getOptions().get(CoreOptions.class).affectedByStarlarkTransition;
-
-    assertThat(affectedOptions).containsExactly("//test:bar", "//test:foo");
     assertThat(getTransitionDirectoryNameFragment(test))
         .isEqualTo(
             FunctionTransitionUtil.transitionDirectoryNameFragment(
@@ -1706,10 +1693,6 @@ public final class StarlarkAttrTransitionProviderTest extends BuildViewTestCase 
     // test:top (foo_transition)
     ConfiguredTarget top = getConfiguredTarget("//test:top");
 
-    List<String> affectedOptionsTop =
-        getConfiguration(top).getOptions().get(CoreOptions.class).affectedByStarlarkTransition;
-
-    assertThat(affectedOptionsTop).containsExactly("//command_line_option:foo");
     assertThat(getConfiguration(top).getOptions().getStarlarkOptions()).isEmpty();
     assertThat(getTransitionDirectoryNameFragment(top))
         .isEqualTo(
@@ -1720,12 +1703,6 @@ public final class StarlarkAttrTransitionProviderTest extends BuildViewTestCase 
     @SuppressWarnings("unchecked")
     ConfiguredTarget middle =
         Iterables.getOnlyElement((List<ConfiguredTarget>) getMyInfoFromTarget(top).getValue("dep"));
-
-    List<String> affectedOptionsMiddle =
-        getConfiguration(middle).getOptions().get(CoreOptions.class).affectedByStarlarkTransition;
-
-    assertThat(affectedOptionsMiddle)
-        .containsExactly("//command_line_option:foo", "//command_line_option:bar", "//test:zee");
 
     assertThat(getConfiguration(middle).getOptions().getStarlarkOptions().entrySet())
         .containsExactly(
@@ -1744,13 +1721,6 @@ public final class StarlarkAttrTransitionProviderTest extends BuildViewTestCase 
     ConfiguredTarget bottom =
         Iterables.getOnlyElement(
             (List<ConfiguredTarget>) getMyInfoFromTarget(middle).getValue("dep"));
-
-    List<String> affectedOptionsBottom =
-        getConfiguration(bottom).getOptions().get(CoreOptions.class).affectedByStarlarkTransition;
-
-    assertThat(affectedOptionsBottom)
-        .containsExactly(
-            "//command_line_option:foo", "//command_line_option:bar", "//test:xan", "//test:zee");
 
     assertThat(getConfiguration(bottom).getOptions().getStarlarkOptions().entrySet())
         .containsExactly(

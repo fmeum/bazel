@@ -954,7 +954,8 @@ public final class BuildEventStreamerTest extends FoundationTestCase {
             /*reservedActionMnemonics=*/ ImmutableSet.of(),
             ActionEnvironment.EMPTY,
             RepositoryName.createFromValidStrippedName("workspace"),
-            /*siblingRepositoryLayout=*/ false);
+            /*siblingRepositoryLayout=*/ false,
+            "");
     BuildEvent firstWithConfiguration =
         new GenericConfigurationEvent(testId("first"), configuration.toBuildEvent());
     BuildEvent secondWithConfiguration =

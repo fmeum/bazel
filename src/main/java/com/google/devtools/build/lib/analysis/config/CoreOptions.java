@@ -248,40 +248,6 @@ public class CoreOptions extends FragmentOptions implements Cloneable {
       metadataTags = {OptionMetadataTag.EXPERIMENTAL})
   public boolean enableAspectHints;
 
-  /** Regardless of input, converts to an empty list. For use with affectedByStarlarkTransition */
-  public static class EmptyListConverter implements Converter<List<String>> {
-    @Override
-    public List<String> convert(String input) throws OptionsParsingException {
-      return ImmutableList.of();
-    }
-
-    @Override
-    public String getTypeDescription() {
-      return "Regardless of input, converts to an empty list. For use with"
-          + " affectedByStarlarkTransition";
-    }
-  }
-
-  /**
-   * This internal option is a *set* of names of options that have been changed by starlark
-   * transitions at any point in the build at the time of accessing. It contains both native and
-   * starlark options in label form. e.g. "//command_line_option:cpu" for native options and
-   * "//myapp:foo" for starlark options. This is used to regenerate {@code
-   * transitionDirectoryNameFragment} after each starlark transition.
-   */
-  @Option(
-      name = "affected by starlark transition",
-      defaultValue = "",
-      converter = EmptyListConverter.class,
-      documentationCategory = OptionDocumentationCategory.UNDOCUMENTED,
-      effectTags = {
-        OptionEffectTag.LOSES_INCREMENTAL_STATE,
-        OptionEffectTag.AFFECTS_OUTPUTS,
-        OptionEffectTag.LOADING_AND_ANALYSIS
-      },
-      metadataTags = {OptionMetadataTag.INTERNAL})
-  public List<String> affectedByStarlarkTransition;
-
   @Option(
       name = "platform_suffix",
       defaultValue = "null",
@@ -823,7 +789,6 @@ public class CoreOptions extends FragmentOptions implements Cloneable {
   public FragmentOptions getHost() {
     CoreOptions host = (CoreOptions) getDefault();
 
-    host.affectedByStarlarkTransition = affectedByStarlarkTransition;
     host.compilationMode = hostCompilationMode;
     host.isHost = true;
     host.isExec = false;

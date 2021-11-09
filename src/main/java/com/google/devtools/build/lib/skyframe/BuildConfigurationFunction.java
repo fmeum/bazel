@@ -32,6 +32,7 @@ import com.google.devtools.build.lib.analysis.config.OutputDirectories.InvalidMn
 import com.google.devtools.build.lib.cmdline.RepositoryName;
 import com.google.devtools.build.lib.packages.RuleClassProvider;
 import com.google.devtools.build.lib.packages.semantics.BuildLanguageOptions;
+import com.google.devtools.build.lib.skyframe.SkyframeExecutor.BuildViewProvider;
 import com.google.devtools.build.skyframe.SkyFunction;
 import com.google.devtools.build.skyframe.SkyFunctionException;
 import com.google.devtools.build.skyframe.SkyKey;
@@ -47,13 +48,17 @@ public final class BuildConfigurationFunction implements SkyFunction {
   /** Cache with weak values can't have null values. */
   private static final Fragment NULL_MARKER = new Fragment() {};
 
+  private final BuildViewProvider buildViewProvider;
   private final BlazeDirectories directories;
   private final ConfiguredRuleClassProvider ruleClassProvider;
   private final LoadingCache<FragmentKey, Fragment> fragmentCache =
       Caffeine.newBuilder().weakValues().build(BuildConfigurationFunction::makeFragment);
 
   public BuildConfigurationFunction(
-      BlazeDirectories directories, RuleClassProvider ruleClassProvider) {
+      BuildViewProvider buildViewProvider,
+      BlazeDirectories directories,
+      RuleClassProvider ruleClassProvider) {
+    this.buildViewProvider = buildViewProvider;
     this.directories = directories;
     this.ruleClassProvider = (ConfiguredRuleClassProvider) ruleClassProvider;
   }
@@ -89,12 +94,26 @@ public final class BuildConfigurationFunction implements SkyFunction {
     ActionEnvironment actionEnvironment =
         ruleClassProvider.getActionEnvironmentProvider().getActionEnvironment(key.getOptions());
 
+    BuildConfigurationValue hostConfiguration = buildViewProvider.getSkyframeBuildView()
+        .getHostConfiguration();
+    BuildOptions topLevelBuildOptions;
+    if (hostConfiguration != null) {
+      topLevelBuildOptions = hostConfiguration.getOptions();
+    } else {
+      // hostConfiguration can be null early in the build (see the comment on
+      // SkyframeBuildView#getHostConfiguration. At that point it is probably safe to assume that no
+      // transition has taken place, so the current BuildOptions are still those set on the command
+      // line.
+      System.err.println("hostConfiguration was null");
+      topLevelBuildOptions = key.getOptions();
+    }
     try {
-      return new BuildConfigurationValue(
+      return BuildConfigurationValue.createBuildConfigurationValue(
           directories,
           fragments,
           fragmentClasses,
           key.getOptions(),
+          topLevelBuildOptions,
           ruleClassProvider.getReservedActionMnemonics(),
           actionEnvironment,
           RepositoryName.createFromValidStrippedName(workspaceNameValue.getName()),

@@ -153,6 +153,10 @@ public class BuildConfigurationValue implements BuildConfigurationApi, SkyValue 
     return ActionEnvironment.split(testEnv);
   }
 
+  /**
+   * Only used for AutoCodec, construct an instance via
+   * {@link BuildConfigurationValue#createBuildConfigurationValue} instead.
+   */
   public BuildConfigurationValue(
       BlazeDirectories directories,
       ImmutableMap<Class<? extends Fragment>, Fragment> fragments,
@@ -161,7 +165,8 @@ public class BuildConfigurationValue implements BuildConfigurationApi, SkyValue 
       ImmutableSet<String> reservedActionMnemonics,
       ActionEnvironment actionEnvironment,
       RepositoryName mainRepositoryName,
-      boolean siblingRepositoryLayout)
+      boolean siblingRepositoryLayout,
+      String transitionDirectoryNameFragment)
       throws InvalidMnemonicException {
     this.fragments =
         fragmentsInterner.intern(
@@ -174,8 +179,7 @@ public class BuildConfigurationValue implements BuildConfigurationApi, SkyValue 
     if (buildOptions.contains(PlatformOptions.class)) {
       platformOptions = buildOptions.get(PlatformOptions.class);
     }
-    this.transitionDirectoryNameFragment =
-        FunctionTransitionUtil.computeOutputDirectoryNameFragment(buildOptions);
+    this.transitionDirectoryNameFragment = transitionDirectoryNameFragment;
     this.outputDirectories =
         new OutputDirectories(
             directories,
@@ -219,6 +223,37 @@ public class BuildConfigurationValue implements BuildConfigurationApi, SkyValue 
     this.reservedActionMnemonics = reservedActionMnemonics;
     this.buildEventSupplier = Suppliers.memoize(this::createBuildEvent);
     this.commandLineLimits = new CommandLineLimits(options.minParamFileSize);
+  }
+
+  /**
+   * Constructs an instance of {@link BuildConfigurationValue} with the
+   * transitionDirectoryNameFragment computed from the buildOptions and topLevelBuildOptions.
+   * <p>
+   * This factory method exists so that AutoCodec does not store the topLevelBuildOptions for each
+   * BuildConfigurationValue.
+   */
+  public static BuildConfigurationValue createBuildConfigurationValue(
+      BlazeDirectories directories,
+      ImmutableMap<Class<? extends Fragment>, Fragment> fragments,
+      FragmentClassSet fragmentClassSet,
+      BuildOptions buildOptions,
+      BuildOptions topLevelBuildOptions,
+      ImmutableSet<String> reservedActionMnemonics,
+      ActionEnvironment actionEnvironment,
+      RepositoryName mainRepositoryName,
+      boolean siblingRepositoryLayout) throws InvalidMnemonicException {
+    return new BuildConfigurationValue(
+        directories,
+        fragments,
+        fragmentClassSet,
+        buildOptions,
+        reservedActionMnemonics,
+        actionEnvironment,
+        mainRepositoryName,
+        siblingRepositoryLayout,
+        FunctionTransitionUtil.computeOutputDirectoryNameFragment(buildOptions,
+            topLevelBuildOptions)
+    );
   }
 
   private ImmutableMap<String, Class<? extends Fragment>> buildIndexOfStarlarkVisibleFragments() {

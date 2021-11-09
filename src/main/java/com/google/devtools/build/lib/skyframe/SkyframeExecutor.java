@@ -583,7 +583,7 @@ public abstract class SkyframeExecutor implements WalkableGraphFactory, Configur
         new TopLevelActionLookupConflictFindingFunction());
     map.put(
         SkyFunctions.BUILD_CONFIGURATION,
-        new BuildConfigurationFunction(directories, ruleClassProvider));
+        new BuildConfigurationFunction(new BuildViewProvider(), directories, ruleClassProvider));
     map.put(SkyFunctions.WORKSPACE_NAME, new WorkspaceNameFunction());
     map.put(
         WorkspaceFileValue.WORKSPACE_FILE,
