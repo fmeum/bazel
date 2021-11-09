@@ -440,9 +440,7 @@ public final class FunctionTransitionUtil {
         toHash.put(optionName, value);
       } else {
         Object value = toOptions.getStarlarkOptions().get(Label.parseAbsoluteUnchecked(optionName));
-        if (value != null) {
-          toHash.put(optionName, value);
-        }
+        toHash.put(optionName, value);
       }
     }
 
