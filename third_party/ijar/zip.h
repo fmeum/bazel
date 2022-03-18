@@ -110,11 +110,20 @@ class ZipExtractorProcessor {
  public:
   virtual ~ZipExtractorProcessor() {}
 
+  enum class AcceptResult {
+    // The processor will keep a possibly processed version of this file.
+    PROCESS,
+    // The processor will skip this file entirely.
+    SKIP,
+    // The processor has determined based on this file that it is incompatible
+    // with the zip file.
+    INCOMPATIBLE,
+  };
+
   // Tells whether to skip or process the file "filename". "attr" is the
   // external file attributes and can be converted to unix mode using the
-  // zipattr_to_mode() function. This method is suppoed to returns true
-  // if the file should be processed and false if it should be skipped.
-  virtual bool Accept(const char* filename, const u4 attr) = 0;
+  // zipattr_to_mode() function.
+  virtual AcceptResult Accept(const char* filename, const u4 attr) = 0;
 
   // Process a file accepted by Accept. The file "filename" has external
   // attributes "attr" and length "size". The file content is accessible
@@ -154,7 +163,10 @@ class ZipExtractor {
   // method can be used to create a ZipBuilder for storing a subset
   // of the input files.
   // On error, 0 is returned and GetError() returns a non-empty message.
-  virtual u8 CalculateOutputLength() = 0;
+  // If the current processor determines that it is incompatible with the
+  // particular contents of the zip file, static_cast<u8>(-1) is returned and
+  // the caller should try again with a different processor.
+  virtual u8 CalculateOutputLengthAndCheckCompatibility() = 0;
 
   // Create a ZipExtractor that extract the zip file "filename" and process
   // it with "processor".

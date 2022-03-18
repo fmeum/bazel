@@ -61,13 +61,17 @@ class UnzipProcessor : public ZipExtractorProcessor {
 
   virtual void Process(const char* filename, const u4 attr,
                        const u1* data, const size_t size);
-  virtual bool Accept(const char* filename, const u4 attr) {
+  virtual AcceptResult Accept(const char* filename, const u4 attr) {
     // All entry files are accepted by default.
     if (file_names.empty()) {
-      return true;
+      return AcceptResult::PROCESS;
     } else {
       // If users have specified file entries, only accept those files.
-      return file_names.count(std::string(filename)) == 1;
+      if (file_names.count(std::string(filename)) == 1) {
+        return AcceptResult::PROCESS;
+      } else {
+        return AcceptResult::SKIP;
+      }
     }
   }
 

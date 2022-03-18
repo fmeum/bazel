@@ -49,6 +49,7 @@ sh_test(
         "libwrongcentraldir.jar",
         "@bazel_tools//tools/jdk:current_java_runtime",
         "//third_party/java/jdk/langtools:javac_jar",
+        "kotlin/inline-cases.jar",
     ],
     shard_count = 5,
     tags = ["zip"],

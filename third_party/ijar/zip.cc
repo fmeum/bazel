@@ -101,7 +101,7 @@ class InputZipFile : public ZipExtractor {
     return input_file_->Length();
   }
 
-  virtual u8 CalculateOutputLength();
+  virtual u8 CalculateOutputLengthAndCheckCompatibility();
 
   virtual bool ProcessCentralDirEntry(const u1 *&p, u8 *compressed_size,
                                       u8 *uncompressed_size, char *filename,
@@ -403,14 +403,18 @@ int InputZipFile::ProcessLocalFileEntry(
     }
   }
 
-  if (processor->Accept(filename, attr)) {
+  using AcceptResult = ZipExtractorProcessor::AcceptResult;
+  AcceptResult result = processor->Accept(filename, attr);
+  if (result == AcceptResult::PROCESS) {
     if (ProcessFile(is_compressed) < 0) {
       return -1;
     }
-  } else {
+  } else if (result == AcceptResult::SKIP) {
     if (SkipFile(is_compressed) < 0) {
       return -1;
     }
+  } else /* result == AcceptResult::INCOMPATIBLE */ {
+    return error("incompatible processor should not have started processing\n");
   }
 
   if (general_purpose_bit_flag_ & GENERAL_PURPOSE_BIT_FLAG_COMPRESSED) {
@@ -565,7 +569,7 @@ bool InputZipFile::ProcessCentralDirEntry(const u1 *&p, u8 *compressed_size,
 // Gives a maximum bound on the size of the interface JAR. Basically, adds
 // the difference between the compressed and uncompressed sizes to the size
 // of the input file.
-u8 InputZipFile::CalculateOutputLength() {
+u8 InputZipFile::CalculateOutputLengthAndCheckCompatibility() {
   const u1* current = central_dir_;
 
   u8 compressed_size = 0;
@@ -583,11 +587,15 @@ u8 InputZipFile::CalculateOutputLength() {
       break;
     }
 
-    if (processor->Accept(filename, attr)) {
+    using AcceptResult = ZipExtractorProcessor::AcceptResult;
+    AcceptResult res = processor->Accept(filename, attr);
+    if (res == AcceptResult::PROCESS) {
       compressed_size += (u8) file_compressed;
       uncompressed_size += (u8) file_uncompressed;
-    } else {
+    } else if (res == AcceptResult::SKIP){
       skipped_compressed_size += file_compressed;
+    } else /* res == AcceptResult::INCOMPATIBLE */ {
+      return static_cast<u8>(-1);
     }
   }
 

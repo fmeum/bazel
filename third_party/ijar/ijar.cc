@@ -83,7 +83,7 @@ class JarStripperProcessor : public JarExtractorProcessor {
 
   virtual void Process(const char *filename, const u4 attr, const u1 *data,
                        const size_t size);
-  virtual bool Accept(const char *filename, const u4 attr);
+  AcceptResult Accept(const char *filename, const u4 attr);
 
   virtual void WriteManifest(const char *target_label,
                              const char *injecting_rule_kind);
@@ -112,18 +112,24 @@ static bool IsScalaTasty(const char *filename, const size_t filename_len) {
                   SCALA_TASTY_EXTENSION_LENGTH);
 }
 
-bool JarStripperProcessor::Accept(const char *filename, const u4 /*attr*/) {
+ZipExtractorProcessor::AcceptResult JarStripperProcessor::Accept(
+    const char *filename, const u4 /*attr*/) {
   const size_t filename_len = strlen(filename);
-  if (IsKotlinModule(filename, filename_len) ||
-      IsScalaTasty(filename, filename_len)) {
-    return true;
+  if (IsKotlinModule(filename, filename_len)){
+    // ijar curently doesn't produce correct results on Kotlin jars, most
+    // importantly because it omits the bodies of inline methods. Thus, ensure
+    // correctness by requesting a fallback to the non-stripping processor.
+    return AcceptResult::INCOMPATIBLE;
+  }
+  if(IsScalaTasty(filename, filename_len)) {
+    return AcceptResult::PROCESS;
   }
   if (filename_len < CLASS_EXTENSION_LENGTH ||
       strcmp(filename + filename_len - CLASS_EXTENSION_LENGTH,
              CLASS_EXTENSION) != 0) {
-    return false;
+    return AcceptResult::SKIP;
   }
-  return true;
+  return AcceptResult::PROCESS;
 }
 
 static bool IsModuleInfo(const char *filename) {
@@ -205,7 +211,7 @@ class JarCopierProcessor : public JarExtractorProcessor {
 
   virtual void Process(const char *filename, const u4 /*attr*/, const u1 *data,
                        const size_t size);
-  virtual bool Accept(const char *filename, const u4 /*attr*/);
+  virtual AcceptResult Accept(const char *filename, const u4 /*attr*/);
 
   virtual void WriteManifest(const char *target_label,
                              const char *injecting_rule_kind);
@@ -219,8 +225,12 @@ class JarCopierProcessor : public JarExtractorProcessor {
     u1 *manifest_buf_;
     size_t manifest_size_;
 
-    virtual bool Accept(const char *filename, const u4 /*attr*/) {
-      return strcmp(filename, MANIFEST_PATH) == 0;
+    virtual AcceptResult Accept(const char *filename, const u4 /*attr*/) {
+      if (strcmp(filename, MANIFEST_PATH) == 0) {
+        return AcceptResult::PROCESS;
+      } else {
+        return AcceptResult::SKIP;
+      }
     }
 
     virtual void Process(const char * /*filename*/, const u4 /*attr*/,
@@ -253,8 +263,9 @@ void JarCopierProcessor::Process(const char *filename, const u4 /*attr*/,
   builder_->FinishFile(size, /* compress: */ false, /* compute_crc: */ true);
 }
 
-bool JarCopierProcessor::Accept(const char * /*filename*/, const u4 /*attr*/) {
-  return true;
+ZipExtractorProcessor::AcceptResult JarCopierProcessor::Accept(
+    const char * /*filename*/, const u4 /*attr*/) {
+  return AcceptResult::PROCESS;
 }
 
 void JarCopierProcessor::WriteManifest(const char *target_label,
@@ -381,8 +392,16 @@ static void OpenFilesAndProcessJar(const char *file_out, const char *file_in,
             strerror(errno));
     abort();
   }
-  u8 output_length = in->CalculateOutputLength();
-  if (output_length < JAR_WITH_DUMMY_FILE_SIZE) {
+  u8 output_length = in->CalculateOutputLengthAndCheckCompatibility();
+  if (output_length == static_cast<u8>(-1)) {
+    // The current processor is incompatible with the contents of the jar.
+    // Try again with stripping disabled. Since the non-stripping processor is
+    // compatible with all jars, this can never result in an endless loop.
+    processor.reset();
+    in.reset();
+    return OpenFilesAndProcessJar(
+        file_out, file_in, false, target_label, injecting_rule_kind);
+  } else if (output_length < JAR_WITH_DUMMY_FILE_SIZE) {
     output_length = JAR_WITH_DUMMY_FILE_SIZE;
   }
   output_length +=
