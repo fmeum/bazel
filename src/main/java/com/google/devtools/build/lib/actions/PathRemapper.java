@@ -16,17 +16,43 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
 
-public class PerActionPathRemapper {
+public interface PathRemapper {
 
-  private static final GoogleLogger logger = GoogleLogger.forEnclosingClass();
+  String getExecPathString(DerivedArtifact artifact, boolean forActionKey);
 
-  private final ImmutableMap<PathFragment, String> execPathMapping;
+  GoogleLogger logger = GoogleLogger.forEnclosingClass();
 
-  private PerActionPathRemapper(ImmutableMap<PathFragment, String> execPathMapping) {
-    this.execPathMapping = execPathMapping;
+  class PerActionPathRemapper implements PathRemapper {
+    private final ImmutableMap<PathFragment, String> execPathMapping;
+
+    private PerActionPathRemapper(ImmutableMap<PathFragment, String> execPathMapping) {
+      this.execPathMapping = execPathMapping;
+    }
+
+    public String getExecPathString(DerivedArtifact artifact, boolean forActionKey) {
+      String remappedPath = execPathMapping.get(artifact.getExecPath());
+      if (remappedPath != null) {
+        return remappedPath;
+      }
+      // Output artifact.
+      if (forActionKey) {
+        return artifact.getRootRelativePathString();
+      } else {
+        return artifact.getExecPathString();
+      }
+    }
   }
 
-  public static PerActionPathRemapper create(
+  class NoopPathRemapper implements PathRemapper {
+    static PathRemapper INSTANCE = new NoopPathRemapper();
+
+    @Override
+    public String getExecPathString(DerivedArtifact artifact, boolean forActionKey) {
+      return artifact.getExecPathString();
+    }
+  }
+
+  static PathRemapper create(
       ActionExecutionContext actionExecutionContext,
       Iterable<ActionInput> inputs) {
     MetadataHandler metadataHandler = actionExecutionContext.getMetadataHandler();
@@ -46,16 +72,16 @@ public class PerActionPathRemapper {
         md = metadataHandler.getMetadata(input);
       } catch (IOException e) {
         logger.atWarning().withCause(e).log("Error getting metadata for %s", input);
-        return null;
+        return NoopPathRemapper.INSTANCE;
       }
       if (md == null) {
         logger.atWarning().log("Got null metadata for %s", input);
-        return null;
+        return NoopPathRemapper.INSTANCE;
       }
       byte[] digest = md.getDigest();
       if (digest == null) {
         logger.atWarning().log("Got null digest for %s", input);
-        return null;
+        return NoopPathRemapper.INSTANCE;
       }
       fp.addBytes(digest);
       baseHash = DigestUtils.xor(baseHash, fp.digestAndReset());
@@ -65,7 +91,7 @@ public class PerActionPathRemapper {
       shortPathCollisions.get(path).add(new Pair<>(derivedArtifact, digest));
     }
     if (shortPathCollisions.isEmpty()) {
-      return null;
+      return NoopPathRemapper.INSTANCE;
     }
 
     String rootPrefix = BaseEncoding.base16().encode(baseHash);
@@ -92,18 +118,5 @@ public class PerActionPathRemapper {
         .getPathString();
     logger.atInfo().log("Remapping %s to %s", artifact.getExecPathString(), remappedPath);
     return remappedPath;
-  }
-
-  public String getExecPathString(DerivedArtifact artifact, boolean forActionKey) {
-    String remappedPath = execPathMapping.get(artifact.getExecPath());
-    if (remappedPath != null) {
-      return remappedPath;
-    }
-    // Output artifact.
-    if (forActionKey) {
-      return artifact.getRootRelativePathString();
-    } else {
-      return artifact.getExecPathString();
-    }
   }
 }
