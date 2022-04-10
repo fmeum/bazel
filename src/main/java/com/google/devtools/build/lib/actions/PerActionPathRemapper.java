@@ -1,29 +1,29 @@
 package com.google.devtools.build.lib.actions;
 
 import com.google.common.collect.ImmutableMap;
+import com.google.common.collect.Streams;
 import com.google.common.flogger.GoogleLogger;
 import com.google.common.io.BaseEncoding;
 import com.google.common.primitives.UnsignedBytes;
 import com.google.devtools.build.lib.actions.Artifact.DerivedArtifact;
 import com.google.devtools.build.lib.actions.cache.MetadataHandler;
 import com.google.devtools.build.lib.util.Fingerprint;
+import com.google.devtools.build.lib.util.Pair;
 import com.google.devtools.build.lib.vfs.DigestUtils;
+import com.google.devtools.build.lib.vfs.PathFragment;
 import java.io.IOException;
 import java.util.ArrayList;
-import java.util.Arrays;
+import java.util.Comparator;
 import java.util.HashMap;
-import java.util.Map.Entry;
 
 public class PerActionPathRemapper {
 
   private static final GoogleLogger logger = GoogleLogger.forEnclosingClass();
 
-  private final String rootPrefix;
-  private final ImmutableMap<String, byte[][]> pathToDigests;
+  private final ImmutableMap<PathFragment, String> execPathMapping;
 
-  private PerActionPathRemapper(String rootPrefix, ImmutableMap<String, byte[][]> pathToDigests) {
-    this.rootPrefix = rootPrefix;
-    this.pathToDigests = pathToDigests;
+  private PerActionPathRemapper(ImmutableMap<PathFragment, String> execPathMapping) {
+    this.execPathMapping = execPathMapping;
   }
 
   public static PerActionPathRemapper create(
@@ -32,13 +32,14 @@ public class PerActionPathRemapper {
     MetadataHandler metadataHandler = actionExecutionContext.getMetadataHandler();
     byte[] baseHash = new byte[1];
     Fingerprint fp = new Fingerprint();
-    HashMap<String, ArrayList<byte[]>> pathToDigests = new HashMap<>();
+    HashMap<String, ArrayList<Pair<DerivedArtifact, byte[]>>> shortPathCollisions = new HashMap<>();
     for (ActionInput input : inputs) {
       if (!(input instanceof DerivedArtifact)) {
         logger.atInfo().log("Skipping source artifact %s", input);
         continue;
       }
-      String path = ((DerivedArtifact) input).getRootRelativePathString();
+      DerivedArtifact derivedArtifact = (DerivedArtifact) input;
+      String path = derivedArtifact.getRootRelativePathString();
       fp.addString(path);
       FileArtifactValue md;
       try {
@@ -58,41 +59,51 @@ public class PerActionPathRemapper {
       }
       fp.addBytes(digest);
       baseHash = DigestUtils.xor(baseHash, fp.digestAndReset());
-      if (!pathToDigests.containsKey(path)) {
-        pathToDigests.put(path, new ArrayList<>());
+      if (!shortPathCollisions.containsKey(path)) {
+        shortPathCollisions.put(path, new ArrayList<>());
       }
-      pathToDigests.get(path).add(digest);
+      shortPathCollisions.get(path).add(new Pair<>(derivedArtifact, digest));
     }
-    if (pathToDigests.isEmpty()) {
+    if (shortPathCollisions.isEmpty()) {
       return null;
     }
 
     String rootPrefix = BaseEncoding.base16().encode(baseHash);
-    ImmutableMap<String, byte[][]> pathToSortedDigests = pathToDigests.entrySet()
+    ImmutableMap<PathFragment, String> execPathMapping = shortPathCollisions
+        .values()
         .stream()
-        // Omit the lexicographically first (and possibly only) digest as a memory optimization for
-        // the very common case where a given path is only built in a single configuration. Since it
-        // is the only missing digest for this path, it can be recognized by its absence from the
-        // array.
-        .filter(e -> e.getValue().size() > 1)
-        .collect(ImmutableMap.toImmutableMap(
-            Entry::getKey,
-            e -> e.getValue()
-                .stream()
-                .sorted(UnsignedBytes.lexicographicalComparator())
-                .skip(1)
-                .toArray(byte[][]::new)));
-    return new PerActionPathRemapper(rootPrefix, pathToSortedDigests);
+        .flatMap(collidingArtifacts ->
+            Streams.mapWithIndex(collidingArtifacts.stream()
+                    .sorted(Comparator.comparing(Pair::getSecond,
+                        UnsignedBytes.lexicographicalComparator()))
+                    .map(Pair::getFirst),
+                (artifact, lexicographicIndex) -> new Pair<>(artifact.getExecPath(),
+                    remappedExecPathString(rootPrefix, artifact, lexicographicIndex))))
+        .collect(ImmutableMap.toImmutableMap(p -> p.first, p -> p.second));
+    return new PerActionPathRemapper(execPathMapping);
   }
 
-  public String getExecPathString(MetadataHandler metadataHandler, ActionInput input) {
-    if (!(input instanceof DerivedArtifact)) {
-      return input.getExecPathString();
+  private static String remappedExecPathString(String rootPrefix, DerivedArtifact artifact,
+      long lexicographicIndex) {
+    PathFragment execPath = artifact.getExecPath();
+    String remappedPath = execPath.subFragment(0, 1)
+        .getRelative(rootPrefix + "-" + lexicographicIndex)
+        .getRelative(execPath.subFragment(2))
+        .getPathString();
+    logger.atInfo().log("Remapping %s to %s", artifact.getExecPathString(), remappedPath);
+    return remappedPath;
+  }
+
+  public String getExecPathString(DerivedArtifact artifact, boolean forActionKey) {
+    String remappedPath = execPathMapping.get(artifact.getExecPath());
+    if (remappedPath != null) {
+      return remappedPath;
     }
-    String path = ((DerivedArtifact) input).getRootRelativePathString();
-    String root = rootPrefix;
-    if (pathToDigests.containsKey(path)) {
-      int index = Arrays.binarySearch(pathToDigests.get(path), )
+    // Output artifact.
+    if (forActionKey) {
+      return artifact.getRootRelativePathString();
+    } else {
+      return artifact.getExecPathString();
     }
   }
 }
