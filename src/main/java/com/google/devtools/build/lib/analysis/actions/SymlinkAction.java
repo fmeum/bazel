@@ -25,6 +25,7 @@ import com.google.devtools.build.lib.actions.ActionOwner;
 import com.google.devtools.build.lib.actions.ActionResult;
 import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.actions.Artifact.ArtifactExpander;
+import com.google.devtools.build.lib.actions.PathStripper.CommandAdjuster;
 import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
 import com.google.devtools.build.lib.collect.nestedset.Order;
 import com.google.devtools.build.lib.server.FailureDetails;
@@ -278,6 +279,7 @@ public final class SymlinkAction extends AbstractAction {
   protected void computeKey(
       ActionKeyContext actionKeyContext,
       @Nullable ArtifactExpander artifactExpander,
+      CommandAdjuster pathStripper,
       Fingerprint fp) {
     fp.addString(GUID);
     // We don't normally need to add inputs to the key. In this case, however, the inputPath can be

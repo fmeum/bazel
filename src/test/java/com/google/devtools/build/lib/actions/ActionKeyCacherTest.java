@@ -24,6 +24,7 @@ import static org.mockito.Mockito.verify;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.devtools.build.lib.actions.Artifact.ArtifactExpander;
+import com.google.devtools.build.lib.actions.PathStripper.CommandAdjuster;
 import com.google.devtools.build.lib.analysis.platform.PlatformInfo;
 import com.google.devtools.build.lib.collect.nestedset.NestedSet;
 import com.google.devtools.build.lib.util.Fingerprint;
@@ -46,6 +47,7 @@ public class ActionKeyCacherTest {
     protected void computeKey(
         ActionKeyContext actionKeyContext,
         @Nullable ArtifactExpander artifactExpander,
+        CommandAdjuster pathStripper,
         Fingerprint fp) {
       fp.addString(artifactExpander == null ? "no expander" : "has expander");
     }
@@ -149,41 +151,41 @@ public class ActionKeyCacherTest {
 
   @Test
   public void getKey_withAndWithoutExpander_returnsDifferentKey() throws Exception {
-    String withoutExpander = cacher.getKey(actionKeyContext, /*artifactExpander=*/ null);
-    String withExpander = cacher.getKey(actionKeyContext, ARTIFACT_EXPANDER);
+    String withoutExpander = cacher.getKey(actionKeyContext, /*artifactExpander=*/ null, null);
+    String withExpander = cacher.getKey(actionKeyContext, ARTIFACT_EXPANDER, null);
 
     assertThat(withExpander).isNotEqualTo(withoutExpander);
   }
 
   @Test
   public void getKey_withoutExpander_notStoredInCache() throws Exception {
-    String key1 = cacher.getKey(actionKeyContext, /*artifactExpander=*/ null);
-    verify(cacher).computeKey(eq(actionKeyContext), isNull(), any());
+    String key1 = cacher.getKey(actionKeyContext, /*artifactExpander=*/ null, null);
+    verify(cacher).computeKey(eq(actionKeyContext), isNull(), null, any());
 
-    String key2 = cacher.getKey(actionKeyContext, /*artifactExpander=*/ null);
+    String key2 = cacher.getKey(actionKeyContext, /*artifactExpander=*/ null, null);
 
-    verify(cacher, times(2)).computeKey(eq(actionKeyContext), isNull(), any());
+    verify(cacher, times(2)).computeKey(eq(actionKeyContext), isNull(), null, any());
     assertThat(key1).isEqualTo(key2);
   }
 
   @Test
   public void getKey_withExpander_getsCacheHit() throws Exception {
-    String key1 = cacher.getKey(actionKeyContext, ARTIFACT_EXPANDER);
-    verify(cacher).computeKey(eq(actionKeyContext), eq(ARTIFACT_EXPANDER), any());
+    String key1 = cacher.getKey(actionKeyContext, ARTIFACT_EXPANDER, null);
+    verify(cacher).computeKey(eq(actionKeyContext), eq(ARTIFACT_EXPANDER), null, any());
 
-    String key2 = cacher.getKey(actionKeyContext, ARTIFACT_EXPANDER);
+    String key2 = cacher.getKey(actionKeyContext, ARTIFACT_EXPANDER, null);
 
-    verify(cacher).computeKey(eq(actionKeyContext), eq(ARTIFACT_EXPANDER), any());
+    verify(cacher).computeKey(eq(actionKeyContext), eq(ARTIFACT_EXPANDER), null, any());
     assertThat(key1).isEqualTo(key2);
   }
 
   @Test
   public void getKey_withoutExpander_skipsPrimedCache()
       throws CommandLineExpansionException, InterruptedException {
-    String withExpander = cacher.getKey(actionKeyContext, ARTIFACT_EXPANDER);
-    String withoutExpander = cacher.getKey(actionKeyContext, /*artifactExpander=*/ null);
+    String withExpander = cacher.getKey(actionKeyContext, ARTIFACT_EXPANDER, null);
+    String withoutExpander = cacher.getKey(actionKeyContext, /*artifactExpander=*/ null, null);
 
-    verify(cacher).computeKey(eq(actionKeyContext), isNull(), any());
+    verify(cacher).computeKey(eq(actionKeyContext), isNull(), null, any());
     assertThat(withExpander).isNotEqualTo(withoutExpander);
   }
 }

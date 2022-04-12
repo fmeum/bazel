@@ -30,6 +30,7 @@ import com.google.devtools.build.lib.actions.CommandLineExpansionException;
 import com.google.devtools.build.lib.actions.ExecException;
 import com.google.devtools.build.lib.actions.ParameterFile;
 import com.google.devtools.build.lib.actions.ParameterFile.ParameterFileType;
+import com.google.devtools.build.lib.actions.PathStripper.CommandAdjuster;
 import com.google.devtools.build.lib.actions.UserExecException;
 import com.google.devtools.build.lib.collect.nestedset.NestedSet;
 import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
@@ -175,11 +176,12 @@ public final class ParameterFileWriteAction extends AbstractFileWriteAction {
   protected void computeKey(
       ActionKeyContext actionKeyContext,
       @Nullable ArtifactExpander artifactExpander,
+      CommandAdjuster pathStripper,
       Fingerprint fp)
       throws CommandLineExpansionException, InterruptedException {
     fp.addString(GUID);
     fp.addString(String.valueOf(makeExecutable));
     fp.addString(type.toString());
-    commandLine.addToFingerprint(actionKeyContext, artifactExpander, fp);
+    commandLine.addToFingerprint(actionKeyContext, artifactExpander, null, fp);
   }
 }

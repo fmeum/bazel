@@ -25,7 +25,9 @@ import com.google.devtools.build.lib.actions.ActionExecutionException;
 import com.google.devtools.build.lib.actions.ActionKeyContext;
 import com.google.devtools.build.lib.actions.ActionResult;
 import com.google.devtools.build.lib.actions.Artifact;
+import com.google.devtools.build.lib.actions.Artifact.ArtifactExpander;
 import com.google.devtools.build.lib.actions.MiddlemanType;
+import com.google.devtools.build.lib.actions.PathStripper.CommandAdjuster;
 import com.google.devtools.build.lib.collect.nestedset.NestedSet;
 import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
 import com.google.devtools.build.lib.collect.nestedset.Order;
@@ -150,7 +152,8 @@ public class TestAction extends AbstractAction {
   @Override
   protected void computeKey(
       ActionKeyContext actionKeyContext,
-      @Nullable Artifact.ArtifactExpander artifactExpander,
+      @Nullable ArtifactExpander artifactExpander,
+      CommandAdjuster pathStripper,
       Fingerprint fp) {
     fp.addPaths(Artifact.asSortedPathFragments(getOutputs()));
     fp.addPaths(Artifact.asSortedPathFragments(getMandatoryInputs().toList()));

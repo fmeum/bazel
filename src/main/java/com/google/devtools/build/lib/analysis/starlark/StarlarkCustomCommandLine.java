@@ -364,7 +364,8 @@ public class StarlarkCustomCommandLine extends CommandLine {
         int argi,
         ActionKeyContext actionKeyContext,
         Fingerprint fingerprint,
-        @Nullable ArtifactExpander artifactExpander)
+        @Nullable ArtifactExpander artifactExpander,
+        @Nullable CommandAdjuster pathStripper)
         throws CommandLineExpansionException, InterruptedException {
       final Location location =
           ((features & HAS_LOCATION) != 0) ? (Location) arguments.get(argi++) : null;
@@ -417,7 +418,9 @@ public class StarlarkCustomCommandLine extends CommandLine {
               starlarkSemantics);
         } else {
           for (Object value : maybeExpandedValues) {
-            fingerprint.addString(CommandLineItem.expandToCommandLine(value));
+            fingerprint.addString(
+                value instanceof DerivedArtifact && pathStripper != null ? pathStripper.strip(
+                    (DerivedArtifact) value, true) : CommandLineItem.expandToCommandLine(value));
           }
         }
       }
@@ -587,10 +590,13 @@ public class StarlarkCustomCommandLine extends CommandLine {
       }
     }
 
-    private int eval(List<Object> arguments, int argi, List<String> builder)
+    private int eval(List<Object> arguments, int argi, List<String> builder,
+        CommandAdjuster pathStripper)
         throws CommandLineExpansionException {
       Object object = arguments.get(argi++);
-      String stringValue = CommandLineItem.expandToCommandLine(object);
+      String stringValue =
+          object instanceof DerivedArtifact && pathStripper != null ? pathStripper.strip(
+              (DerivedArtifact) object, false) : CommandLineItem.expandToCommandLine(object);
       if (hasFormat) {
         String formatStr = (String) arguments.get(argi++);
         stringValue = SingleStringArgFormatter.format(formatStr, stringValue);
@@ -599,9 +605,14 @@ public class StarlarkCustomCommandLine extends CommandLine {
       return argi;
     }
 
-    private int addToFingerprint(List<Object> arguments, int argi, Fingerprint fingerprint) {
+    private int addToFingerprint(List<Object> arguments,
+        int argi,
+        CommandAdjuster pathStripper,
+        Fingerprint fingerprint) {
       Object object = arguments.get(argi++);
-      String stringValue = CommandLineItem.expandToCommandLine(object);
+      String stringValue =
+          object instanceof DerivedArtifact && pathStripper != null ? pathStripper.strip(
+              (DerivedArtifact) object, true) : CommandLineItem.expandToCommandLine(object);
       fingerprint.addString(stringValue);
       if (hasFormat) {
         String formatStr = (String) arguments.get(argi++);
@@ -710,7 +721,7 @@ public class StarlarkCustomCommandLine extends CommandLine {
         argi = ((VectorArg) arg).eval(arguments, argi, result, artifactExpander, stripPaths);
 
       } else if (arg instanceof ScalarArg) {
-        argi = ((ScalarArg) arg).eval(arguments, argi, result);
+        argi = ((ScalarArg) arg).eval(arguments, argi, result, stripPaths);
       } else {
         result.add(expandToCommandLine(arg, stripPaths));
       }
@@ -723,7 +734,7 @@ public class StarlarkCustomCommandLine extends CommandLine {
     // to explicitly check if an object is a DerivedArtifact. Unfortunately that would require
     // a lot more dependencies on the Java library DerivedArtifact is built into.
     return object instanceof DerivedArtifact
-        ? pathStripper.strip(((DerivedArtifact) object).getExecPath()).getPathString()
+        ? pathStripper.strip((DerivedArtifact) object, false)
         : CommandLineItem.expandToCommandLine(object);
   }
 
@@ -773,7 +784,7 @@ public class StarlarkCustomCommandLine extends CommandLine {
                       artifactExpander,
                       PathStripper.CommandAdjuster.create(/*stripOutputPaths=*/ false, null, null));
         } else if (arg instanceof ScalarArg) {
-          argi = ((ScalarArg) arg).eval(arguments, argi, result);
+          argi = ((ScalarArg) arg).eval(arguments, argi, result, null);
         } else {
           result.add(CommandLineItem.expandToCommandLine(arg));
         }
@@ -808,6 +819,7 @@ public class StarlarkCustomCommandLine extends CommandLine {
   public void addToFingerprint(
       ActionKeyContext actionKeyContext,
       @Nullable ArtifactExpander artifactExpander,
+      @Nullable CommandAdjuster pathStripper,
       Fingerprint fingerprint)
       throws CommandLineExpansionException, InterruptedException {
     for (int argi = 0; argi < arguments.size(); ) {
@@ -820,9 +832,10 @@ public class StarlarkCustomCommandLine extends CommandLine {
                     argi,
                     actionKeyContext,
                     fingerprint,
-                    artifactExpander);
+                    artifactExpander,
+                    pathStripper);
       } else if (arg instanceof ScalarArg) {
-        argi = ((ScalarArg) arg).addToFingerprint(arguments, argi, fingerprint);
+        argi = ((ScalarArg) arg).addToFingerprint(arguments, argi, pathStripper, fingerprint);
       } else {
         fingerprint.addString(CommandLineItem.expandToCommandLine(arg));
       }

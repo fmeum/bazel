@@ -14,11 +14,12 @@
 package com.google.devtools.build.lib.actions;
 
 import com.google.devtools.build.lib.actions.Artifact.ArtifactExpander;
+import com.google.devtools.build.lib.actions.PathStripper.CommandAdjuster;
 import com.google.devtools.build.lib.util.Fingerprint;
 import javax.annotation.Nullable;
 
 /**
- * An implementation of {@link ActionAnalysisMetadata} that caches its {@linkplain #getKey key} so
+ * An implementation of {@link ActionAnalysisMetadata} that caches its {@linkplain ActionAnalysisMetadata#getKey key} so
  * that it is only computed once.
  */
 public abstract class ActionKeyCacher implements ActionAnalysisMetadata {
@@ -36,19 +37,20 @@ public abstract class ActionKeyCacher implements ActionAnalysisMetadata {
 
   @Override
   public final String getKey(
-      ActionKeyContext actionKeyContext, @Nullable ArtifactExpander artifactExpander)
+      ActionKeyContext actionKeyContext, @Nullable ArtifactExpander artifactExpander,
+      CommandAdjuster pathStripper)
       throws InterruptedException {
     // Only cache the key when it is given all necessary information to compute a correct key.
     // Practically, most of the benefit of the cache comes from execution, which does provide the
     // artifactExpander.
     if (artifactExpander == null) {
-      return computeActionKey(actionKeyContext, null);
+      return computeActionKey(actionKeyContext, null, null);
     }
 
     if (cachedKey == null) {
       synchronized (this) {
         if (cachedKey == null) {
-          cachedKey = computeActionKey(actionKeyContext, artifactExpander);
+          cachedKey = computeActionKey(actionKeyContext, artifactExpander, pathStripper);
         }
       }
     }
@@ -56,11 +58,11 @@ public abstract class ActionKeyCacher implements ActionAnalysisMetadata {
   }
 
   private String computeActionKey(
-      ActionKeyContext actionKeyContext, @Nullable ArtifactExpander artifactExpander)
+      ActionKeyContext actionKeyContext, @Nullable ArtifactExpander artifactExpander, @Nullable CommandAdjuster pathStripper)
       throws InterruptedException {
     try {
       Fingerprint fp = new Fingerprint();
-      computeKey(actionKeyContext, artifactExpander, fp);
+      computeKey(actionKeyContext, artifactExpander, pathStripper, fp);
 
       // Add a bool indicating whether the execution platform was set.
       fp.addBoolean(getExecutionPlatform() != null);
@@ -89,6 +91,7 @@ public abstract class ActionKeyCacher implements ActionAnalysisMetadata {
   protected abstract void computeKey(
       ActionKeyContext actionKeyContext,
       @Nullable ArtifactExpander artifactExpander,
+      @Nullable CommandAdjuster pathStripper,
       Fingerprint fp)
       throws CommandLineExpansionException, InterruptedException;
 }

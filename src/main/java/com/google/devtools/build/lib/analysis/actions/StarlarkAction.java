@@ -332,6 +332,7 @@ public final class StarlarkAction extends SpawnAction implements ActionCacheAwar
         getEffectiveEnvironment(actionExecutionContext.getClientEnv()),
         /*envResolved=*/ true,
         actionExecutionContext.getTopLevelFilesets(),
+        actionExecutionContext.getMetadataHandler(),
         /*reportOutputs=*/ true);
   }
 

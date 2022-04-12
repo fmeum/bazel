@@ -42,6 +42,7 @@ import com.google.devtools.build.lib.actions.ActionKeyContext;
 import com.google.devtools.build.lib.actions.ActionOwner;
 import com.google.devtools.build.lib.actions.ActionResult;
 import com.google.devtools.build.lib.actions.Artifact;
+import com.google.devtools.build.lib.actions.Artifact.ArtifactExpander;
 import com.google.devtools.build.lib.actions.Artifact.DerivedArtifact;
 import com.google.devtools.build.lib.actions.ArtifactResolver;
 import com.google.devtools.build.lib.actions.CommandAction;
@@ -54,6 +55,7 @@ import com.google.devtools.build.lib.actions.ExecException;
 import com.google.devtools.build.lib.actions.ExecutionRequirements;
 import com.google.devtools.build.lib.actions.ParamFileInfo;
 import com.google.devtools.build.lib.actions.ParameterFile.ParameterFileType;
+import com.google.devtools.build.lib.actions.PathStripper.CommandAdjuster;
 import com.google.devtools.build.lib.actions.ResourceSet;
 import com.google.devtools.build.lib.actions.SimpleSpawn;
 import com.google.devtools.build.lib.actions.Spawn;
@@ -1340,7 +1342,8 @@ public class CppCompileAction extends AbstractAction implements IncludeScannable
   @Override
   public void computeKey(
       ActionKeyContext actionKeyContext,
-      @Nullable Artifact.ArtifactExpander artifactExpander,
+      @Nullable ArtifactExpander artifactExpander,
+      CommandAdjuster pathStripper,
       Fingerprint fp)
       throws CommandLineExpansionException, InterruptedException {
     computeKey(

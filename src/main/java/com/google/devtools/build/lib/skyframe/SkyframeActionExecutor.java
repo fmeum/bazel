@@ -522,7 +522,7 @@ public final class SkyframeActionExecutor {
         ArtifactPathResolver.createPathResolver(actionFileSystem, executorEngine.getExecRoot());
     FileOutErr fileOutErr;
     if (replayActionOutErr) {
-      String actionKey = action.getKey(actionKeyContext, artifactExpander);
+      String actionKey = action.getKey(actionKeyContext, artifactExpander, null);
       fileOutErr = actionLogBufferPathGenerator.persistent(actionKey, artifactPathResolver);
       try {
         fileOutErr.getErrorPath().delete();
@@ -625,7 +625,7 @@ public final class SkyframeActionExecutor {
       if (replayActionOutErr) {
         // TODO(ulfjack): This assumes that the stdout/stderr files are unmodified. It would be
         //  better to integrate them with the action cache and rerun the action when they change.
-        String actionKey = action.getKey(actionKeyContext, artifactExpander);
+        String actionKey = action.getKey(actionKeyContext, artifactExpander, null);
         FileOutErr fileOutErr = actionLogBufferPathGenerator.persistent(actionKey, pathResolver);
         // getOutputPath and getErrorPath cause the FileOutErr to be marked as "dirty" which
         // invalidates any prior in-memory state it had. Need to do this so that hasRecordedOutput()

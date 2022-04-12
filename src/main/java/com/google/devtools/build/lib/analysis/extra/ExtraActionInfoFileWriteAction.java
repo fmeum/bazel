@@ -23,6 +23,7 @@ import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.actions.Artifact.ArtifactExpander;
 import com.google.devtools.build.lib.actions.CommandLineExpansionException;
 import com.google.devtools.build.lib.actions.ExecException;
+import com.google.devtools.build.lib.actions.PathStripper.CommandAdjuster;
 import com.google.devtools.build.lib.actions.UserExecException;
 import com.google.devtools.build.lib.analysis.actions.AbstractFileWriteAction;
 import com.google.devtools.build.lib.analysis.actions.DeterministicWriter;
@@ -79,10 +80,11 @@ public final class ExtraActionInfoFileWriteAction extends AbstractFileWriteActio
   protected void computeKey(
       ActionKeyContext actionKeyContext,
       @Nullable ArtifactExpander artifactExpander,
+      CommandAdjuster pathStripper,
       Fingerprint fp)
       throws CommandLineExpansionException, InterruptedException {
     fp.addString(UUID);
-    fp.addString(shadowedAction.getKey(actionKeyContext, artifactExpander));
+    fp.addString(shadowedAction.getKey(actionKeyContext, artifactExpander, null));
     fp.addBytes(shadowedAction.getExtraActionInfo(actionKeyContext).build().toByteArray());
   }
 }

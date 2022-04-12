@@ -31,6 +31,7 @@ import com.google.devtools.build.lib.actions.ActionResult;
 import com.google.devtools.build.lib.actions.Artifact.ArtifactExpander;
 import com.google.devtools.build.lib.actions.EnvironmentalExecException;
 import com.google.devtools.build.lib.actions.ExecException;
+import com.google.devtools.build.lib.actions.PathStripper.CommandAdjuster;
 import com.google.devtools.build.lib.actions.SpawnContinuation;
 import com.google.devtools.build.lib.actions.SpawnResult;
 import com.google.devtools.build.lib.actions.SpawnResult.Status;
@@ -165,6 +166,7 @@ public final class AbstractFileWriteActionTest {
     protected void computeKey(
         ActionKeyContext actionKeyContext,
         @Nullable ArtifactExpander artifactExpander,
+        CommandAdjuster pathStripper,
         Fingerprint fp) {
       throw new UnsupportedOperationException();
     }

@@ -28,6 +28,7 @@ import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.actions.Artifact.ArtifactExpander;
 import com.google.devtools.build.lib.actions.BuildConfigurationEvent;
 import com.google.devtools.build.lib.actions.MiddlemanType;
+import com.google.devtools.build.lib.actions.PathStripper.CommandAdjuster;
 import com.google.devtools.build.lib.actions.RunfilesSupplier;
 import com.google.devtools.build.lib.analysis.platform.PlatformInfo;
 import com.google.devtools.build.lib.buildeventstream.BuildEventStreamProtos;
@@ -163,7 +164,8 @@ public class FakeOwner implements ActionExecutionMetadata {
 
   @Override
   public String getKey(
-      ActionKeyContext actionKeyContext, @Nullable ArtifactExpander artifactExpander) {
+      ActionKeyContext actionKeyContext, @Nullable ArtifactExpander artifactExpander,
+      CommandAdjuster pathStripper) {
     return "MockOwner.getKey";
   }
 

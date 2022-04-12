@@ -53,12 +53,14 @@ import com.google.devtools.build.lib.actions.EmptyRunfilesSupplier;
 import com.google.devtools.build.lib.actions.ExecException;
 import com.google.devtools.build.lib.actions.FilesetOutputSymlink;
 import com.google.devtools.build.lib.actions.ParamFileInfo;
-import com.google.devtools.build.lib.actions.PathStripper;
+import com.google.devtools.build.lib.actions.PathRemapper;
+import com.google.devtools.build.lib.actions.PathStripper.CommandAdjuster;
 import com.google.devtools.build.lib.actions.ResourceSetOrBuilder;
 import com.google.devtools.build.lib.actions.RunfilesSupplier;
 import com.google.devtools.build.lib.actions.Spawn;
 import com.google.devtools.build.lib.actions.SpawnContinuation;
 import com.google.devtools.build.lib.actions.SpawnResult;
+import com.google.devtools.build.lib.actions.cache.MetadataHandler;
 import com.google.devtools.build.lib.actions.extra.EnvironmentVariable;
 import com.google.devtools.build.lib.actions.extra.ExtraActionInfo;
 import com.google.devtools.build.lib.actions.extra.SpawnInfo;
@@ -399,6 +401,7 @@ public class SpawnAction extends AbstractAction implements CommandAction {
         actionExecutionContext.getClientEnv(),
         /*envResolved=*/ false,
         actionExecutionContext.getTopLevelFilesets(),
+        actionExecutionContext.getMetadataHandler(),
         /*reportOutputs=*/ true);
   }
 
@@ -415,16 +418,14 @@ public class SpawnAction extends AbstractAction implements CommandAction {
       Map<String, String> env,
       boolean envResolved,
       Map<Artifact, ImmutableList<FilesetOutputSymlink>> filesetMappings,
+      MetadataHandler metadataHandler,
       boolean reportOutputs)
       throws CommandLineExpansionException, InterruptedException {
     ExpandedCommandLines expandedCommandLines =
         commandLines.expand(
             artifactExpander,
             getPrimaryOutput().getExecPath(),
-            PathStripper.CommandAdjuster.create(
-                stripOutputPaths,
-                this instanceof StarlarkAction ? getMnemonic() : null,
-                getPrimaryOutput().getExecPath().subFragment(0, 1)),
+            PathRemapper.create(artifactExpander, metadataHandler, getInputs()),
             commandLineLimits);
     return new ActionSpawn(
         ImmutableList.copyOf(expandedCommandLines.arguments()),
@@ -446,10 +447,11 @@ public class SpawnAction extends AbstractAction implements CommandAction {
   protected void computeKey(
       ActionKeyContext actionKeyContext,
       @Nullable ArtifactExpander artifactExpander,
+      @Nullable CommandAdjuster pathStripper,
       Fingerprint fp)
       throws CommandLineExpansionException, InterruptedException {
     fp.addString(GUID);
-    commandLines.addToFingerprint(actionKeyContext, artifactExpander, fp);
+    commandLines.addToFingerprint(actionKeyContext, artifactExpander, pathStripper, fp);
     fp.addString(getMnemonic());
     // We don't need the toolManifests here, because they are a subset of the inputManifests by
     // definition and the output of an action shouldn't change whether something is considered a

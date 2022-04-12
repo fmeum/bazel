@@ -39,6 +39,7 @@ import com.google.devtools.build.lib.actions.CommandLineExpansionException;
 import com.google.devtools.build.lib.actions.CommandLines.CommandLineAndParamFileInfo;
 import com.google.devtools.build.lib.actions.ExecException;
 import com.google.devtools.build.lib.actions.ExecutionRequirements;
+import com.google.devtools.build.lib.actions.PathStripper.CommandAdjuster;
 import com.google.devtools.build.lib.actions.ResourceSet;
 import com.google.devtools.build.lib.actions.SimpleSpawn;
 import com.google.devtools.build.lib.actions.Spawn;
@@ -344,7 +345,8 @@ public final class CppLinkAction extends AbstractAction implements CommandAction
   @Override
   protected void computeKey(
       ActionKeyContext actionKeyContext,
-      @Nullable Artifact.ArtifactExpander artifactExpander,
+      @Nullable ArtifactExpander artifactExpander,
+      CommandAdjuster pathStripper,
       Fingerprint fp)
       throws CommandLineExpansionException {
     fp.addString(LINK_GUID);

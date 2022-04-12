@@ -27,11 +27,13 @@ import com.google.devtools.build.lib.actions.ActionLookupKey;
 import com.google.devtools.build.lib.actions.ActionOwner;
 import com.google.devtools.build.lib.actions.ActionResult;
 import com.google.devtools.build.lib.actions.Artifact;
+import com.google.devtools.build.lib.actions.Artifact.ArtifactExpander;
 import com.google.devtools.build.lib.actions.Artifact.SpecialArtifact;
 import com.google.devtools.build.lib.actions.ArtifactRoot;
 import com.google.devtools.build.lib.actions.MiddlemanFactory;
 import com.google.devtools.build.lib.actions.MutableActionGraph;
 import com.google.devtools.build.lib.actions.MutableActionGraph.ActionConflictException;
+import com.google.devtools.build.lib.actions.PathStripper.CommandAdjuster;
 import com.google.devtools.build.lib.actions.RunfilesSupplier;
 import com.google.devtools.build.lib.actions.util.ActionsTestUtil;
 import com.google.devtools.build.lib.analysis.AnalysisEnvironment;
@@ -272,7 +274,8 @@ public final class AnalysisTestUtil {
     @Override
     public void computeKey(
         ActionKeyContext actionKeyContext,
-        @Nullable Artifact.ArtifactExpander artifactExpander,
+        @Nullable ArtifactExpander artifactExpander,
+        CommandAdjuster pathStripper,
         Fingerprint fp) {}
 
     @Override

@@ -16,6 +16,7 @@ package com.google.devtools.build.lib.actions;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.devtools.build.lib.actions.Artifact.ArtifactExpander;
+import com.google.devtools.build.lib.actions.PathStripper.CommandAdjuster;
 import com.google.devtools.build.lib.analysis.platform.PlatformInfo;
 import com.google.devtools.build.lib.collect.nestedset.NestedSet;
 import java.util.Collection;
@@ -95,7 +96,8 @@ public interface ActionAnalysisMetadata {
    * unique key will depend on knowing the tree artifact contents. At analysis time, we only know
    * about the tree artifact directory and we find what is in it only after we execute that action.
    */
-  String getKey(ActionKeyContext actionKeyContext, @Nullable ArtifactExpander artifactExpander)
+  String getKey(ActionKeyContext actionKeyContext, @Nullable ArtifactExpander artifactExpander,
+      CommandAdjuster pathStripper)
       throws InterruptedException;
 
   /**

@@ -32,6 +32,7 @@ import com.google.devtools.build.lib.actions.Artifact.SpecialArtifact;
 import com.google.devtools.build.lib.actions.Artifact.SpecialArtifactType;
 import com.google.devtools.build.lib.actions.ArtifactRoot.RootType;
 import com.google.devtools.build.lib.actions.FileArtifactValue.RemoteFileArtifactValue;
+import com.google.devtools.build.lib.actions.PathStripper.CommandAdjuster;
 import com.google.devtools.build.lib.actions.cache.ActionCache;
 import com.google.devtools.build.lib.actions.cache.ActionCache.Entry.SerializableTreeArtifactValue;
 import com.google.devtools.build.lib.actions.cache.CompactPersistentActionCache;
@@ -258,6 +259,7 @@ public class ActionCacheCheckerTest {
           protected void computeKey(
               ActionKeyContext actionKeyContext,
               @Nullable ArtifactExpander artifactExpander,
+              CommandAdjuster pathStripper,
               Fingerprint fp) {
             fp.addString("key1");
           }
@@ -269,6 +271,7 @@ public class ActionCacheCheckerTest {
           protected void computeKey(
               ActionKeyContext actionKeyContext,
               @Nullable ArtifactExpander artifactExpander,
+              CommandAdjuster pathStripper,
               Fingerprint fp) {
             fp.addString("key2");
           }

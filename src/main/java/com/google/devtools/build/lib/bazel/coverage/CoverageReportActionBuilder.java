@@ -34,6 +34,7 @@ import com.google.devtools.build.lib.actions.ArtifactRoot;
 import com.google.devtools.build.lib.actions.BaseSpawn;
 import com.google.devtools.build.lib.actions.ExecException;
 import com.google.devtools.build.lib.actions.NotifyOnActionCacheHit;
+import com.google.devtools.build.lib.actions.PathStripper.CommandAdjuster;
 import com.google.devtools.build.lib.actions.ResourceSet;
 import com.google.devtools.build.lib.actions.RunfilesSupplier;
 import com.google.devtools.build.lib.actions.Spawn;
@@ -165,6 +166,7 @@ public final class CoverageReportActionBuilder {
     protected void computeKey(
         ActionKeyContext actionKeyContext,
         @Nullable ArtifactExpander artifactExpander,
+        CommandAdjuster pathStripper,
         Fingerprint fp) {
       fp.addStrings(command);
     }

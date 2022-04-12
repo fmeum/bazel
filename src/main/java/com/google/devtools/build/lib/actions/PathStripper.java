@@ -149,9 +149,9 @@ public final class PathStripper {
      *
      * <p>Else returns the artifact's original exec path.
      */
-    String strip(DerivedArtifact artifact);
+    String strip(DerivedArtifact artifact, boolean forActionKey);
 
-    /** Same as {@link #strip(DerivedArtifact)} but for a {@link PathFragment}. */
+    /** Same as {@link #strip(DerivedArtifact, boolean)} but for a {@link PathFragment}. */
     PathFragment strip(PathFragment execPath);
 
     /**
@@ -188,7 +188,7 @@ public final class PathStripper {
     static CommandAdjuster noop() {
       return new CommandAdjuster() {
         @Override
-        public String strip(DerivedArtifact artifact) {
+        public String strip(DerivedArtifact artifact, boolean forActionKey) {
           return artifact.getExecPathString();
         }
 
@@ -211,7 +211,7 @@ public final class PathStripper {
           starlarkMnemonic != null ? new StringStripper(outputRoot.getPathString()) : null;
       return new CommandAdjuster() {
         @Override
-        public String strip(DerivedArtifact artifact) {
+        public String strip(DerivedArtifact artifact, boolean forActionKey) {
           return PathStripper.strip(artifact);
         }
 

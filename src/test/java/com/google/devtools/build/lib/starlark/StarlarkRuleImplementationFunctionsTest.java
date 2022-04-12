@@ -2850,7 +2850,7 @@ public class StarlarkRuleImplementationFunctionsTest extends BuildViewTestCase {
         CommandLineExpansionException.class,
         () ->
             commandLine.addToFingerprint(
-                actionKeyContext, /*artifactExpander=*/ null, new Fingerprint()));
+                actionKeyContext, /*artifactExpander=*/ null, null, new Fingerprint()));
   }
 
   @Test
@@ -3111,7 +3111,7 @@ public class StarlarkRuleImplementationFunctionsTest extends BuildViewTestCase {
   private String getDigest(CommandLine commandLine, ArtifactExpander artifactExpander)
       throws CommandLineExpansionException, InterruptedException {
     Fingerprint fingerprint = new Fingerprint();
-    commandLine.addToFingerprint(actionKeyContext, artifactExpander, fingerprint);
+    commandLine.addToFingerprint(actionKeyContext, artifactExpander, null, fingerprint);
     return fingerprint.hexDigestAndReset();
   }
 

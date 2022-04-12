@@ -60,6 +60,7 @@ import com.google.devtools.build.lib.actions.FileArtifactValue;
 import com.google.devtools.build.lib.actions.MiddlemanType;
 import com.google.devtools.build.lib.actions.MutableActionGraph.ActionConflictException;
 import com.google.devtools.build.lib.actions.PackageRootResolver;
+import com.google.devtools.build.lib.actions.PathStripper.CommandAdjuster;
 import com.google.devtools.build.lib.actions.ThreadStateReceiver;
 import com.google.devtools.build.lib.actions.cache.MetadataHandler;
 import com.google.devtools.build.lib.actions.cache.Protos.ActionCacheStatistics.MissDetail;
@@ -500,6 +501,7 @@ public final class ActionsTestUtil {
     protected void computeKey(
         ActionKeyContext actionKeyContext,
         @Nullable ArtifactExpander artifactExpander,
+        CommandAdjuster pathStripper,
         Fingerprint fp) {
       fp.addString("action");
     }
@@ -556,6 +558,7 @@ public final class ActionsTestUtil {
     protected void computeKey(
         ActionKeyContext actionKeyContext,
         @Nullable ArtifactExpander artifactExpander,
+        CommandAdjuster pathStripper,
         Fingerprint fp) {
       fp.addString("Mock Action " + getPrimaryOutput());
     }

@@ -31,6 +31,7 @@ import com.google.devtools.build.lib.actions.CommandLine;
 import com.google.devtools.build.lib.actions.CommandLineExpansionException;
 import com.google.devtools.build.lib.actions.CommandLineItem;
 import com.google.devtools.build.lib.actions.PathStripper;
+import com.google.devtools.build.lib.actions.PathStripper.CommandAdjuster;
 import com.google.devtools.build.lib.actions.SingleStringArgFormatter;
 import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.collect.nestedset.NestedSet;
@@ -374,7 +375,7 @@ public class CustomCommandLine extends CommandLine {
         // to explicitly check if an object is a DerivedArtifact. Unfortunately that would require
         // a lot more dependencies on the Java library DerivedArtifact is built into.
         return pathStripper != null && object instanceof DerivedArtifact
-            ? pathStripper.strip((DerivedArtifact) object)
+            ? pathStripper.strip((DerivedArtifact) object, false)
             : CommandLineItem.expandToCommandLine(object);
       }
 
@@ -1320,7 +1321,7 @@ public class CustomCommandLine extends CommandLine {
           i = ((ArgvFragment) substitutedArg).eval(arguments, i, builder, getPathStripper());
         }
       } else if (substitutedArg instanceof DerivedArtifact && getPathStripper() != null) {
-        builder.add(getPathStripper().strip((DerivedArtifact) substitutedArg));
+        builder.add(getPathStripper().strip((DerivedArtifact) substitutedArg, false));
       } else if (substitutedArg instanceof PathFragment && getPathStripper() != null) {
         builder.add(getPathStripper().strip(((PathFragment) substitutedArg)).getPathString());
       } else {
@@ -1334,7 +1335,7 @@ public class CustomCommandLine extends CommandLine {
     for (Object value : arg) {
       builder.add(
           value instanceof DerivedArtifact && getPathStripper() != null
-              ? getPathStripper().strip((DerivedArtifact) value)
+              ? getPathStripper().strip((DerivedArtifact) value, false)
               : CommandLineItem.expandToCommandLine(value));
     }
   }
@@ -1360,6 +1361,7 @@ public class CustomCommandLine extends CommandLine {
   public void addToFingerprint(
       ActionKeyContext actionKeyContext,
       @Nullable ArtifactExpander artifactExpander,
+      CommandAdjuster pathStripper,
       Fingerprint fingerprint)
       throws CommandLineExpansionException, InterruptedException {
     int count = arguments.size();

@@ -104,8 +104,8 @@ public class ExtraActionTest extends FoundationTestCase {
     Action actionTwo = new ExtraActionInfoFileWriteAction(ActionsTestUtil.NULL_ACTION_OWNER, output,
         new SpecifiedInfoAction(infoTwo));
 
-    assertThat(actionOne.getKey(actionKeyContext, /*artifactExpander=*/ null))
-        .isNotEqualTo(actionTwo.getKey(actionKeyContext, /*artifactExpander=*/ null));
+    assertThat(actionOne.getKey(actionKeyContext, /*artifactExpander=*/ null, null))
+        .isNotEqualTo(actionTwo.getKey(actionKeyContext, /*artifactExpander=*/ null, null));
   }
 
   /**

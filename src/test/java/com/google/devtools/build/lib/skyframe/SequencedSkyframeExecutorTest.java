@@ -50,6 +50,7 @@ import com.google.devtools.build.lib.actions.ActionResult;
 import com.google.devtools.build.lib.actions.ActionTemplate;
 import com.google.devtools.build.lib.actions.Actions;
 import com.google.devtools.build.lib.actions.Artifact;
+import com.google.devtools.build.lib.actions.Artifact.ArtifactExpander;
 import com.google.devtools.build.lib.actions.Artifact.DerivedArtifact;
 import com.google.devtools.build.lib.actions.Artifact.SpecialArtifact;
 import com.google.devtools.build.lib.actions.Artifact.TreeFileArtifact;
@@ -62,6 +63,7 @@ import com.google.devtools.build.lib.actions.FileArtifactValue;
 import com.google.devtools.build.lib.actions.FileStateValue;
 import com.google.devtools.build.lib.actions.MiddlemanType;
 import com.google.devtools.build.lib.actions.MutableActionGraph.ActionConflictException;
+import com.google.devtools.build.lib.actions.PathStripper.CommandAdjuster;
 import com.google.devtools.build.lib.actions.ResourceManager;
 import com.google.devtools.build.lib.actions.util.ActionsTestUtil;
 import com.google.devtools.build.lib.actions.util.DummyExecutor;
@@ -1301,7 +1303,8 @@ public final class SequencedSkyframeExecutorTest extends BuildViewTestCase {
 
     @Override
     public String getKey(
-        ActionKeyContext actionKeyContext, @Nullable Artifact.ArtifactExpander artifactExpander) {
+        ActionKeyContext actionKeyContext, @Nullable ArtifactExpander artifactExpander,
+        CommandAdjuster pathStripper) {
       Fingerprint fp = new Fingerprint();
       fp.addPath(inputArtifact.getPath());
       fp.addPath(outputArtifact.getPath());
@@ -1692,7 +1695,8 @@ public final class SequencedSkyframeExecutorTest extends BuildViewTestCase {
     @Override
     protected void computeKey(
         ActionKeyContext actionKeyContext,
-        @Nullable Artifact.ArtifactExpander artifactExpander,
+        @Nullable ArtifactExpander artifactExpander,
+        CommandAdjuster pathStripper,
         Fingerprint fp) {
       fp.addString(warningText);
       fp.addPath(getPrimaryOutput().getExecPath());

@@ -25,7 +25,9 @@ import com.google.devtools.build.lib.actions.ActionKeyContext;
 import com.google.devtools.build.lib.actions.ActionOwner;
 import com.google.devtools.build.lib.actions.ActionResult;
 import com.google.devtools.build.lib.actions.Artifact;
+import com.google.devtools.build.lib.actions.Artifact.ArtifactExpander;
 import com.google.devtools.build.lib.actions.ArtifactPathResolver;
+import com.google.devtools.build.lib.actions.PathStripper.CommandAdjuster;
 import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
 import com.google.devtools.build.lib.collect.nestedset.Order;
 import com.google.devtools.build.lib.concurrent.ThreadSafety.Immutable;
@@ -107,7 +109,8 @@ public final class CreateIncSymlinkAction extends AbstractAction {
   @Override
   public void computeKey(
       ActionKeyContext actionKeyContext,
-      @Nullable Artifact.ArtifactExpander artifactExpander,
+      @Nullable ArtifactExpander artifactExpander,
+      CommandAdjuster pathStripper,
       Fingerprint fp) {
     for (Map.Entry<Artifact, Artifact> entry : symlinks.entrySet()) {
       fp.addPath(entry.getKey().getExecPath());

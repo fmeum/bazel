@@ -67,6 +67,7 @@ public abstract class CommandLine {
   public void addToFingerprint(
       ActionKeyContext actionKeyContext,
       @Nullable ArtifactExpander artifactExpander,
+      CommandAdjuster pathStripper,
       Fingerprint fingerprint)
       throws CommandLineExpansionException, InterruptedException {
     for (String s : arguments()) {

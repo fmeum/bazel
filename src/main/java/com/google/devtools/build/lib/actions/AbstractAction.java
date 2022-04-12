@@ -603,7 +603,7 @@ public abstract class AbstractAction extends ActionKeyCacher implements Action, 
     ExtraActionInfo.Builder result =
         ExtraActionInfo.newBuilder()
             .setOwner(owner.getLabel().toString())
-            .setId(getKey(actionKeyContext, /*artifactExpander=*/ null))
+            .setId(getKey(actionKeyContext, /*artifactExpander=*/ null, null))
             .setMnemonic(getMnemonic());
     Iterable<AspectDescriptor> aspectDescriptors = owner.getAspectDescriptors();
     AspectDescriptor lastAspect = null;

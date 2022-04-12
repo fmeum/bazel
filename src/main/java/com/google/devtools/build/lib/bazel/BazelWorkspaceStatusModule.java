@@ -26,7 +26,9 @@ import com.google.devtools.build.lib.actions.ActionKeyContext;
 import com.google.devtools.build.lib.actions.ActionOwner;
 import com.google.devtools.build.lib.actions.ActionResult;
 import com.google.devtools.build.lib.actions.Artifact;
+import com.google.devtools.build.lib.actions.Artifact.ArtifactExpander;
 import com.google.devtools.build.lib.actions.ArtifactPathResolver;
+import com.google.devtools.build.lib.actions.PathStripper.CommandAdjuster;
 import com.google.devtools.build.lib.analysis.BlazeDirectories;
 import com.google.devtools.build.lib.analysis.BuildInfo;
 import com.google.devtools.build.lib.analysis.BuildInfoEvent;
@@ -246,7 +248,8 @@ public class BazelWorkspaceStatusModule extends BlazeModule {
     @Override
     protected void computeKey(
         ActionKeyContext actionKeyContext,
-        @Nullable Artifact.ArtifactExpander artifactExpander,
+        @Nullable ArtifactExpander artifactExpander,
+        CommandAdjuster pathStripper,
         Fingerprint fp) {}
 
     @Override

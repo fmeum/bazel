@@ -42,6 +42,7 @@ import com.google.devtools.build.lib.actions.ActionKeyContext;
 import com.google.devtools.build.lib.actions.ActionOwner;
 import com.google.devtools.build.lib.actions.ActionResult;
 import com.google.devtools.build.lib.actions.Artifact;
+import com.google.devtools.build.lib.actions.Artifact.ArtifactExpander;
 import com.google.devtools.build.lib.actions.BaseSpawn;
 import com.google.devtools.build.lib.actions.CommandAction;
 import com.google.devtools.build.lib.actions.CommandLine;
@@ -54,6 +55,7 @@ import com.google.devtools.build.lib.actions.ExecException;
 import com.google.devtools.build.lib.actions.ParamFileInfo;
 import com.google.devtools.build.lib.actions.ParameterFile;
 import com.google.devtools.build.lib.actions.PathStripper;
+import com.google.devtools.build.lib.actions.PathStripper.CommandAdjuster;
 import com.google.devtools.build.lib.actions.ResourceSet;
 import com.google.devtools.build.lib.actions.RunfilesSupplier;
 import com.google.devtools.build.lib.actions.Spawn;
@@ -219,13 +221,14 @@ public final class JavaCompileAction extends AbstractAction implements CommandAc
   @Override
   protected void computeKey(
       ActionKeyContext actionKeyContext,
-      @Nullable Artifact.ArtifactExpander artifactExpander,
+      @Nullable ArtifactExpander artifactExpander,
+      CommandAdjuster pathStripper,
       Fingerprint fp)
       throws CommandLineExpansionException, InterruptedException {
     fp.addUUID(GUID);
     fp.addInt(classpathMode.ordinal());
-    executableLine.addToFingerprint(actionKeyContext, artifactExpander, fp);
-    flagLine.addToFingerprint(actionKeyContext, artifactExpander, fp);
+    executableLine.addToFingerprint(actionKeyContext, artifactExpander, null, fp);
+    flagLine.addToFingerprint(actionKeyContext, artifactExpander, null, fp);
     // As the classpath is no longer part of commandLines implicitly, we need to explicitly add
     // the transitive inputs to the key here.
     actionKeyContext.addNestedSetToFingerprint(fp, transitiveInputs);

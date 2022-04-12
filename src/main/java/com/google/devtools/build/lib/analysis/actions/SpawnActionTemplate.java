@@ -32,6 +32,7 @@ import com.google.devtools.build.lib.actions.Artifact.TreeFileArtifact;
 import com.google.devtools.build.lib.actions.CommandLine;
 import com.google.devtools.build.lib.actions.CommandLineExpansionException;
 import com.google.devtools.build.lib.actions.MiddlemanType;
+import com.google.devtools.build.lib.actions.PathStripper.CommandAdjuster;
 import com.google.devtools.build.lib.analysis.FilesToRunProvider;
 import com.google.devtools.build.lib.collect.nestedset.NestedSet;
 import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
@@ -126,6 +127,7 @@ public final class SpawnActionTemplate extends ActionKeyCacher
   protected void computeKey(
       ActionKeyContext actionKeyContext,
       @Nullable ArtifactExpander artifactExpander,
+      CommandAdjuster pathStripper,
       Fingerprint fp)
       throws CommandLineExpansionException, InterruptedException {
     TreeFileArtifact inputTreeFileArtifact =
@@ -137,7 +139,7 @@ public final class SpawnActionTemplate extends ActionKeyCacher
             ActionTemplateExpansionValue.key(
                 outputTreeArtifact.getArtifactOwner(), /*actionIndex=*/ 0));
     SpawnAction dummyAction = createAction(inputTreeFileArtifact, outputTreeFileArtifact);
-    dummyAction.computeKey(actionKeyContext, artifactExpander, fp);
+    dummyAction.computeKey(actionKeyContext, artifactExpander, null, fp);
   }
 
   /**

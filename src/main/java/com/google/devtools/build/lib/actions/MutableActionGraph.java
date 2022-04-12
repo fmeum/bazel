@@ -205,8 +205,8 @@ public interface MutableActionGraph extends ActionGraph {
         addStringDetail(
             sb,
             "Action key",
-            a.getKey(actionKeyContext, /*artifactExpander=*/ null),
-            b.getKey(actionKeyContext, /*artifactExpander=*/ null));
+            a.getKey(actionKeyContext, /*artifactExpander=*/ null, null),
+            b.getKey(actionKeyContext, /*artifactExpander=*/ null, null));
       } catch (InterruptedException e) {
         // Only for debugging - skip the key and carry on.
         addStringDetail(sb, "Action key", "<elided due to interrupt>", "<elided due to interrupt>");

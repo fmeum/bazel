@@ -33,6 +33,7 @@ import com.google.devtools.build.lib.actions.ArtifactPathResolver;
 import com.google.devtools.build.lib.actions.ExecException;
 import com.google.devtools.build.lib.actions.ExecutionRequirements;
 import com.google.devtools.build.lib.actions.MiddlemanType;
+import com.google.devtools.build.lib.actions.PathStripper.CommandAdjuster;
 import com.google.devtools.build.lib.actions.ResourceSet;
 import com.google.devtools.build.lib.actions.RunfilesSupplier;
 import com.google.devtools.build.lib.actions.SimpleSpawn;
@@ -251,7 +252,8 @@ public class SpawnIncludeScanner {
 
     @Override
     public String getKey(
-        ActionKeyContext actionKeyContext, @Nullable ArtifactExpander artifactExpander) {
+        ActionKeyContext actionKeyContext, @Nullable ArtifactExpander artifactExpander,
+        CommandAdjuster pathStripper) {
       throw new UnsupportedOperationException();
     }
 

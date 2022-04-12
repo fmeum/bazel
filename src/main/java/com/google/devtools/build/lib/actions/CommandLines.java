@@ -24,6 +24,7 @@ import com.google.devtools.build.lib.actions.ParameterFile.ParameterFileType;
 import com.google.devtools.build.lib.actions.PathStripper.CommandAdjuster;
 import com.google.devtools.build.lib.actions.cache.VirtualActionInput;
 import com.google.devtools.build.lib.collect.IterablesChain;
+import com.google.devtools.build.lib.shell.Command;
 import com.google.devtools.build.lib.util.Fingerprint;
 import com.google.devtools.build.lib.vfs.PathFragment;
 import com.google.protobuf.ByteString;
@@ -220,19 +221,20 @@ public class CommandLines {
   public void addToFingerprint(
       ActionKeyContext actionKeyContext,
       @Nullable ArtifactExpander artifactExpander,
+      @Nullable CommandAdjuster pathStripper,
       Fingerprint fingerprint)
       throws CommandLineExpansionException, InterruptedException {
     // Optimize for simple case of single command line
     if (commandLines instanceof CommandLine) {
       CommandLine commandLine = (CommandLine) commandLines;
-      commandLine.addToFingerprint(actionKeyContext, artifactExpander, fingerprint);
+      commandLine.addToFingerprint(actionKeyContext, artifactExpander, pathStripper, fingerprint);
       return;
     }
     List<CommandLineAndParamFileInfo> commandLines = getCommandLines();
     for (CommandLineAndParamFileInfo pair : commandLines) {
       CommandLine commandLine = pair.commandLine;
       ParamFileInfo paramFileInfo = pair.paramFileInfo;
-      commandLine.addToFingerprint(actionKeyContext, artifactExpander, fingerprint);
+      commandLine.addToFingerprint(actionKeyContext, artifactExpander, pathStripper, fingerprint);
       if (paramFileInfo != null) {
         addParamFileInfoToFingerprint(paramFileInfo, fingerprint);
       }

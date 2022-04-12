@@ -18,6 +18,8 @@ import static org.junit.Assert.assertThrows;
 
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
+import com.google.devtools.build.lib.actions.Artifact.ArtifactExpander;
+import com.google.devtools.build.lib.actions.PathStripper.CommandAdjuster;
 import com.google.devtools.build.lib.actions.ResourceManager.ResourceHandle;
 import com.google.devtools.build.lib.actions.ResourceManager.ResourcePriority;
 import com.google.devtools.build.lib.analysis.platform.PlatformInfo;
@@ -693,7 +695,8 @@ public class ResourceManagerTest {
 
     @Override
     public String getKey(
-        ActionKeyContext actionKeyContext, @Nullable Artifact.ArtifactExpander artifactExpander) {
+        ActionKeyContext actionKeyContext, @Nullable ArtifactExpander artifactExpander,
+        CommandAdjuster pathStripper) {
       throw new IllegalStateException();
     }
 

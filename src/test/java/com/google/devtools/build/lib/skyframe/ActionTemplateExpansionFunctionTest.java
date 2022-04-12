@@ -32,6 +32,7 @@ import com.google.devtools.build.lib.actions.ActionOwner;
 import com.google.devtools.build.lib.actions.ActionTemplate;
 import com.google.devtools.build.lib.actions.Actions;
 import com.google.devtools.build.lib.actions.Artifact;
+import com.google.devtools.build.lib.actions.Artifact.ArtifactExpander;
 import com.google.devtools.build.lib.actions.Artifact.DerivedArtifact;
 import com.google.devtools.build.lib.actions.Artifact.SpecialArtifact;
 import com.google.devtools.build.lib.actions.Artifact.SpecialArtifactType;
@@ -44,6 +45,7 @@ import com.google.devtools.build.lib.actions.BasicActionLookupValue;
 import com.google.devtools.build.lib.actions.FileArtifactValue;
 import com.google.devtools.build.lib.actions.MiddlemanType;
 import com.google.devtools.build.lib.actions.MutableActionGraph.ActionConflictException;
+import com.google.devtools.build.lib.actions.PathStripper.CommandAdjuster;
 import com.google.devtools.build.lib.actions.util.ActionsTestUtil;
 import com.google.devtools.build.lib.actions.util.InjectedActionLookupKey;
 import com.google.devtools.build.lib.actions.util.TestAction.DummyAction;
@@ -475,7 +477,8 @@ public final class ActionTemplateExpansionFunctionTest extends FoundationTestCas
 
     @Override
     public String getKey(
-        ActionKeyContext actionKeyContext, @Nullable Artifact.ArtifactExpander artifactExpander) {
+        ActionKeyContext actionKeyContext, @Nullable ArtifactExpander artifactExpander,
+        CommandAdjuster pathStripper) {
       Fingerprint fp = new Fingerprint();
       fp.addPath(inputTreeArtifact.getPath());
       fp.addPath(outputTreeArtifact.getPath());
