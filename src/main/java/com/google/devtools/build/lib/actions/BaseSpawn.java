@@ -18,6 +18,7 @@ import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Iterables;
+import com.google.devtools.build.lib.actions.PathStripper.CommandAdjuster;
 import com.google.devtools.build.lib.analysis.platform.PlatformInfo;
 import com.google.devtools.build.lib.collect.nestedset.NestedSet;
 import com.google.devtools.build.lib.util.OS;
@@ -154,5 +155,9 @@ public class BaseSpawn implements Spawn {
   @Override
   public String toString() {
     return Spawns.prettyPrint(this);
+  }
+
+  public CommandAdjuster getCommandAdjuster() {
+    return null;
   }
 }

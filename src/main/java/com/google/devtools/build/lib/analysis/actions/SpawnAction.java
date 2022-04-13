@@ -387,7 +387,7 @@ public class SpawnAction extends AbstractAction implements CommandAction {
         /*additionalInputs=*/ ImmutableList.of(),
         /*filesetMappings=*/ ImmutableMap.of(),
         /*reportOutputs=*/ true,
-        stripOutputPaths);
+        stripOutputPaths, null);
   }
 
   /**
@@ -436,7 +436,8 @@ public class SpawnAction extends AbstractAction implements CommandAction {
         expandedCommandLines.getParamFiles(),
         filesetMappings,
         reportOutputs,
-        stripOutputPaths);
+        stripOutputPaths,
+        PathRemapper.create(artifactExpander, metadataHandler, getInputs()));
   }
 
   Spawn getSpawnForExtraAction() throws CommandLineExpansionException, InterruptedException {
@@ -596,6 +597,7 @@ public class SpawnAction extends AbstractAction implements CommandAction {
     private final ImmutableMap<String, String> effectiveEnvironment;
     private final boolean reportOutputs;
     private final boolean stripOutputPaths;
+    private final CommandAdjuster pathStripper;
 
     /**
      * Creates an ActionSpawn with the given environment variables.
@@ -612,7 +614,8 @@ public class SpawnAction extends AbstractAction implements CommandAction {
         Iterable<? extends ActionInput> additionalInputs,
         Map<Artifact, ImmutableList<FilesetOutputSymlink>> filesetMappings,
         boolean reportOutputs,
-        boolean stripOutputPaths)
+        boolean stripOutputPaths,
+        CommandAdjuster pathStripper)
         throws CommandLineExpansionException {
       super(
           arguments,
@@ -642,6 +645,7 @@ public class SpawnAction extends AbstractAction implements CommandAction {
         effectiveEnvironment = parent.getEffectiveEnvironment(env);
       }
       this.reportOutputs = reportOutputs;
+      this.pathStripper = pathStripper;
     }
 
     @Override
@@ -667,6 +671,11 @@ public class SpawnAction extends AbstractAction implements CommandAction {
     @Override
     public ImmutableSet<Artifact> getOutputFiles() {
       return reportOutputs ? super.getOutputFiles() : ImmutableSet.of();
+    }
+
+    @Override
+    public CommandAdjuster getCommandAdjuster() {
+      return pathStripper;
     }
   }
 
