@@ -1,6 +1,5 @@
 package com.google.devtools.build.lib.actions;
 
-import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.Streams;
 import com.google.common.flogger.GoogleLogger;
@@ -14,14 +13,13 @@ import com.google.devtools.build.lib.collect.nestedset.NestedSet;
 import com.google.devtools.build.lib.util.Fingerprint;
 import com.google.devtools.build.lib.util.Pair;
 import com.google.devtools.build.lib.vfs.DigestUtils;
+import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.build.lib.vfs.PathFragment;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
-import java.util.stream.Collectors;
-import java.util.stream.Stream;
 import javax.annotation.Nullable;
 
 public interface PathRemapper extends CommandAdjuster {
@@ -39,6 +37,8 @@ public interface PathRemapper extends CommandAdjuster {
     logger.atWarning().log("stripCustomStarlarkArgs called on PathFragment %s", args);
     return args;
   }
+
+  void materialize(Path execRoot);
 
   class PerActionPathRemapper implements PathRemapper {
 
@@ -70,15 +70,23 @@ public interface PathRemapper extends CommandAdjuster {
       }
       return PathRemapper.super.strip(execPath);
     }
+
+    @Override
+    public void materialize(Path execRoot) {
+      // TODO: Atomically create symlinks.
+    }
   }
 
   class NoopPathRemapper implements PathRemapper {
-    static PathRemapper INSTANCE = new NoopPathRemapper();
+    public static final PathRemapper INSTANCE = new NoopPathRemapper();
 
     @Override
     public String strip(DerivedArtifact artifact, boolean forActionKey) {
       return artifact.getExecPathString();
     }
+
+    @Override
+    public void materialize(Path execRoot) {}
   }
 
   static PathRemapper create(
@@ -91,18 +99,8 @@ public interface PathRemapper extends CommandAdjuster {
     byte[] baseHash = new byte[1];
     Fingerprint fp = new Fingerprint();
     HashMap<String, ArrayList<Pair<DerivedArtifact, byte[]>>> shortPathCollisions = new HashMap<>();
-    ImmutableList<Artifact> expandedInputs = inputs.toList()
-        .stream()
-        .flatMap(input -> {
-          if (!input.isMiddlemanArtifact()) {
-            return Stream.of(input);
-          } else {
-            ArrayList<Artifact> expandedArtifacts = new ArrayList<>();
-            artifactExpander.expand(input, expandedArtifacts);
-            return expandedArtifacts.stream();
-          }
-        }).collect(ImmutableList.toImmutableList());
-    for (Artifact input : expandedInputs) {
+    List<ActionInput> expandedInputs = ActionInputHelper.expandArtifacts(inputs, artifactExpander);
+    for (ActionInput input : expandedInputs) {
       if (!(input instanceof DerivedArtifact)) {
         System.err.printf("Skipping source artifact %s%n", input);
         logger.atInfo().log("Skipping source artifact %s", input);

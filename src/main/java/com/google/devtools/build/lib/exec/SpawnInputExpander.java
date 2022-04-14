@@ -23,6 +23,7 @@ import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.actions.Artifact.ArtifactExpander;
 import com.google.devtools.build.lib.actions.Artifact.MissingExpansionException;
 import com.google.devtools.build.lib.actions.Artifact.TreeFileArtifact;
+import com.google.devtools.build.lib.actions.BaseSpawn;
 import com.google.devtools.build.lib.actions.FileArtifactValue;
 import com.google.devtools.build.lib.actions.FilesetManifest;
 import com.google.devtools.build.lib.actions.FilesetManifest.ForbiddenRelativeSymlinkException;
@@ -30,6 +31,8 @@ import com.google.devtools.build.lib.actions.FilesetManifest.RelativeSymlinkBeha
 import com.google.devtools.build.lib.actions.FilesetOutputSymlink;
 import com.google.devtools.build.lib.actions.ForbiddenActionInputException;
 import com.google.devtools.build.lib.actions.MetadataProvider;
+import com.google.devtools.build.lib.actions.PathRemapper.NoopPathRemapper;
+import com.google.devtools.build.lib.actions.PathStripper.CommandAdjuster;
 import com.google.devtools.build.lib.actions.RunfilesSupplier;
 import com.google.devtools.build.lib.actions.Spawn;
 import com.google.devtools.build.lib.actions.cache.VirtualActionInput;
@@ -222,10 +225,12 @@ public class SpawnInputExpander {
       Map<PathFragment, ActionInput> inputMap,
       NestedSet<? extends ActionInput> inputFiles,
       ArtifactExpander artifactExpander,
+      CommandAdjuster pathStripper,
       PathFragment baseDirectory) {
     List<ActionInput> inputs = ActionInputHelper.expandArtifacts(inputFiles, artifactExpander,
         true);
     for (ActionInput input : inputs) {
+      addMapping(inputMap, pathStripper.strip(input.getExecPath()), input, baseDirectory);
       addMapping(inputMap, input.getExecPath(), input, baseDirectory);
     }
   }
@@ -245,8 +250,9 @@ public class SpawnInputExpander {
       PathFragment baseDirectory,
       MetadataProvider actionInputFileCache)
       throws IOException, ForbiddenActionInputException {
+    CommandAdjuster pathStripper = spawn instanceof BaseSpawn && ((BaseSpawn) spawn).getCommandAdjuster() != null ? ((BaseSpawn) spawn).getCommandAdjuster() : NoopPathRemapper.INSTANCE;
     TreeMap<PathFragment, ActionInput> inputMap = new TreeMap<>();
-    addInputs(inputMap, spawn.getInputFiles(), artifactExpander, baseDirectory);
+    addInputs(inputMap, spawn.getInputFiles(), artifactExpander, pathStripper, baseDirectory);
     addRunfilesToInputs(
         inputMap,
         spawn.getRunfilesSupplier(),
@@ -294,7 +300,7 @@ public class SpawnInputExpander {
       MetadataProvider actionInputFileCache,
       InputVisitor visitor)
       throws IOException, ForbiddenActionInputException {
-    walkNestedSetInputs(baseDirectory, spawn.getInputFiles(), artifactExpander, visitor);
+    walkNestedSetInputs(baseDirectory, spawn.getInputFiles(), artifactExpander, spawn instanceof BaseSpawn && ((BaseSpawn) spawn).getCommandAdjuster() != null ? ((BaseSpawn) spawn).getCommandAdjuster() : NoopPathRemapper.INSTANCE, visitor);
 
     RunfilesSupplier runfilesSupplier = spawn.getRunfilesSupplier();
     visitor.visit(
@@ -347,6 +353,7 @@ public class SpawnInputExpander {
       PathFragment baseDirectory,
       NestedSet<? extends ActionInput> someInputFiles,
       ArtifactExpander artifactExpander,
+      CommandAdjuster pathStripper,
       InputVisitor visitor)
       throws IOException, ForbiddenActionInputException {
     visitor.visit(
@@ -362,7 +369,7 @@ public class SpawnInputExpander {
             addInputs(
                 inputMap,
                 NestedSetBuilder.wrap(someInputFiles.getOrder(), someInputFiles.getLeaves()),
-                artifactExpander,
+                artifactExpander, pathStripper,
                 baseDirectory);
             return inputMap;
           }
@@ -371,7 +378,7 @@ public class SpawnInputExpander {
           public void visitNonLeaves(InputVisitor childVisitor)
               throws IOException, ForbiddenActionInputException {
             for (NestedSet<? extends ActionInput> subInputs : someInputFiles.getNonLeaves()) {
-              walkNestedSetInputs(baseDirectory, subInputs, artifactExpander, childVisitor);
+              walkNestedSetInputs(baseDirectory, subInputs, artifactExpander, pathStripper, childVisitor);
             }
           }
         });

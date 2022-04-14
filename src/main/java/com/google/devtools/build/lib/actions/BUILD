@@ -63,6 +63,7 @@ java_library(
         ],
     ),
     deps = [
+        ":action_input_helper",
         ":action_lookup_data",
         ":action_lookup_key",
         ":artifact_owner",
