@@ -63,6 +63,7 @@ import com.google.devtools.build.lib.actions.MetadataProvider;
 import com.google.devtools.build.lib.actions.NotifyOnActionCacheHit;
 import com.google.devtools.build.lib.actions.NotifyOnActionCacheHit.ActionCachedContext;
 import com.google.devtools.build.lib.actions.PackageRootResolver;
+import com.google.devtools.build.lib.actions.PathRemapper;
 import com.google.devtools.build.lib.actions.ScanningActionEvent;
 import com.google.devtools.build.lib.actions.SpawnResult.MetadataLog;
 import com.google.devtools.build.lib.actions.StoppedScanningActionEvent;
@@ -522,7 +523,7 @@ public final class SkyframeActionExecutor {
         ArtifactPathResolver.createPathResolver(actionFileSystem, executorEngine.getExecRoot());
     FileOutErr fileOutErr;
     if (replayActionOutErr) {
-      String actionKey = action.getKey(actionKeyContext, artifactExpander, null);
+      String actionKey = action.getKey(actionKeyContext, artifactExpander, PathRemapper.create(action.getExecutionInfo(), artifactExpander, metadataHandler, action.getInputs()));
       fileOutErr = actionLogBufferPathGenerator.persistent(actionKey, artifactPathResolver);
       try {
         fileOutErr.getErrorPath().delete();
@@ -625,7 +626,7 @@ public final class SkyframeActionExecutor {
       if (replayActionOutErr) {
         // TODO(ulfjack): This assumes that the stdout/stderr files are unmodified. It would be
         //  better to integrate them with the action cache and rerun the action when they change.
-        String actionKey = action.getKey(actionKeyContext, artifactExpander, null);
+        String actionKey = action.getKey(actionKeyContext, artifactExpander, PathRemapper.create(action.getExecutionInfo(), artifactExpander, metadataHandler, action.getInputs()));
         FileOutErr fileOutErr = actionLogBufferPathGenerator.persistent(actionKey, pathResolver);
         // getOutputPath and getErrorPath cause the FileOutErr to be marked as "dirty" which
         // invalidates any prior in-memory state it had. Need to do this so that hasRecordedOutput()

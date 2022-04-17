@@ -20,9 +20,15 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.Map.Entry;
+import java.util.stream.Collectors;
 import javax.annotation.Nullable;
 
 public interface PathRemapper extends CommandAdjuster {
+
+  String SUPPORTS_OUTPUT_PATH_STRIPPING = "supports-output-path-stripping";
+  String SUPPORTS_INPUT_PATH_STRIPPING = "supports-input-path-stripping";
 
   GoogleLogger logger = GoogleLogger.forEnclosingClass();
 
@@ -38,7 +44,7 @@ public interface PathRemapper extends CommandAdjuster {
     return args;
   }
 
-  void materialize(Path execRoot);
+  void materialize(Path execRoot) throws IOException;
 
   class PerActionPathRemapper implements PathRemapper {
 
@@ -72,8 +78,10 @@ public interface PathRemapper extends CommandAdjuster {
     }
 
     @Override
-    public void materialize(Path execRoot) {
-      // TODO: Atomically create symlinks.
+    public void materialize(Path execRoot) throws IOException {
+      for (Entry<PathFragment, String> e : execPathMapping.entrySet()) {
+        execRoot.getRelative(e.getValue()).createSymbolicLink(e.getKey());
+      }
     }
   }
 
@@ -90,10 +98,14 @@ public interface PathRemapper extends CommandAdjuster {
   }
 
   static PathRemapper create(
+      Map<String, String> executionInfo,
       ArtifactExpander artifactExpander,
       @Nullable MetadataHandler metadataHandler,
       NestedSet<Artifact> inputs) {
     if (metadataHandler == null) {
+      return NoopPathRemapper.INSTANCE;
+    }
+    if (!executionInfo.containsKey(SUPPORTS_OUTPUT_PATH_STRIPPING)) {
       return NoopPathRemapper.INSTANCE;
     }
     byte[] baseHash = new byte[1];
@@ -102,13 +114,11 @@ public interface PathRemapper extends CommandAdjuster {
     List<ActionInput> expandedInputs = ActionInputHelper.expandArtifacts(inputs, artifactExpander);
     for (ActionInput input : expandedInputs) {
       if (!(input instanceof DerivedArtifact)) {
-        System.err.printf("Skipping source artifact %s%n", input);
         logger.atInfo().log("Skipping source artifact %s", input);
         continue;
       }
       DerivedArtifact derivedArtifact = (DerivedArtifact) input;
       String path = derivedArtifact.getRootRelativePathString();
-      System.err.printf("Hashing %s as %s%n", input.getExecPathString(), path);
       fp.addString(path);
       FileArtifactValue md;
       try {

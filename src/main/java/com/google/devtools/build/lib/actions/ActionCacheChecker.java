@@ -529,7 +529,7 @@ public class ActionCacheChecker {
       actionCache.accountMiss(MissReason.DIFFERENT_FILES);
       return true;
     } else if (!entry.getActionKey().equals(action.getKey(actionKeyContext, artifactExpander,
-        PathRemapper.create(artifactExpander, metadataHandler, actionInputs)))) {
+        PathRemapper.create(action.getExecutionInfo(), artifactExpander, metadataHandler, actionInputs)))) {
       reportCommand(handler, action);
       actionCache.accountMiss(MissReason.DIFFERENT_ACTION_KEY);
       return true;
@@ -588,7 +588,8 @@ public class ActionCacheChecker {
         computeUsedEnv(action, clientEnv, remoteDefaultPlatformProperties);
     ActionCache.Entry entry =
         new ActionCache.Entry(
-            action.getKey(actionKeyContext, artifactExpander, null),
+            action.getKey(actionKeyContext, artifactExpander,
+                PathRemapper.create(action.getExecutionInfo(), artifactExpander, metadataHandler, action.getInputs())),
             usedEnvironment,
             action.discoversInputs());
     for (Artifact output : action.getOutputs()) {

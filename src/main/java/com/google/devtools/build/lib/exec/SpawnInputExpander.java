@@ -231,7 +231,6 @@ public class SpawnInputExpander {
         true);
     for (ActionInput input : inputs) {
       addMapping(inputMap, pathStripper.strip(input.getExecPath()), input, baseDirectory);
-      addMapping(inputMap, input.getExecPath(), input, baseDirectory);
     }
   }
 

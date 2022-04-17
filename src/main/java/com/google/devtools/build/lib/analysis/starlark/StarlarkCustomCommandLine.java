@@ -719,7 +719,6 @@ public class StarlarkCustomCommandLine extends CommandLine {
       Object arg = arguments.get(argi++);
       if (arg instanceof VectorArg) {
         argi = ((VectorArg) arg).eval(arguments, argi, result, artifactExpander, stripPaths);
-
       } else if (arg instanceof ScalarArg) {
         argi = ((ScalarArg) arg).eval(arguments, argi, result, stripPaths);
       } else {
@@ -837,7 +836,9 @@ public class StarlarkCustomCommandLine extends CommandLine {
       } else if (arg instanceof ScalarArg) {
         argi = ((ScalarArg) arg).addToFingerprint(arguments, argi, pathStripper, fingerprint);
       } else {
-        fingerprint.addString(CommandLineItem.expandToCommandLine(arg));
+        fingerprint.addString(
+            arg instanceof DerivedArtifact && pathStripper != null ? pathStripper.strip(
+                (DerivedArtifact) arg, true) : CommandLineItem.expandToCommandLine(arg));
       }
     }
   }
