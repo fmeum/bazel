@@ -133,9 +133,6 @@ public interface PathRemapper extends CommandAdjuster {
       }
       shortPathCollisions.get(path).add(new Pair<>(derivedArtifact, digest));
     }
-    if (shortPathCollisions.isEmpty()) {
-      return NoopPathRemapper.INSTANCE;
-    }
 
     String rootPrefix = BaseEncoding.base16().encode(baseHash);
     ImmutableMap<PathFragment, String> execPathMapping = shortPathCollisions
