@@ -57,7 +57,8 @@ public final class Spawns {
 
   /** Returns {@code true} if {@code spawn} may be executed locally. */
   public static boolean mayBeExecutedLocally(Spawn spawn) {
-    return !spawn.getExecutionInfo().containsKey(ExecutionRequirements.NO_LOCAL);
+    return !spawn.getExecutionInfo().containsKey(ExecutionRequirements.NO_LOCAL)
+        && !spawn.getExecutionInfo().containsKey(ExecutionRequirements.SUPPORTS_PATH_REMAPPING);
   }
 
   /** Returns whether a Spawn can be executed in a sandbox environment. */

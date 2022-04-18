@@ -271,4 +271,6 @@ public class ExecutionRequirements {
   /** Requires the execution service do NOT share caches across different workspace. */
   public static final String DIFFERENTIATE_WORKSPACE_CACHE =
       "internal-differentiate-workspace-cache";
+
+  public static final String SUPPORTS_PATH_REMAPPING = "supports-path-remapping";
 }

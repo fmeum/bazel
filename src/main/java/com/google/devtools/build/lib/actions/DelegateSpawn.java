@@ -16,6 +16,7 @@ package com.google.devtools.build.lib.actions;
 
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
+import com.google.devtools.build.lib.actions.PathStripper.CommandAdjuster;
 import com.google.devtools.build.lib.analysis.platform.PlatformInfo;
 import com.google.devtools.build.lib.collect.nestedset.NestedSet;
 import java.util.Collection;
@@ -107,5 +108,10 @@ public class DelegateSpawn implements Spawn {
   @Override
   public String toString() {
     return "Delegate of " + spawn;
+  }
+
+  @Override
+  public CommandAdjuster getCommandAdjuster() {
+    return spawn.getCommandAdjuster();
   }
 }

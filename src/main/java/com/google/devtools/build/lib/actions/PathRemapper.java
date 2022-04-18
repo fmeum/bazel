@@ -22,13 +22,9 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
-import java.util.stream.Collectors;
 import javax.annotation.Nullable;
 
 public interface PathRemapper extends CommandAdjuster {
-
-  String SUPPORTS_OUTPUT_PATH_STRIPPING = "supports-output-path-stripping";
-  String SUPPORTS_INPUT_PATH_STRIPPING = "supports-input-path-stripping";
 
   GoogleLogger logger = GoogleLogger.forEnclosingClass();
 
@@ -46,6 +42,10 @@ public interface PathRemapper extends CommandAdjuster {
 
   void materialize(Path execRoot) throws IOException;
 
+  static PathRemapper noop() {
+    return NoopPathRemapper.INSTANCE;
+  }
+
   class PerActionPathRemapper implements PathRemapper {
 
     private final ImmutableMap<PathFragment, String> execPathMapping;
@@ -60,12 +60,8 @@ public interface PathRemapper extends CommandAdjuster {
       if (remappedPath != null) {
         return remappedPath;
       }
-      // Output artifact.
-      if (forActionKey) {
-        return artifact.getRootRelativePathString();
-      } else {
-        return artifact.getExecPathString();
-      }
+      // Output artifact
+      return PathRemapper.execPathStringWithSyntheticConfig(artifact, "out");
     }
 
     @Override
@@ -105,7 +101,7 @@ public interface PathRemapper extends CommandAdjuster {
     if (metadataHandler == null) {
       return NoopPathRemapper.INSTANCE;
     }
-    if (!executionInfo.containsKey(SUPPORTS_OUTPUT_PATH_STRIPPING)) {
+    if (!executionInfo.containsKey(ExecutionRequirements.SUPPORTS_PATH_REMAPPING)) {
       return NoopPathRemapper.INSTANCE;
     }
     byte[] baseHash = new byte[1];
@@ -154,16 +150,15 @@ public interface PathRemapper extends CommandAdjuster {
                         UnsignedBytes.lexicographicalComparator()))
                     .map(Pair::getFirst),
                 (artifact, lexicographicIndex) -> new Pair<>(artifact.getExecPath(),
-                    remappedExecPathString(rootPrefix, artifact, lexicographicIndex))))
+                    execPathStringWithSyntheticConfig(artifact, rootPrefix + "-" + lexicographicIndex))))
         .collect(ImmutableMap.toImmutableMap(p -> p.first, p -> p.second));
     return new PerActionPathRemapper(execPathMapping);
   }
 
-  private static String remappedExecPathString(String rootPrefix, DerivedArtifact artifact,
-      long lexicographicIndex) {
+  private static String execPathStringWithSyntheticConfig(DerivedArtifact artifact, String config) {
     PathFragment execPath = artifact.getExecPath();
     String remappedPath = execPath.subFragment(0, 1)
-        .getRelative(rootPrefix + "-" + lexicographicIndex)
+        .getRelative(config)
         .getRelative(execPath.subFragment(2))
         .getPathString();
     logger.atInfo().log("Remapping %s to %s", artifact.getExecPathString(), remappedPath);

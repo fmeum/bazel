@@ -157,7 +157,8 @@ public class BaseSpawn implements Spawn {
     return Spawns.prettyPrint(this);
   }
 
+  @Override
   public CommandAdjuster getCommandAdjuster() {
-    return null;
+    return PathRemapper.noop();
   }
 }
