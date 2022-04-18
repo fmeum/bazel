@@ -202,8 +202,6 @@ final class WorkerSpawnRunner implements SpawnRunner {
         inputFiles =
             helpers.processInputFiles(
                 context.getInputMapping(PathFragment.EMPTY_FRAGMENT),
-                spawn,
-                context.getArtifactExpander(),
                 execRoot);
       }
       SandboxOutputs outputs = helpers.getOutputs(spawn);
@@ -258,7 +256,8 @@ final class WorkerSpawnRunner implements SpawnRunner {
     }
 
     List<ActionInput> inputs =
-        ActionInputHelper.expandArtifacts(spawn.getInputFiles(), context.getArtifactExpander());
+        ActionInputHelper.expandArtifacts(spawn.getInputFiles(), context.getArtifactExpander(),
+            false);
 
     for (ActionInput input : inputs) {
       byte[] digestBytes = inputFileCache.getMetadata(input).getDigest();

@@ -487,27 +487,8 @@ public final class SandboxHelpers {
    */
   public SandboxInputs processInputFiles(
       Map<PathFragment, ActionInput> inputMap,
-      Spawn spawn,
-      ArtifactExpander artifactExpander,
       Path execRoot)
       throws IOException {
-    // SpawnInputExpander#getInputMapping uses ArtifactExpander#expandArtifacts to expand
-    // middlemen and tree artifacts, which expands empty tree artifacts to no entry. However,
-    // actions that accept TreeArtifacts as inputs generally expect that the empty directory is
-    // created. So we add those explicitly here.
-    // TODO(ulfjack): Move this code to SpawnInputExpander.
-    for (ActionInput input : spawn.getInputFiles().toList()) {
-      if (input instanceof Artifact && ((Artifact) input).isTreeArtifact()) {
-        List<Artifact> containedArtifacts = new ArrayList<>();
-        artifactExpander.expand((Artifact) input, containedArtifacts);
-        // Attempting to mount a non-empty directory results in ERR_DIRECTORY_NOT_EMPTY, so we
-        // only mount empty TreeArtifacts as directories.
-        if (containedArtifacts.isEmpty()) {
-          inputMap.put(input.getExecPath(), input);
-        }
-      }
-    }
-
     Map<PathFragment, Path> inputFiles = new TreeMap<>();
     Set<VirtualActionInput> virtualInputs = new HashSet<>();
     Map<PathFragment, PathFragment> inputSymlinks = new TreeMap<>();

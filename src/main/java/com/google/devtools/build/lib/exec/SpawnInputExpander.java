@@ -130,7 +130,8 @@ public class SpawnInputExpander {
           if (localArtifact.isTreeArtifact()) {
             List<ActionInput> expandedInputs =
                 ActionInputHelper.expandArtifacts(
-                    NestedSetBuilder.create(Order.STABLE_ORDER, localArtifact), artifactExpander);
+                    NestedSetBuilder.create(Order.STABLE_ORDER, localArtifact), artifactExpander,
+                    false);
             for (ActionInput input : expandedInputs) {
               addMapping(
                   inputMap,
@@ -222,7 +223,8 @@ public class SpawnInputExpander {
       NestedSet<? extends ActionInput> inputFiles,
       ArtifactExpander artifactExpander,
       PathFragment baseDirectory) {
-    List<ActionInput> inputs = ActionInputHelper.expandArtifacts(inputFiles, artifactExpander);
+    List<ActionInput> inputs = ActionInputHelper.expandArtifacts(inputFiles, artifactExpander,
+        true);
     for (ActionInput input : inputs) {
       addMapping(inputMap, input.getExecPath(), input, baseDirectory);
     }

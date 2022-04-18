@@ -794,7 +794,7 @@ EOF
 }
 
 # regression test for https://github.com/bazelbuild/bazel/issues/6262
-function test_create_tree_artifact_inputs() {
+function test_create_tree_artifact_outputs() {
   create_workspace_with_default_repos WORKSPACE
 
   cat > def.bzl <<'EOF'
@@ -816,6 +816,36 @@ r(name = "a")
 EOF
 
   bazel build --test_output=streamed :a &>$TEST_log || fail "expected build to succeed"
+}
+
+function test_create_tree_artifact_inputs() {
+  create_workspace_with_default_repos WORKSPACE
+
+  cat > def.bzl <<'EOF'
+def _r(ctx):
+    empty_d = ctx.actions.declare_directory("%s_empty_dir" % ctx.label.name)
+    ctx.actions.run_shell(
+        outputs = [empty_d],
+        command = "mkdir -p %s" % empty_d.path,
+    )
+    f = ctx.actions.declare_file("%s" % ctx.label.name)
+    ctx.actions.run_shell(
+        inputs = [empty_d],
+        outputs = [f],
+        command = "cd %s && pwd > %s" % (empty_d.path, f.path),
+    )
+    return [DefaultInfo(files = depset([f]))]
+
+r = rule(implementation = _r)
+EOF
+
+cat > BUILD <<'EOF'
+load(":def.bzl", "r")
+
+r(name = "a")
+EOF
+
+  bazel build :a &>$TEST_log || fail "expected build to succeed"
 }
 
 # The test shouldn't fail if the environment doesn't support running it.
