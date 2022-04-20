@@ -82,7 +82,7 @@ public interface PathRemapper extends CommandAdjuster {
   }
 
   class NoopPathRemapper implements PathRemapper {
-    public static final PathRemapper INSTANCE = new NoopPathRemapper();
+    private static final PathRemapper INSTANCE = new NoopPathRemapper();
 
     @Override
     public String strip(DerivedArtifact artifact, boolean forActionKey) {
@@ -106,8 +106,10 @@ public interface PathRemapper extends CommandAdjuster {
     }
     byte[] baseHash = new byte[1];
     Fingerprint fp = new Fingerprint();
+    // TODO: Handle param files.
     HashMap<String, ArrayList<Pair<DerivedArtifact, byte[]>>> shortPathCollisions = new HashMap<>();
-    List<ActionInput> expandedInputs = ActionInputHelper.expandArtifacts(inputs, artifactExpander);
+    // TODO: Do not expand tree artifacts.
+    List<ActionInput> expandedInputs = ActionInputHelper.expandArtifacts(inputs, artifactExpander, false);
     for (ActionInput input : expandedInputs) {
       if (!(input instanceof DerivedArtifact)) {
         logger.atInfo().log("Skipping source artifact %s", input);
@@ -157,6 +159,7 @@ public interface PathRemapper extends CommandAdjuster {
 
   private static String execPathStringWithSyntheticConfig(DerivedArtifact artifact, String config) {
     PathFragment execPath = artifact.getExecPath();
+    // TODO: Support experimental_sibling_repository_layout.
     String remappedPath = execPath.subFragment(0, 1)
         .getRelative(config)
         .getRelative(execPath.subFragment(2))

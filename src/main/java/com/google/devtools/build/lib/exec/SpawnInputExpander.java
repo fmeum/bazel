@@ -23,7 +23,6 @@ import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.actions.Artifact.ArtifactExpander;
 import com.google.devtools.build.lib.actions.Artifact.MissingExpansionException;
 import com.google.devtools.build.lib.actions.Artifact.TreeFileArtifact;
-import com.google.devtools.build.lib.actions.BaseSpawn;
 import com.google.devtools.build.lib.actions.FileArtifactValue;
 import com.google.devtools.build.lib.actions.FilesetManifest;
 import com.google.devtools.build.lib.actions.FilesetManifest.ForbiddenRelativeSymlinkException;
@@ -31,7 +30,6 @@ import com.google.devtools.build.lib.actions.FilesetManifest.RelativeSymlinkBeha
 import com.google.devtools.build.lib.actions.FilesetOutputSymlink;
 import com.google.devtools.build.lib.actions.ForbiddenActionInputException;
 import com.google.devtools.build.lib.actions.MetadataProvider;
-import com.google.devtools.build.lib.actions.PathRemapper.NoopPathRemapper;
 import com.google.devtools.build.lib.actions.PathStripper.CommandAdjuster;
 import com.google.devtools.build.lib.actions.RunfilesSupplier;
 import com.google.devtools.build.lib.actions.Spawn;
@@ -249,9 +247,9 @@ public class SpawnInputExpander {
       PathFragment baseDirectory,
       MetadataProvider actionInputFileCache)
       throws IOException, ForbiddenActionInputException {
-    CommandAdjuster pathStripper = spawn instanceof BaseSpawn && ((BaseSpawn) spawn).getCommandAdjuster() != null ? ((BaseSpawn) spawn).getCommandAdjuster() : NoopPathRemapper.INSTANCE;
     TreeMap<PathFragment, ActionInput> inputMap = new TreeMap<>();
-    addInputs(inputMap, spawn.getInputFiles(), artifactExpander, pathStripper, baseDirectory);
+    addInputs(inputMap, spawn.getInputFiles(), artifactExpander, spawn.getCommandAdjuster(),
+        baseDirectory);
     addRunfilesToInputs(
         inputMap,
         spawn.getRunfilesSupplier(),
@@ -299,7 +297,8 @@ public class SpawnInputExpander {
       MetadataProvider actionInputFileCache,
       InputVisitor visitor)
       throws IOException, ForbiddenActionInputException {
-    walkNestedSetInputs(baseDirectory, spawn.getInputFiles(), artifactExpander, spawn instanceof BaseSpawn && ((BaseSpawn) spawn).getCommandAdjuster() != null ? ((BaseSpawn) spawn).getCommandAdjuster() : NoopPathRemapper.INSTANCE, visitor);
+    walkNestedSetInputs(baseDirectory, spawn.getInputFiles(), artifactExpander,
+        spawn.getCommandAdjuster(), visitor);
 
     RunfilesSupplier runfilesSupplier = spawn.getRunfilesSupplier();
     visitor.visit(
