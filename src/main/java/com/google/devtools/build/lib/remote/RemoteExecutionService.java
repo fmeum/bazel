@@ -77,6 +77,7 @@ import com.google.devtools.build.lib.actions.ExecutionRequirements;
 import com.google.devtools.build.lib.actions.FileArtifactValue.RemoteFileArtifactValue;
 import com.google.devtools.build.lib.actions.ForbiddenActionInputException;
 import com.google.devtools.build.lib.actions.MetadataProvider;
+import com.google.devtools.build.lib.actions.PathRemapper;
 import com.google.devtools.build.lib.actions.Spawn;
 import com.google.devtools.build.lib.actions.SpawnResult;
 import com.google.devtools.build.lib.actions.Spawns;
@@ -372,13 +373,18 @@ public class RemoteExecutionService {
     // Get the remote platform properties.
     Platform platform = PlatformUtils.getPlatformProto(spawn, remoteOptions);
 
+    RemotePathResolver remappedRemotePathResolver = remotePathResolver.withPathMapping(
+        PathRemapper.restrictionOf(spawn.getCommandAdjuster(),
+            spawn.getOutputFiles().stream().map(ActionInput::getExecPath)
+                .collect(ImmutableList.toImmutableList())));
+
     Command command =
         buildCommand(
             spawn.getOutputFiles(),
             spawn.getArguments(),
             spawn.getEnvironment(),
             platform,
-            remotePathResolver);
+            remappedRemotePathResolver);
     Digest commandHash = digestUtil.compute(command);
     Action action =
         Utils.buildAction(
@@ -401,7 +407,7 @@ public class RemoteExecutionService {
         spawn,
         context,
         remoteActionExecutionContext,
-        remotePathResolver,
+        remappedRemotePathResolver,
         merkleTree,
         commandHash,
         command,

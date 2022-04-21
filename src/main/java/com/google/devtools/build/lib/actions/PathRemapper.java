@@ -17,6 +17,7 @@ import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.build.lib.vfs.PathFragment;
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
@@ -29,15 +30,14 @@ public interface PathRemapper extends CommandAdjuster {
   GoogleLogger logger = GoogleLogger.forEnclosingClass();
 
   @Override
-  default PathFragment strip(PathFragment execPath) {
-    logger.atWarning().log("strip called on PathFragment %s", execPath);
-    return execPath;
-  }
-
-  @Override
   default List<String> stripCustomStarlarkArgs(List<String> args) {
     logger.atWarning().log("stripCustomStarlarkArgs called on PathFragment %s", args);
     return args;
+  }
+
+  @Override
+  default String strip(DerivedArtifact artifact, boolean forActionKey) {
+    return strip(artifact.getExecPath()).getPathString();
   }
 
   void materialize(Path execRoot) throws IOException;
@@ -55,22 +55,14 @@ public interface PathRemapper extends CommandAdjuster {
     }
 
     @Override
-    public String strip(DerivedArtifact artifact, boolean forActionKey) {
-      String remappedPath = execPathMapping.get(artifact.getExecPath());
-      if (remappedPath != null) {
-        return remappedPath;
-      }
-      // Output artifact
-      return PathRemapper.execPathStringWithSyntheticConfig(artifact, "out");
-    }
-
-    @Override
     public PathFragment strip(PathFragment execPath) {
       String remappedPath = execPathMapping.get(execPath);
       if (remappedPath != null) {
         return PathFragment.createAlreadyNormalized(remappedPath);
       }
-      return PathRemapper.super.strip(execPath);
+      // Output artifact
+      return PathFragment.createAlreadyNormalized(
+          PathRemapper.execPathStringWithSyntheticConfig(execPath, "out"));
     }
 
     @Override
@@ -85,8 +77,8 @@ public interface PathRemapper extends CommandAdjuster {
     private static final PathRemapper INSTANCE = new NoopPathRemapper();
 
     @Override
-    public String strip(DerivedArtifact artifact, boolean forActionKey) {
-      return artifact.getExecPathString();
+    public PathFragment strip(PathFragment execPath) {
+      return execPath;
     }
 
     @Override
@@ -152,19 +144,24 @@ public interface PathRemapper extends CommandAdjuster {
                         UnsignedBytes.lexicographicalComparator()))
                     .map(Pair::getFirst),
                 (artifact, lexicographicIndex) -> new Pair<>(artifact.getExecPath(),
-                    execPathStringWithSyntheticConfig(artifact, rootPrefix + "-" + lexicographicIndex))))
+                    execPathStringWithSyntheticConfig(artifact.getExecPath(),
+                        rootPrefix + "-" + lexicographicIndex))))
         .collect(ImmutableMap.toImmutableMap(p -> p.first, p -> p.second));
     return new PerActionPathRemapper(execPathMapping);
   }
 
-  private static String execPathStringWithSyntheticConfig(DerivedArtifact artifact, String config) {
-    PathFragment execPath = artifact.getExecPath();
+  private static String execPathStringWithSyntheticConfig(PathFragment execPath, String config) {
     // TODO: Support experimental_sibling_repository_layout.
     String remappedPath = execPath.subFragment(0, 1)
         .getRelative(config)
         .getRelative(execPath.subFragment(2))
         .getPathString();
-    logger.atInfo().log("Remapping %s to %s", artifact.getExecPathString(), remappedPath);
+    logger.atInfo().log("Remapping %s to %s", execPath.getPathString(), remappedPath);
     return remappedPath;
+  }
+
+  static InvertibleFunction<PathFragment, PathFragment> restrictionOf(CommandAdjuster remapper,
+      Collection<PathFragment> paths) {
+    return InvertibleFunction.restrictionOf(remapper::strip, paths);
   }
 }

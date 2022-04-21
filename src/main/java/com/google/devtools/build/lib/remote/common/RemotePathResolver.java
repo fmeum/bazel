@@ -15,11 +15,17 @@ package com.google.devtools.build.lib.remote.common;
 
 import static com.google.common.base.Preconditions.checkNotNull;
 
+import com.google.common.collect.ImmutableMap;
+import com.google.common.collect.ImmutableMap.Builder;
 import com.google.devtools.build.lib.actions.ActionInput;
 import com.google.devtools.build.lib.actions.ActionInputHelper;
 import com.google.devtools.build.lib.actions.ForbiddenActionInputException;
+import com.google.devtools.build.lib.actions.InvertibleFunction;
+import com.google.devtools.build.lib.actions.PathRemapper;
+import com.google.devtools.build.lib.actions.PathStripper.CommandAdjuster;
 import com.google.devtools.build.lib.actions.Spawn;
 import com.google.devtools.build.lib.exec.SpawnInputExpander;
+import com.google.devtools.build.lib.exec.SpawnInputExpander.InputVisitor;
 import com.google.devtools.build.lib.exec.SpawnRunner.SpawnExecutionContext;
 import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.build.lib.vfs.PathFragment;
@@ -72,15 +78,14 @@ public interface RemotePathResolver {
   Path outputPathToLocalPath(String outputPath);
 
   /** Resolves the local {@link Path} for the {@link ActionInput}. */
-  default Path outputPathToLocalPath(ActionInput actionInput) {
-    String outputPath = localPathToOutputPath(actionInput.getExecPath());
-    return outputPathToLocalPath(outputPath);
-  }
+  Path outputPathToLocalPath(ActionInput actionInput);
 
   /** Creates the default {@link RemotePathResolver}. */
   static RemotePathResolver createDefault(Path execRoot) {
     return new DefaultRemotePathResolver(execRoot);
   }
+
+  RemotePathResolver withPathMapping(InvertibleFunction<PathFragment, PathFragment> mapping);
 
   /**
    * The default {@link RemotePathResolver} which use {@code execRoot} as input root and do NOT set
@@ -89,9 +94,15 @@ public interface RemotePathResolver {
   class DefaultRemotePathResolver implements RemotePathResolver {
 
     private final Path execRoot;
+    private final InvertibleFunction<PathFragment, PathFragment> mapping;
 
     public DefaultRemotePathResolver(Path execRoot) {
+      this(execRoot, InvertibleFunction.identity());
+    }
+
+    private DefaultRemotePathResolver(Path execRoot, InvertibleFunction<PathFragment, PathFragment> mapping) {
       this.execRoot = execRoot;
+      this.mapping = mapping;
     }
 
     @Override
@@ -121,22 +132,27 @@ public interface RemotePathResolver {
 
     @Override
     public String localPathToOutputPath(Path path) {
-      return path.relativeTo(execRoot).getPathString();
+      return mapping.apply(path.relativeTo(execRoot)).getPathString();
     }
 
     @Override
     public String localPathToOutputPath(PathFragment execPath) {
-      return execPath.getPathString();
+      return mapping.apply(execPath).getPathString();
     }
 
     @Override
     public Path outputPathToLocalPath(String outputPath) {
-      return execRoot.getRelative(outputPath);
+      return execRoot.getRelative(mapping.applyInverse(PathFragment.createAlreadyNormalized(outputPath)));
     }
 
     @Override
     public Path outputPathToLocalPath(ActionInput actionInput) {
       return ActionInputHelper.toInputPath(actionInput, execRoot);
+    }
+
+    @Override
+    public RemotePathResolver withPathMapping(InvertibleFunction<PathFragment, PathFragment> mapping) {
+      return new DefaultRemotePathResolver(execRoot, mapping);
     }
   }
 
@@ -153,6 +169,8 @@ public interface RemotePathResolver {
 
     private final Path execRoot;
     private final boolean incompatibleRemoteOutputPathsRelativeToInputRoot;
+    // TODO: Apply mapping.
+    private final InvertibleFunction<PathFragment, PathFragment> mapping;
 
     public SiblingRepositoryLayoutResolver(Path execRoot) {
       this(execRoot, /* incompatibleRemoteOutputPathsRelativeToInputRoot= */ false);
@@ -160,10 +178,18 @@ public interface RemotePathResolver {
 
     public SiblingRepositoryLayoutResolver(
         Path execRoot, boolean incompatibleRemoteOutputPathsRelativeToInputRoot) {
+      this(execRoot, incompatibleRemoteOutputPathsRelativeToInputRoot, InvertibleFunction.identity());
+    }
+
+    public SiblingRepositoryLayoutResolver(
+        Path execRoot, boolean incompatibleRemoteOutputPathsRelativeToInputRoot,
+        InvertibleFunction<PathFragment, PathFragment> mapping) {
       this.execRoot = execRoot;
       this.incompatibleRemoteOutputPathsRelativeToInputRoot =
           incompatibleRemoteOutputPathsRelativeToInputRoot;
+      this.mapping = mapping;
     }
+
 
     @Override
     public String getWorkingDirectory() {
@@ -219,6 +245,11 @@ public interface RemotePathResolver {
     @Override
     public Path outputPathToLocalPath(ActionInput actionInput) {
       return ActionInputHelper.toInputPath(actionInput, execRoot);
+    }
+
+    @Override
+    public RemotePathResolver withPathMapping(InvertibleFunction<PathFragment, PathFragment> mapping) {
+      return null;
     }
   }
 }
