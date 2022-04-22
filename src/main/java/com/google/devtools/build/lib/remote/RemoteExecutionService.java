@@ -155,7 +155,7 @@ public class RemoteExecutionService {
   private final Reporter reporter;
   private final boolean verboseFailures;
   private final Path execRoot;
-  private final RemotePathResolver remotePathResolver;
+  private final RemotePathResolver baseRemotePathResolver;
   private final String buildRequestId;
   private final String commandId;
   private final DigestUtil digestUtil;
@@ -190,7 +190,7 @@ public class RemoteExecutionService {
     this.reporter = reporter;
     this.verboseFailures = verboseFailures;
     this.execRoot = execRoot;
-    this.remotePathResolver = remotePathResolver;
+    this.baseRemotePathResolver = remotePathResolver;
     this.buildRequestId = buildRequestId;
     this.commandId = commandId;
     this.digestUtil = digestUtil;
@@ -299,14 +299,17 @@ public class RemoteExecutionService {
     }
   }
 
-  /** Returns {@code true} if the spawn may be executed remotely. */
+  /**
+   * Returns {@code true} if the spawn may be executed remotely.
+   */
   public boolean mayBeExecutedRemotely(Spawn spawn) {
     return remoteCache instanceof RemoteExecutionCache
         && remoteExecutor != null
         && Spawns.mayBeExecutedRemotely(spawn);
   }
 
-  private MerkleTree buildInputMerkleTree(Spawn spawn, SpawnExecutionContext context)
+  private MerkleTree buildInputMerkleTree(Spawn spawn, SpawnExecutionContext context,
+      RemotePathResolver remotePathResolver)
       throws IOException, ForbiddenActionInputException {
     if (remoteOptions.remoteMerkleTreeCache) {
       MetadataProvider metadataProvider = context.getMetadataProvider();
@@ -368,17 +371,15 @@ public class RemoteExecutionService {
   /** Creates a new {@link RemoteAction} instance from spawn. */
   public RemoteAction buildRemoteAction(Spawn spawn, SpawnExecutionContext context)
       throws IOException, UserExecException, ForbiddenActionInputException {
-    System.err.println("New spawn: " + spawn.getTargetLabel() + "\n");
-    final MerkleTree merkleTree = buildInputMerkleTree(spawn, context);
-
-    // Get the remote platform properties.
-    Platform platform = PlatformUtils.getPlatformProto(spawn, remoteOptions);
-
-    RemotePathResolver remappedRemotePathResolver = remotePathResolver.withPathMapping(
+    RemotePathResolver remappedRemotePathResolver = baseRemotePathResolver.withPathMapping(
         PathRemapper.restrictionOf(spawn.getCommandAdjuster(),
             spawn.getOutputFiles().stream().map(ActionInput::getExecPath)
                 .collect(ImmutableList.toImmutableList())));
 
+    final MerkleTree merkleTree = buildInputMerkleTree(spawn, context, remappedRemotePathResolver);
+
+    // Get the remote platform properties.
+    Platform platform = PlatformUtils.getPlatformProto(spawn, remoteOptions);
 
     Command command =
         buildCommand(
@@ -568,12 +569,12 @@ public class RemoteExecutionService {
       ListenableFuture<Void> future =
           remoteCache.downloadFile(
               action.getRemoteActionExecutionContext(),
-              remotePathResolver.localPathToOutputPath(file.path()),
+              action.getRemotePathResolver().localPathToOutputPath(file.path()),
               toTmpDownloadPath(file.path()),
               file.digest(),
               new RemoteCache.DownloadProgressReporter(
                   action.getSpawnExecutionContext()::report,
-                  remotePathResolver.localPathToOutputPath(file.path()),
+                  action.getRemotePathResolver().localPathToOutputPath(file.path()),
                   file.digest().getSizeBytes()));
       return transform(future, (d) -> file, directExecutor());
     } catch (IOException e) {
@@ -608,17 +609,19 @@ public class RemoteExecutionService {
   }
 
   private void deletePartialDownloadedOutputs(
-      RemoteActionResult result, FileOutErr tmpOutErr, Exception e) throws ExecException {
+      RemoteAction action, RemoteActionResult result, FileOutErr tmpOutErr, Exception e)
+      throws ExecException {
     try {
       // Delete any (partially) downloaded output files.
       for (OutputFile file : result.actionResult.getOutputFilesList()) {
-        toTmpDownloadPath(remotePathResolver.outputPathToLocalPath(file.getPath())).delete();
+        toTmpDownloadPath(
+            action.getRemotePathResolver().outputPathToLocalPath(file.getPath())).delete();
       }
 
       for (OutputDirectory directory : result.actionResult.getOutputDirectoriesList()) {
         // Only delete the directories below the output directories because the output
         // directories will not be re-created
-        remotePathResolver.outputPathToLocalPath(directory.getPath()).deleteTreesBelow();
+        action.getRemotePathResolver().outputPathToLocalPath(directory.getPath()).deleteTreesBelow();
       }
 
       tmpOutErr.clearOut();
@@ -693,7 +696,7 @@ public class RemoteExecutionService {
       RemoteAction action, Artifact output, ActionResultMetadata metadata) throws IOException {
     RemoteActionExecutionContext context = action.getRemoteActionExecutionContext();
     MetadataInjector metadataInjector = action.getSpawnExecutionContext().getMetadataInjector();
-    Path path = remotePathResolver.outputPathToLocalPath(output);
+    Path path = action.getRemotePathResolver().outputPathToLocalPath(output);
     if (output.isTreeArtifact()) {
       DirectoryMetadata directory = metadata.directory(path);
       if (directory == null) {
@@ -873,7 +876,7 @@ public class RemoteExecutionService {
         Maps.newHashMapWithExpectedSize(result.getOutputDirectoriesCount());
     for (OutputDirectory dir : result.getOutputDirectories()) {
       dirMetadataDownloads.put(
-          remotePathResolver.outputPathToLocalPath(dir.getPath()),
+          action.getRemotePathResolver().outputPathToLocalPath(dir.getPath()),
           Futures.transformAsync(
               remoteCache.downloadBlob(
                   action.getRemoteActionExecutionContext(), dir.getTreeDigest()),
@@ -899,7 +902,7 @@ public class RemoteExecutionService {
 
     ImmutableMap.Builder<Path, FileMetadata> files = ImmutableMap.builder();
     for (OutputFile outputFile : result.getOutputFiles()) {
-      Path localPath = remotePathResolver.outputPathToLocalPath(outputFile.getPath());
+      Path localPath = action.getRemotePathResolver().outputPathToLocalPath(outputFile.getPath());
       files.put(
           localPath,
           new FileMetadata(localPath, outputFile.getDigest(), outputFile.getIsExecutable()));
@@ -909,7 +912,7 @@ public class RemoteExecutionService {
     Iterable<OutputSymlink> outputSymlinks =
         Iterables.concat(result.getOutputFileSymlinks(), result.getOutputDirectorySymlinks());
     for (OutputSymlink symlink : outputSymlinks) {
-      Path localPath = remotePathResolver.outputPathToLocalPath(symlink.getPath());
+      Path localPath = action.getRemotePathResolver().outputPathToLocalPath(symlink.getPath());
       symlinks.put(
           localPath, new SymlinkMetadata(localPath, PathFragment.create(symlink.getTarget())));
     }
@@ -1026,7 +1029,7 @@ public class RemoteExecutionService {
       waitForBulkTransfer(downloads, /* cancelRemainingOnInterrupt= */ true);
     } catch (Exception e) {
       captureCorruptedOutputs(e);
-      deletePartialDownloadedOutputs(result, tmpOutErr, e);
+      deletePartialDownloadedOutputs(action, result, tmpOutErr, e);
       throw e;
     }
 
@@ -1064,7 +1067,7 @@ public class RemoteExecutionService {
 
       for (ActionInput output : action.getSpawn().getOutputFiles()) {
         if (inMemoryOutputPath != null && output.getExecPath().equals(inMemoryOutputPath)) {
-          Path localPath = remotePathResolver.outputPathToLocalPath(output);
+          Path localPath = action.getRemotePathResolver().outputPathToLocalPath(output);
           FileMetadata m = metadata.file(localPath);
           if (m == null) {
             // A declared output wasn't created. Ignore it here. SkyFrame will fail if not all
@@ -1121,7 +1124,7 @@ public class RemoteExecutionService {
           return UploadManifest.create(
               remoteOptions,
               digestUtil,
-              remotePathResolver,
+              action.getRemotePathResolver(),
               action.getActionKey(),
               action.getAction(),
               action.getCommand(),
