@@ -368,6 +368,7 @@ public class RemoteExecutionService {
   /** Creates a new {@link RemoteAction} instance from spawn. */
   public RemoteAction buildRemoteAction(Spawn spawn, SpawnExecutionContext context)
       throws IOException, UserExecException, ForbiddenActionInputException {
+    System.err.println("New spawn: " + spawn.getTargetLabel() + "\n");
     final MerkleTree merkleTree = buildInputMerkleTree(spawn, context);
 
     // Get the remote platform properties.
@@ -377,6 +378,7 @@ public class RemoteExecutionService {
         PathRemapper.restrictionOf(spawn.getCommandAdjuster(),
             spawn.getOutputFiles().stream().map(ActionInput::getExecPath)
                 .collect(ImmutableList.toImmutableList())));
+
 
     Command command =
         buildCommand(
@@ -1095,7 +1097,7 @@ public class RemoteExecutionService {
 
   private static String prettyPrint(ActionInput actionInput) {
     if (actionInput instanceof Artifact) {
-      return ((Artifact) actionInput).prettyPrint();
+      return ((Artifact) actionInput).toDebugString();
     } else {
       return actionInput.getExecPathString();
     }
