@@ -143,8 +143,10 @@ public abstract class AbstractSpawnStrategy implements SandboxedSpawnStrategy {
     ExecException ex = null;
     try (CacheHandle cacheHandle = cache.lookup(spawn, context)) {
       if (cacheHandle.hasResult()) {
+        System.err.println("Cache lookup succeeded: " + spawn.getTargetLabel() + " " + spawn.getOutputFiles().stream().findFirst().get());
         spawnResult = Preconditions.checkNotNull(cacheHandle.getResult());
       } else {
+        System.err.println("Cache lookup failed: " + spawn.getTargetLabel() + " " + spawn.getOutputFiles().stream().findFirst().get());
         Instant startTime =
             Instant.ofEpochMilli(actionExecutionContext.getClock().currentTimeMillis());
         // Actual execution.
