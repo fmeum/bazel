@@ -30,6 +30,7 @@ import com.google.devtools.build.lib.actions.FilesetManifest.RelativeSymlinkBeha
 import com.google.devtools.build.lib.actions.FilesetOutputSymlink;
 import com.google.devtools.build.lib.actions.ForbiddenActionInputException;
 import com.google.devtools.build.lib.actions.MetadataProvider;
+import com.google.devtools.build.lib.actions.PathRemapper;
 import com.google.devtools.build.lib.actions.PathStripper.CommandAdjuster;
 import com.google.devtools.build.lib.actions.RunfilesSupplier;
 import com.google.devtools.build.lib.actions.Spawn;
@@ -136,7 +137,7 @@ public class SpawnInputExpander {
             for (ActionInput input : expandedInputs) {
               addMapping(
                   inputMap,
-                  location.getRelative(((TreeFileArtifact) input).getParentRelativePath()),
+                  PathRemapper.stripForRunfiles(location.getRelative(((TreeFileArtifact) input).getParentRelativePath())),
                   input,
                   baseDirectory);
             }
@@ -152,10 +153,10 @@ public class SpawnInputExpander {
             if (strict) {
               failIfDirectory(actionFileCache, localArtifact);
             }
-            addMapping(inputMap, location, localArtifact, baseDirectory);
+            addMapping(inputMap, PathRemapper.stripForRunfiles(location), localArtifact, baseDirectory);
           }
         } else {
-          addMapping(inputMap, location, VirtualActionInput.EMPTY_MARKER, baseDirectory);
+          addMapping(inputMap, PathRemapper.stripForRunfiles(location), VirtualActionInput.EMPTY_MARKER, baseDirectory);
         }
       }
     }

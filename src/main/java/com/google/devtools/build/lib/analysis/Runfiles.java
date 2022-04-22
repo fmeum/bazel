@@ -683,7 +683,7 @@ public final class Runfiles implements RunfilesApi {
     private EmptyFilesSupplier emptyFilesSupplier = DUMMY_EMPTY_FILES_SUPPLIER;
 
     /** Build the Runfiles object with this policy */
-    private ConflictPolicy conflictPolicy = ConflictPolicy.IGNORE;
+    private ConflictPolicy conflictPolicy = ConflictPolicy.ERROR;
 
     private final boolean legacyExternalRunfiles;
 

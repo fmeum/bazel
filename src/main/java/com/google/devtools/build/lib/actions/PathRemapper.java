@@ -160,6 +160,10 @@ public interface PathRemapper extends CommandAdjuster {
     return remappedPath;
   }
 
+  static PathFragment stripForRunfiles(PathFragment execPath) {
+    return PathFragment.createAlreadyNormalized(execPathStringWithSyntheticConfig(execPath, "run"));
+  }
+
   static InvertibleFunction<PathFragment, PathFragment> restrictionOf(CommandAdjuster remapper,
       Collection<PathFragment> paths) {
     return InvertibleFunction.restrictionOf(remapper::strip, paths);
