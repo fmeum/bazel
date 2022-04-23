@@ -223,6 +223,9 @@ def _bootclasspath_impl(ctx):
         inputs = [ctx.file.src] + ctx.files.host_javabase,
         outputs = [class_dir],
         arguments = [args],
+        execution_requirements = {
+            "supports-path-remapping": "1",
+        },
     )
 
     bootclasspath = ctx.outputs.output_jar
@@ -236,8 +239,9 @@ def _bootclasspath_impl(ctx):
     args.add("--add-exports=jdk.compiler/com.sun.tools.javac.util=ALL-UNNAMED")
     args.add_joined(
         "-cp",
-        [class_dir.path, "%s/lib/tools.jar" % host_javabase.java_home],
+        [class_dir, "%s/lib/tools.jar" % host_javabase.java_home],
         join_with = ctx.configuration.host_path_separator,
+        expand_directories = False,
     )
     args.add("DumpPlatformClassPath")
     args.add(bootclasspath)
@@ -252,6 +256,9 @@ def _bootclasspath_impl(ctx):
         inputs = inputs,
         outputs = [bootclasspath],
         arguments = [args],
+        execution_requirements = {
+            "supports-path-remapping": "1",
+        },
     )
     return [
         DefaultInfo(files = depset([bootclasspath])),

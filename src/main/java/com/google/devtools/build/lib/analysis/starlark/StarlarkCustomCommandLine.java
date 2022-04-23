@@ -420,7 +420,7 @@ public class StarlarkCustomCommandLine extends CommandLine {
           for (Object value : maybeExpandedValues) {
             fingerprint.addString(
                 value instanceof DerivedArtifact && pathStripper != null ? pathStripper.strip(
-                    (DerivedArtifact) value, true) : CommandLineItem.expandToCommandLine(value));
+                    (DerivedArtifact) value) : CommandLineItem.expandToCommandLine(value));
           }
         }
       }
@@ -596,7 +596,7 @@ public class StarlarkCustomCommandLine extends CommandLine {
       Object object = arguments.get(argi++);
       String stringValue =
           object instanceof DerivedArtifact && pathStripper != null ? pathStripper.strip(
-              (DerivedArtifact) object, false) : CommandLineItem.expandToCommandLine(object);
+              (DerivedArtifact) object) : CommandLineItem.expandToCommandLine(object);
       if (hasFormat) {
         String formatStr = (String) arguments.get(argi++);
         stringValue = SingleStringArgFormatter.format(formatStr, stringValue);
@@ -612,7 +612,7 @@ public class StarlarkCustomCommandLine extends CommandLine {
       Object object = arguments.get(argi++);
       String stringValue =
           object instanceof DerivedArtifact && pathStripper != null ? pathStripper.strip(
-              (DerivedArtifact) object, true) : CommandLineItem.expandToCommandLine(object);
+              (DerivedArtifact) object) : CommandLineItem.expandToCommandLine(object);
       fingerprint.addString(stringValue);
       if (hasFormat) {
         String formatStr = (String) arguments.get(argi++);
@@ -733,7 +733,7 @@ public class StarlarkCustomCommandLine extends CommandLine {
     // to explicitly check if an object is a DerivedArtifact. Unfortunately that would require
     // a lot more dependencies on the Java library DerivedArtifact is built into.
     return object instanceof DerivedArtifact
-        ? pathStripper.strip((DerivedArtifact) object, false)
+        ? pathStripper.strip((DerivedArtifact) object)
         : CommandLineItem.expandToCommandLine(object);
   }
 
@@ -838,7 +838,7 @@ public class StarlarkCustomCommandLine extends CommandLine {
       } else {
         fingerprint.addString(
             arg instanceof DerivedArtifact && pathStripper != null ? pathStripper.strip(
-                (DerivedArtifact) arg, true) : CommandLineItem.expandToCommandLine(arg));
+                (DerivedArtifact) arg) : CommandLineItem.expandToCommandLine(arg));
       }
     }
   }

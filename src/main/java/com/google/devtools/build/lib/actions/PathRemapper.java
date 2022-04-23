@@ -35,8 +35,10 @@ public interface PathRemapper extends CommandAdjuster {
     return args;
   }
 
-  @Override
-  default String strip(DerivedArtifact artifact, boolean forActionKey) {
+  default String strip(ActionInput artifact) {
+    if (!(artifact instanceof DerivedArtifact)) {
+      return artifact.getExecPathString();
+    }
     return strip(artifact.getExecPath()).getPathString();
   }
 

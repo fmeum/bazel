@@ -97,6 +97,7 @@ public final class SandboxHelpers {
   // form of synchronization in-process before touching the file system.
   public static void atomicallyWriteVirtualInput(
       VirtualActionInput input, Path outputPath, String uniqueSuffix) throws IOException {
+    System.err.println("virtual input: " + input + " to " + outputPath + " (" + uniqueSuffix + ")");
     Path tmpPath = outputPath.getFileSystem().getPath(outputPath.getPathString() + uniqueSuffix);
     tmpPath.getParentDirectory().createDirectoryAndParents();
     try {
@@ -562,7 +563,7 @@ public final class SandboxHelpers {
     ImmutableSet.Builder<PathFragment> dirs = ImmutableSet.builder();
     ImmutableMap.Builder<PathFragment, PathFragment> virtualToRealPath = ImmutableMap.builder();
     for (ActionInput output : spawn.getOutputFiles()) {
-      PathFragment path = spawn.getCommandAdjuster().strip(output.getExecPath());
+      PathFragment path = PathFragment.createAlreadyNormalized(spawn.getCommandAdjuster().strip(output));
       if (output instanceof Artifact && ((Artifact) output).isTreeArtifact()) {
         dirs.add(path);
       } else {

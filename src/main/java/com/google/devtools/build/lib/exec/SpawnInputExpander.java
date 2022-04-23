@@ -232,11 +232,11 @@ public class SpawnInputExpander {
     for (ActionInput input : inputs) {
       if (input instanceof TreeFileArtifact) {
         addMapping(inputMap,
-            pathStripper.strip(((TreeFileArtifact) input).getParent().getExecPath())
+            PathFragment.createAlreadyNormalized(pathStripper.strip(((TreeFileArtifact) input).getParent()))
                 .getRelative(((TreeFileArtifact) input).getParentRelativePath()), input,
             baseDirectory);
       } else {
-        addMapping(inputMap, pathStripper.strip(input.getExecPath()), input, baseDirectory);
+        addMapping(inputMap, PathFragment.createAlreadyNormalized(pathStripper.strip(input)), input, baseDirectory);
       }
     }
   }
