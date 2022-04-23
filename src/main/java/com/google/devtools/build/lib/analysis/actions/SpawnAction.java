@@ -421,11 +421,12 @@ public class SpawnAction extends AbstractAction implements CommandAction {
       MetadataHandler metadataHandler,
       boolean reportOutputs)
       throws CommandLineExpansionException, InterruptedException {
+    PathRemapper pathRemapper = PathRemapper.create(executionInfo, artifactExpander, metadataHandler, getInputs());
     ExpandedCommandLines expandedCommandLines =
         commandLines.expand(
             artifactExpander,
-            getPrimaryOutput().getExecPath(),
-            PathRemapper.create(executionInfo, artifactExpander, metadataHandler, getInputs()),
+            pathRemapper.strip(getPrimaryOutput().getExecPath()),
+            pathRemapper,
             commandLineLimits);
     return new ActionSpawn(
         ImmutableList.copyOf(expandedCommandLines.arguments()),
@@ -437,7 +438,7 @@ public class SpawnAction extends AbstractAction implements CommandAction {
         filesetMappings,
         reportOutputs,
         stripOutputPaths,
-        PathRemapper.create(executionInfo, artifactExpander, metadataHandler, getInputs()));
+        pathRemapper);
   }
 
   Spawn getSpawnForExtraAction() throws CommandLineExpansionException, InterruptedException {

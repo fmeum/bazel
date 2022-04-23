@@ -100,9 +100,16 @@ public interface PathRemapper extends CommandAdjuster {
     Fingerprint fp = new Fingerprint();
     // TODO: Handle param files.
     HashMap<String, ArrayList<Pair<DerivedArtifact, byte[]>>> shortPathCollisions = new HashMap<>();
-    // TODO: Do not expand tree artifacts.
-    List<ActionInput> expandedInputs = ActionInputHelper.expandArtifacts(inputs, artifactExpander, false);
-    for (ActionInput input : expandedInputs) {
+    List<Artifact> expandedInputs = new ArrayList<>();
+    // TODO: Handle filesets.
+    for (Artifact input : inputs.toList()) {
+      if (input.isMiddlemanArtifact()) {
+        artifactExpander.expand(input, expandedInputs);
+      } else {
+        expandedInputs.add(input);
+      }
+    }
+    for (Artifact input : expandedInputs) {
       if (!(input instanceof DerivedArtifact)) {
         logger.atInfo().log("Skipping source artifact %s", input);
         continue;

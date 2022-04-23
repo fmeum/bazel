@@ -137,7 +137,8 @@ public class SpawnInputExpander {
             for (ActionInput input : expandedInputs) {
               addMapping(
                   inputMap,
-                  PathRemapper.stripForRunfiles(location.getRelative(((TreeFileArtifact) input).getParentRelativePath())),
+                  PathRemapper.stripForRunfiles(location)
+                      .getRelative(((TreeFileArtifact) input).getParentRelativePath()),
                   input,
                   baseDirectory);
             }
@@ -229,7 +230,14 @@ public class SpawnInputExpander {
     List<ActionInput> inputs = ActionInputHelper.expandArtifacts(inputFiles, artifactExpander,
         true);
     for (ActionInput input : inputs) {
-      addMapping(inputMap, pathStripper.strip(input.getExecPath()), input, baseDirectory);
+      if (input instanceof TreeFileArtifact) {
+        addMapping(inputMap,
+            pathStripper.strip(((TreeFileArtifact) input).getParent().getExecPath())
+                .getRelative(((TreeFileArtifact) input).getParentRelativePath()), input,
+            baseDirectory);
+      } else {
+        addMapping(inputMap, pathStripper.strip(input.getExecPath()), input, baseDirectory);
+      }
     }
   }
 
