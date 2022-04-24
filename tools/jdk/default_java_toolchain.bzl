@@ -214,7 +214,7 @@ def _bootclasspath_impl(ctx):
     args.add("-cp")
     args.add("%s/lib/tools.jar" % host_javabase.java_home)
     args.add("-d")
-    args.add(class_dir.path)
+    args.add_all([class_dir], expand_directories = False)
     args.add(ctx.file.src)
 
     ctx.actions.run(
