@@ -98,9 +98,9 @@ public interface PathRemapper extends CommandAdjuster {
     if (!executionInfo.containsKey(ExecutionRequirements.SUPPORTS_PATH_REMAPPING)) {
       return NoopPathRemapper.INSTANCE;
     }
-    byte[] baseHash = new byte[1];
+    byte[] baseHash = new byte[DigestUtils.ESTIMATED_SIZE];
     Fingerprint fp = new Fingerprint();
-    // TODO: Handle param files.
+    // TODO: Handle materialization of param files.
     HashMap<String, ArrayList<Pair<DerivedArtifact, byte[]>>> shortPathCollisions = new HashMap<>();
     List<Artifact> expandedInputs = new ArrayList<>();
     // TODO: Handle filesets.
@@ -143,7 +143,8 @@ public interface PathRemapper extends CommandAdjuster {
       shortPathCollisions.get(path).add(new Pair<>(derivedArtifact, digest));
     }
 
-    String rootPrefix = BaseEncoding.base16().encode(baseHash);
+    // 25 * log_2(32) = 125 bits ought to be enough to prevent collisions.
+    String rootPrefix = BaseEncoding.base32().lowerCase().omitPadding().encode(baseHash).substring(0, 25);
     ImmutableMap<PathFragment, String> execPathMapping = shortPathCollisions
         .values()
         .stream()
