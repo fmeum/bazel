@@ -562,19 +562,27 @@ public class RemoteExecutionService {
         .getRelative(actualPath.getBaseName() + ".tmp");
   }
 
-  private ListenableFuture<FileMetadata> downloadFile(RemoteAction action, FileMetadata file) {
+  private ListenableFuture<FileMetadata> downloadFile(RemoteAction action, FileMetadata file,
+      Path parent) {
     checkNotNull(remoteCache, "remoteCache can't be null");
 
+    String outputPath;
+    if (parent == null) {
+      outputPath = action.getRemotePathResolver().localPathToOutputPath(file.path);
+    } else {
+      outputPath = PathFragment.create(action.getRemotePathResolver().localPathToOutputPath(parent))
+          .getRelative(file.path.relativeTo(parent)).getPathString();
+    }
     try {
       ListenableFuture<Void> future =
           remoteCache.downloadFile(
               action.getRemoteActionExecutionContext(),
-              action.getRemotePathResolver().localPathToOutputPath(file.path()),
+              outputPath,
               toTmpDownloadPath(file.path()),
               file.digest(),
               new RemoteCache.DownloadProgressReporter(
                   action.getSpawnExecutionContext()::report,
-                  action.getRemotePathResolver().localPathToOutputPath(file.path()),
+                  outputPath,
                   file.digest().getSizeBytes()));
       return transform(future, (d) -> file, directExecutor());
     } catch (IOException e) {
@@ -996,12 +1004,12 @@ public class RemoteExecutionService {
 
     if (downloadOutputs) {
       for (FileMetadata file : metadata.files()) {
-        downloadsBuilder.add(downloadFile(action, file));
+        downloadsBuilder.add(downloadFile(action, file, null));
       }
 
       for (Map.Entry<Path, DirectoryMetadata> entry : metadata.directories()) {
         for (FileMetadata file : entry.getValue().files()) {
-          downloadsBuilder.add(downloadFile(action, file));
+          downloadsBuilder.add(downloadFile(action, file, entry.getKey()));
         }
       }
     } else {
