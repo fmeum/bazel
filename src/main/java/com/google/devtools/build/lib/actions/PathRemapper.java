@@ -1,5 +1,7 @@
 package com.google.devtools.build.lib.actions;
 
+import com.google.common.collect.BiMap;
+import com.google.common.collect.ImmutableBiMap;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.Streams;
 import com.google.common.flogger.GoogleLogger;
@@ -23,6 +25,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
+import java.util.function.Function;
 import javax.annotation.Nullable;
 
 public interface PathRemapper extends CommandAdjuster {
@@ -174,8 +177,24 @@ public interface PathRemapper extends CommandAdjuster {
     return PathFragment.createAlreadyNormalized(execPathStringWithSyntheticConfig(execPath, "run"));
   }
 
-  static InvertibleFunction<PathFragment, PathFragment> restrictionOf(CommandAdjuster remapper,
-      Collection<PathFragment> paths) {
-    return InvertibleFunction.restrictionOf(remapper::strip, paths);
+  static InvertibleFunction<PathFragment, PathFragment> restrictionOf(CommandAdjuster remapper, Collection<PathFragment> paths) {
+    ImmutableBiMap.Builder<PathFragment, PathFragment> bimapBuilder = new ImmutableBiMap.Builder<>();
+    for (PathFragment path : paths) {
+      PathFragment mappedPath = remapper.strip(path);
+      bimapBuilder.put(path, mappedPath);
+    }
+
+    final BiMap<PathFragment, PathFragment> bimap = bimapBuilder.build();
+    return new InvertibleFunction<>() {
+      @Override
+      public PathFragment apply(PathFragment path) {
+        return bimap.get(path);
+      }
+
+      @Override
+      public PathFragment applyInverse(PathFragment mappedPath) {
+        return bimap.inverse().get(mappedPath);
+      }
+    };
   }
 }
