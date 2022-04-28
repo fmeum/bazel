@@ -263,6 +263,7 @@ public class SpawnActionTest extends BuildViewTestCase {
             /*envResolved=*/ false,
             ImmutableMap.of(),
             null,
+            null,
             /*reportOutputs=*/ true);
     String paramFileName = output.getExecPathString() + "-0.params";
     // The spawn's primary arguments should reference the param file

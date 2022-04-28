@@ -333,6 +333,7 @@ public final class StarlarkAction extends SpawnAction implements ActionCacheAwar
         /*envResolved=*/ true,
         actionExecutionContext.getTopLevelFilesets(),
         actionExecutionContext.getMetadataHandler(),
+        actionExecutionContext.getExecRoot(),
         /*reportOutputs=*/ true);
   }
 

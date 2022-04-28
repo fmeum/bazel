@@ -81,12 +81,14 @@ import com.google.devtools.build.lib.util.Fingerprint;
 import com.google.devtools.build.lib.util.OnDemandString;
 import com.google.devtools.build.lib.util.Pair;
 import com.google.devtools.build.lib.util.ShellEscaper;
+import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.build.lib.vfs.PathFragment;
 import com.google.errorprone.annotations.CheckReturnValue;
 import com.google.errorprone.annotations.CompileTimeConstant;
 import com.google.errorprone.annotations.DoNotCall;
 import com.google.errorprone.annotations.FormatMethod;
 import com.google.errorprone.annotations.FormatString;
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -402,6 +404,7 @@ public class SpawnAction extends AbstractAction implements CommandAction {
         /*envResolved=*/ false,
         actionExecutionContext.getTopLevelFilesets(),
         actionExecutionContext.getMetadataHandler(),
+        actionExecutionContext.getExecRoot(),
         /*reportOutputs=*/ true);
   }
 
@@ -419,9 +422,15 @@ public class SpawnAction extends AbstractAction implements CommandAction {
       boolean envResolved,
       Map<Artifact, ImmutableList<FilesetOutputSymlink>> filesetMappings,
       MetadataHandler metadataHandler,
+      Path execRoot,
       boolean reportOutputs)
       throws CommandLineExpansionException, InterruptedException {
     PathRemapper pathRemapper = PathRemapper.create(executionInfo, artifactExpander, metadataHandler, getInputs());
+    try {
+      pathRemapper.materializeIfRequested(execRoot);
+    } catch (IOException e) {
+      throw new CommandLineExpansionException("Failed to materialize input paths: " + e.getMessage(), e);
+    }
     ExpandedCommandLines expandedCommandLines =
         commandLines.expand(
             artifactExpander,

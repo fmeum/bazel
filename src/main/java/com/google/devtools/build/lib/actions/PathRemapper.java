@@ -1,5 +1,6 @@
 package com.google.devtools.build.lib.actions;
 
+import com.google.common.base.Strings;
 import com.google.common.collect.BiMap;
 import com.google.common.collect.ImmutableBiMap;
 import com.google.common.collect.ImmutableMap;
@@ -20,12 +21,13 @@ import com.google.devtools.build.lib.vfs.PathFragment;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
-import java.util.function.Function;
+import java.util.UUID;
 import javax.annotation.Nullable;
 
 public interface PathRemapper extends CommandAdjuster {
@@ -45,7 +47,7 @@ public interface PathRemapper extends CommandAdjuster {
     return strip(artifact.getExecPath()).getPathString();
   }
 
-  void materialize(Path execRoot) throws IOException;
+  void materializeIfRequested(Path execRoot) throws IOException;
 
   static PathRemapper noop() {
     return NoopPathRemapper.INSTANCE;
@@ -54,9 +56,12 @@ public interface PathRemapper extends CommandAdjuster {
   class PerActionPathRemapper implements PathRemapper {
 
     private final ImmutableMap<PathFragment, String> execPathMapping;
+    private final boolean materializeInputPaths;
 
-    private PerActionPathRemapper(ImmutableMap<PathFragment, String> execPathMapping) {
+    private PerActionPathRemapper(ImmutableMap<PathFragment, String> execPathMapping,
+        boolean materializeInputPaths) {
       this.execPathMapping = execPathMapping;
+      this.materializeInputPaths = materializeInputPaths;
     }
 
     @Override
@@ -71,9 +76,20 @@ public interface PathRemapper extends CommandAdjuster {
     }
 
     @Override
-    public void materialize(Path execRoot) throws IOException {
-      for (Entry<PathFragment, String> e : execPathMapping.entrySet()) {
-        execRoot.getRelative(e.getValue()).createSymbolicLink(e.getKey());
+    public void materializeIfRequested(Path execRoot) throws IOException {
+      if (materializeInputPaths) {
+        for (Entry<PathFragment, String> entry : execPathMapping.entrySet()) {
+          Path virtualPath = execRoot.getRelative(entry.getValue());
+          virtualPath.getParentDirectory().createDirectoryAndParents();
+          String uniqueSuffix = UUID.randomUUID().toString();
+          Path tempPath = virtualPath.getFileSystem().getPath(virtualPath.getPathString() + uniqueSuffix);
+          int nestingLevel = PathFragment.createAlreadyNormalized(entry.getValue()).segmentCount() - 1;
+          Path realPath = execRoot.getRelative(entry.getKey());
+          PathFragment relativeRealPath = PathFragment.createAlreadyNormalized(String.join("/",
+              Collections.nCopies(nestingLevel, ".."))).getRelative(realPath.relativeTo(execRoot));
+          tempPath.createSymbolicLink(relativeRealPath);
+          tempPath.renameTo(virtualPath);
+        }
       }
     }
   }
@@ -87,7 +103,8 @@ public interface PathRemapper extends CommandAdjuster {
     }
 
     @Override
-    public void materialize(Path execRoot) {}
+    public void materializeIfRequested(Path execRoot) {
+    }
   }
 
   static PathRemapper create(
@@ -160,7 +177,8 @@ public interface PathRemapper extends CommandAdjuster {
                     execPathStringWithSyntheticConfig(artifact.getExecPath(),
                         rootPrefix + "-" + lexicographicIndex))))
         .collect(ImmutableMap.toImmutableMap(p -> p.first, p -> p.second));
-    return new PerActionPathRemapper(execPathMapping);
+    return new PerActionPathRemapper(execPathMapping,
+        executionInfo.containsKey(ExecutionRequirements.REQUIRES_MATERIALIZED_INPUT_PATHS));
   }
 
   private static String execPathStringWithSyntheticConfig(PathFragment execPath, String config) {

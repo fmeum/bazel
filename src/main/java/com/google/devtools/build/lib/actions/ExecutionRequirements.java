@@ -273,4 +273,5 @@ public class ExecutionRequirements {
       "internal-differentiate-workspace-cache";
 
   public static final String SUPPORTS_PATH_REMAPPING = "supports-path-remapping";
+  public static final String REQUIRES_MATERIALIZED_INPUT_PATHS = "requires-materialized-input-paths";
 }

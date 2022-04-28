@@ -159,6 +159,7 @@ public final class ExtraAction extends SpawnAction {
         /*envResolved=*/ false,
         actionExecutionContext.getTopLevelFilesets(),
         null,
+        actionExecutionContext.getExecRoot(),
         /*reportOutputs=*/ false);
   }
 
