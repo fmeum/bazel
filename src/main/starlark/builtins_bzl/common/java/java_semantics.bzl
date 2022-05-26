@@ -39,9 +39,11 @@ def _add_constraints(java_info, constraints):
     return java_info
 
 semantics = struct(
+    HOST_JAVA_RUNTIME_LABEL = "@bazel_tools//tools/jdk:current_host_java_runtime",
     JAVA_TOOLCHAIN_LABEL = "@bazel_tools//tools/jdk:current_java_toolchain",
     JAVA_PLUGINS_FLAG_ALIAS_LABEL = "@bazel_tools//tools/jdk:java_plugins_flag_alias",
     PROGUARD_ALLOWLISTER_LABEL = "@bazel_tools//tools/jdk:proguard_whitelister",
+    IMPORT_DEPS_CHECKER_LABEL = "@bazel_tools//tools/android:aar_import_deps_checker",
     EXTRA_SRCS_TYPES = [],
     ALLOWED_RULES_IN_DEPS = [
         "cc_binary",  # NB: linkshared=1
