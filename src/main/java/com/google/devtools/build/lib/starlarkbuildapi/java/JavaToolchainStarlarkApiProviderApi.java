@@ -126,4 +126,11 @@ public interface JavaToolchainStarlarkApiProviderApi extends StructApi {
   @Nullable
   ImmutableList<String> getCompatibleJavacOptionsForStarlark(String key, StarlarkThread thread)
       throws EvalException;
+
+  @StarlarkMethod(
+      name = "ijar",
+      documented = false,
+      useStarlarkThread = true,
+      structField = true)
+  FilesToRunProviderApi<?> getIjarForStarlark(StarlarkThread thread) throws EvalException;
 }

@@ -290,6 +290,12 @@ def _get_relative(path_a, path_b):
         return path_b
     return paths.normalize(paths.join(path_a, path_b))
 
+def _root_relative_path(ctx, file):
+    if file.short_path.startswith("../"):
+        return file.short_path[len("../"):]
+    else:
+        return ctx.workspace_name + "/" + file.short_path
+
 paths = struct(
     basename = _basename,
     dirname = _dirname,
@@ -302,4 +308,5 @@ paths = struct(
     # The methods below this line are not in the skylib implementation.
     is_normalized = _is_normalized,
     get_relative = _get_relative,
+    root_relative_path = _root_relative_path,
 )

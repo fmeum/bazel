@@ -38,6 +38,7 @@ import com.google.devtools.build.lib.packages.NativeInfo;
 import com.google.devtools.build.lib.packages.PackageSpecification.PackageGroupContents;
 import com.google.devtools.build.lib.packages.Provider;
 import com.google.devtools.build.lib.rules.java.JavaPluginInfo.JavaPluginData;
+import com.google.devtools.build.lib.starlarkbuildapi.FilesToRunProviderApi;
 import com.google.devtools.build.lib.starlarkbuildapi.java.JavaToolchainStarlarkApiProviderApi;
 import java.util.Iterator;
 import javax.annotation.Nullable;
@@ -456,6 +457,12 @@ public final class JavaToolchainProvider extends NativeInfo
   public AndroidLintTool stalarkAndroidLinter(StarlarkThread thread) throws EvalException {
     checkPrivateAccess(thread);
     return getAndroidLint();
+  }
+
+  @Override
+  public FilesToRunProviderApi<?> getIjarForStarlark(StarlarkThread thread) throws EvalException {
+    checkPrivateAccess(thread);
+    return getIjar();
   }
 
   /** Returns the input Java language level */
