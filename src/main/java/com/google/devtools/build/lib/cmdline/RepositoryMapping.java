@@ -16,8 +16,12 @@ package com.google.devtools.build.lib.cmdline;
 
 import com.google.auto.value.AutoValue;
 import com.google.common.base.Preconditions;
+import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableSetMultimap;
 import com.google.common.collect.ImmutableMap;
-import java.util.HashMap;
+import com.google.common.collect.ImmutableSet;
+import com.google.common.collect.ImmutableSetMultimap;
+import com.google.devtools.build.lib.util.Fingerprint;
 import java.util.Map;
 import javax.annotation.Nullable;
 
@@ -35,7 +39,7 @@ public abstract class RepositoryMapping {
   // Always fallback to the requested name
   public static final RepositoryMapping ALWAYS_FALLBACK = createAllowingFallback(ImmutableMap.of());
 
-  abstract ImmutableMap<String, RepositoryName> repositoryMapping();
+  abstract ImmutableSetMultimap<String, RepositoryName> repositoryMapping();
 
   /**
    * The owner repo of this repository mapping. It is for providing useful debug information when
@@ -48,14 +52,14 @@ public abstract class RepositoryMapping {
   public static RepositoryMapping create(
       Map<String, RepositoryName> repositoryMapping, RepositoryName ownerRepo) {
     return new AutoValue_RepositoryMapping(
-        ImmutableMap.copyOf(Preconditions.checkNotNull(repositoryMapping)),
+        ImmutableSetMultimap.copyOf(Preconditions.checkNotNull(repositoryMapping).entrySet()),
         Preconditions.checkNotNull(ownerRepo));
   }
 
   public static RepositoryMapping createAllowingFallback(
       Map<String, RepositoryName> repositoryMapping) {
     return new AutoValue_RepositoryMapping(
-        ImmutableMap.copyOf(Preconditions.checkNotNull(repositoryMapping)), null);
+        ImmutableSetMultimap.copyOf(Preconditions.checkNotNull(repositoryMapping).entrySet()), null);
   }
 
   /**
@@ -63,9 +67,10 @@ public abstract class RepositoryMapping {
    * additional mappings. If there are conflicts, existing mappings will take precedence.
    */
   public RepositoryMapping withAdditionalMappings(Map<String, RepositoryName> additionalMappings) {
-    HashMap<String, RepositoryName> allMappings = new HashMap<>(additionalMappings);
+    ImmutableSetMultimap.Builder<String, RepositoryName> allMappings = ImmutableSetMultimap.builder();
     allMappings.putAll(repositoryMapping());
-    return new AutoValue_RepositoryMapping(ImmutableMap.copyOf(allMappings), ownerRepo());
+    allMappings.putAll(additionalMappings.entrySet());
+    return new AutoValue_RepositoryMapping(allMappings.build(), ownerRepo());
   }
 
   /**
@@ -74,7 +79,10 @@ public abstract class RepositoryMapping {
    * repo of the given additional mappings is ignored.
    */
   public RepositoryMapping withAdditionalMappings(RepositoryMapping additionalMappings) {
-    return withAdditionalMappings(additionalMappings.repositoryMapping());
+    ImmutableSetMultimap.Builder<String, RepositoryName> allMappings = ImmutableSetMultimap.builder();
+    allMappings.putAll(repositoryMapping());
+    allMappings.putAll(additionalMappings.repositoryMapping().entries());
+    return new AutoValue_RepositoryMapping(allMappings.build(), ownerRepo());
   }
 
   /**
@@ -86,15 +94,32 @@ public abstract class RepositoryMapping {
       // The given name is actually a canonical, post-mapping repo name already.
       return RepositoryName.createUnvalidated(preMappingName);
     }
-    RepositoryName canonicalRepoName = repositoryMapping().get(preMappingName);
-    if (canonicalRepoName != null) {
-      return canonicalRepoName;
+    ImmutableSet<RepositoryName> canonicalRepoNames = repositoryMapping().get(preMappingName);
+    if (!canonicalRepoNames.isEmpty()) {
+      // Following the contracts of withAdditionalMappings, use the first entry.
+      return canonicalRepoNames.iterator().next();
     }
     // If the owner repo is not present, that means we should fall back to the requested repo name.
     if (ownerRepo() == null) {
       return RepositoryName.createUnvalidated(preMappingName);
     } else {
       return RepositoryName.createUnvalidated(preMappingName).toNonVisible(ownerRepo());
+    }
+  }
+
+  /**
+   * Returns the apparent repository names used to refer to the given canonical repository name
+   * under this mapping.
+   */
+  public ImmutableSet<String> getApparent(RepositoryName postMappingName) {
+    return repositoryMapping().inverse().get(postMappingName);
+  }
+
+  public void fingerprint(Fingerprint fp) {
+    fp.addInt(repositoryMapping().size());
+    for (Map.Entry<String, RepositoryName> entry : repositoryMapping().entries()) {
+      fp.addString(entry.getKey());
+      fp.addString(entry.getValue().getName());
     }
   }
 }

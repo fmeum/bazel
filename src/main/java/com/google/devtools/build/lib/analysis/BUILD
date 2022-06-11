@@ -192,7 +192,10 @@ java_library(
         "OutputGroupInfo.java",
         "PrerequisiteArtifacts.java",
         "PseudoAction.java",
+        "RepositoryMappingsManifestAction.java",
         "RuleConfiguredTargetBuilder.java",
+        "RunfilesLibraryUsersCollector.java",
+        "RunfilesLibraryUsersProvider.java",
         "RuleConfiguredTargetFactory.java",
         "RuleContext.java",
         "RuleDefinition.java",
@@ -340,6 +343,7 @@ java_library(
         ":rule_configured_object_value",
         ":rule_definition_environment",
         ":run_environment_info",
+        ":runfiles_library_info",
         ":starlark/args",
         ":starlark/bazel_build_api_globals",
         ":starlark/function_transition_util",
@@ -419,6 +423,7 @@ java_library(
         "//src/main/java/com/google/devtools/build/lib/skyframe:configured_target_and_data",
         "//src/main/java/com/google/devtools/build/lib/skyframe:configured_target_key",
         "//src/main/java/com/google/devtools/build/lib/skyframe:configured_value_creation_exception",
+        "//src/main/java/com/google/devtools/build/lib/skyframe:repository_mapping_value",
         "//src/main/java/com/google/devtools/build/lib/skyframe:starlark_builtins_value",
         "//src/main/java/com/google/devtools/build/lib/skyframe:workspace_status_value",
         "//src/main/java/com/google/devtools/build/lib/skyframe/serialization/autocodec",
@@ -833,6 +838,16 @@ java_library(
         ":aspect_collection",
         "//src/main/java/com/google/devtools/build/lib/packages",
         "//src/main/java/net/starlark/java/syntax",
+    ],
+)
+
+java_library(
+    name = "runfiles_library_info",
+    srcs = ["RunfilesLibraryInfo.java"],
+    deps = [
+        "//src/main/java/com/google/devtools/build/lib/concurrent",
+        "//src/main/java/com/google/devtools/build/lib/packages",
+        "//src/main/java/com/google/devtools/build/lib/starlarkbuildapi",
     ],
 )
 

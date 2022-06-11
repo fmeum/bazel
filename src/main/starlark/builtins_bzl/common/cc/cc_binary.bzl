@@ -24,6 +24,7 @@ DebugPackageInfo = _builtins.toplevel.DebugPackageInfo
 cc_common = _builtins.toplevel.cc_common
 cc_internal = _builtins.internal.cc_internal
 StaticallyLinkedMarkerInfo = _builtins.internal.StaticallyLinkedMarkerProvider
+RunfilesLibraryInfo = _builtins.toplevel.RunfilesLibraryInfo
 
 _EXECUTABLE = "executable"
 _DYNAMIC_LIBRARY = "dynamic_library"
@@ -599,6 +600,12 @@ def _report_invalid_options(ctx, cc_toolchain, cpp_config):
     if cpp_config.grte_top() != None and cc_toolchain.sysroot == None:
         fail("The selected toolchain does not support setting --grte_top (it doesn't specify builtin_sysroot).")
 
+def _depends_on_runfiles_library(deps):
+    for dep in deps:
+        if RunfilesLibraryInfo in dep:
+            return True
+    return False
+
 def _is_apple_platform(target_cpu):
     if target_cpu in _IOS_SIMULATOR_TARGET_CPUS or target_cpu in _IOS_DEVICE_TARGET_CPUS or target_cpu in _WATCHOS_SIMULATOR_TARGET_CPUS or target_cpu in _WATCHOS_DEVICE_TARGET_CPUS or target_cpu in _TVOS_SIMULATOR_TARGET_CPUS or target_cpu in _TVOS_DEVICE_TARGET_CPUS or target_cpu in _CATALYST_TARGET_CPUS or target_cpu in _MACOS_TARGET_CPUS:
         return True
@@ -683,6 +690,12 @@ def cc_binary_impl(ctx, additional_linkopts):
     additional_make_variable_substitutions = cc_helper.get_toolchain_global_make_variables(cc_toolchain)
     additional_make_variable_substitutions.update(cc_helper.get_cc_flags_make_variable(ctx, common, cc_toolchain))
 
+    local_defines = common.local_defines
+    if _depends_on_runfiles_library(ctx.attr.deps):
+        # TODO(fmeum): A production implementation would probably handle this in
+        #  cc_internal.create_common instead.
+        local_defines = local_defines + ["BAZEL_CURRENT_REPOSITORY_NAME=\"" + ctx.label.workspace_name + "\""]
+
     (compilation_context, compilation_outputs) = cc_common.compile(
         name = ctx.label.name,
         actions = ctx.actions,
@@ -690,7 +703,7 @@ def cc_binary_impl(ctx, additional_linkopts):
         cc_toolchain = cc_toolchain,
         user_compile_flags = cc_helper.get_copts(ctx, common, feature_configuration, additional_make_variable_substitutions),
         defines = common.defines,
-        local_defines = common.local_defines,
+        local_defines = local_defines,
         loose_includes = common.loose_include_dirs,
         system_includes = common.system_include_dirs,
         private_hdrs = common.private_hdrs,

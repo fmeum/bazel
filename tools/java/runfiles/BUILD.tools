@@ -1,8 +1,15 @@
-java_library(
+load(":java_runfiles_library.bzl", "java_runfiles_library")
+
+java_runfiles_library(
     name = "runfiles",
+    lib = ":runfiles_impl",
+    visibility = ["//visibility:public"],
+)
+
+java_library(
+    name = "runfiles_impl",
     srcs = [
         "Runfiles.java",
         "Util.java",
     ],
-    visibility = ["//visibility:public"],
 )

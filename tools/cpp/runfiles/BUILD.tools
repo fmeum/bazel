@@ -1,8 +1,15 @@
 # This package will host the C++ runfiles library when it's finally released.
 
-cc_library(
+load(":cc_runfiles_library.bzl", "cc_runfiles_library")
+
+cc_runfiles_library(
     name = "runfiles",
+    lib = ":runfiles_impl",
+    visibility = ["//visibility:public"],
+)
+
+cc_library(
+    name = "runfiles_impl",
     srcs = ["runfiles.cc"],
     hdrs = ["runfiles.h"],
-    visibility = ["//visibility:public"],
 )

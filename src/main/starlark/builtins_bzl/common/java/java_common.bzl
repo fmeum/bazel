@@ -21,6 +21,7 @@ load(":common/java/android_lint.bzl", "android_lint_action")
 load(":common/java/compile_action.bzl", "COMPILE_ACTION_IMPLICIT_ATTRS", "compile_action")
 load(":common/java/java_semantics.bzl", "semantics")
 load(":common/java/proguard_validation.bzl", "VALIDATE_PROGUARD_SPECS_IMPLICIT_ATTRS", "validate_proguard_specs")
+load(":common/java/runfiles_helper.bzl", "RUNFILES_HELPER_ACTION", "RUNFILES_HELPER_ACTION_IMPLICIT_ATTRS", "depends_on_runfiles_library", "runfiles_helper_action")
 
 java_common = _builtins.toplevel.java_common
 coverage_common = _builtins.toplevel.coverage_common
@@ -127,13 +128,20 @@ def basic_java_library(
         resources = list(resources)
         resources.extend(properties)
 
+    if coverage_config:
+        collected_deps = _collect_deps(deps + [coverage_config.runner])
+    else:
+        collected_deps = _collect_deps(deps)
+    if depends_on_runfiles_library(deps):
+        collected_deps.append(runfiles_helper_action(ctx))
+
     java_info, compilation_info = compile_action(
         ctx,
         ctx.outputs.classjar,
         ctx.outputs.sourcejar,
         source_files,
         source_jars,
-        _collect_deps(deps + [coverage_config.runner]) if coverage_config else _collect_deps(deps),
+        collected_deps,
         _collect_deps(runtime_deps),
         plugins_javaplugininfo,
         _collect_deps(exports),
@@ -262,6 +270,7 @@ def construct_defaultinfo(ctx, files_to_build, files, neverlink, *extra_attrs):
 
 BASIC_JAVA_LIBRARY_IMPLICIT_ATTRS = merge_attrs(
     COMPILE_ACTION_IMPLICIT_ATTRS,
+    RUNFILES_HELPER_ACTION_IMPLICIT_ATTRS,
     {
         "_java_plugins": attr.label(
             default = semantics.JAVA_PLUGINS_FLAG_ALIAS_LABEL,

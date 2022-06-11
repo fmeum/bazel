@@ -134,6 +134,12 @@ public final class RuleConfiguredTargetBuilder {
     addProvider(new FileProvider(filesToBuild));
     addProvider(filesToRunProvider);
 
+    RunfilesLibraryUsersProvider runfilesLibraryUsersProvider =
+        RunfilesLibraryUsersCollector.collectUsers(ruleContext);
+    if (runfilesLibraryUsersProvider != null) {
+      addProvider(runfilesLibraryUsersProvider);
+    }
+
     if (runfilesSupport != null) {
       // If a binary is built, build its runfiles, too
       addOutputGroup(OutputGroupInfo.HIDDEN_TOP_LEVEL, runfilesMiddlemen);

@@ -17,6 +17,7 @@ filegroup(
     srcs = [
         "BUILD.tools",
         ":srcs_for_embedded_tools",
+        "cc_runfiles_library.bzl",
     ],
     visibility = ["//tools/cpp:__pkg__"],
 )
