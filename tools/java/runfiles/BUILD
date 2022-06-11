@@ -18,6 +18,7 @@ filegroup(
     name = "embedded_tools",
     srcs = [
         "BUILD.tools",
+        "java_runfiles_library.bzl",
         ":java-srcs",
     ],
     visibility = ["//tools/java:__pkg__"],

@@ -327,6 +327,7 @@ java_library(
         ":file_provider",
         ":incompatible_platform_provider",
         ":inconsistent_aspect_order_exception",
+        ":is_runfiles_library_info",
         ":label_and_location",
         ":label_expander",
         ":licenses_provider",
@@ -817,6 +818,16 @@ java_library(
         ":aspect_collection",
         "//src/main/java/com/google/devtools/build/lib/packages",
         "//src/main/java/net/starlark/java/syntax",
+    ],
+)
+
+java_library(
+    name = "is_runfiles_library_info",
+    srcs = ["IsRunfilesLibraryInfo.java"],
+    deps = [
+        "//src/main/java/com/google/devtools/build/lib/concurrent",
+        "//src/main/java/com/google/devtools/build/lib/packages",
+        "//src/main/java/com/google/devtools/build/lib/starlarkbuildapi",
     ],
 )
 
