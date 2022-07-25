@@ -109,6 +109,9 @@ public class ExecutionTransitionFactory
 
     @Override
     public BuildOptions patch(BuildOptionsView options, EventHandler eventHandler) {
+      if (!options.underlying().get(CoreOptions.class).useDistinctExecConfiguration) {
+        return options.underlying();
+      }
       if (executionPlatform == null) {
         // No execution platform is known, so don't change anything.
         return options.underlying();
