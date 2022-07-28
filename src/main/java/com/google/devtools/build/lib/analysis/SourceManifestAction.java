@@ -13,16 +13,19 @@
 // limitations under the License.
 package com.google.devtools.build.lib.analysis;
 
+import static com.google.common.collect.ImmutableList.toImmutableList;
 import static java.nio.charset.StandardCharsets.ISO_8859_1;
 import static java.nio.charset.StandardCharsets.UTF_8;
 
 import com.google.common.annotations.VisibleForTesting;
+import com.google.common.collect.ImmutableList;
 import com.google.devtools.build.lib.actions.ActionExecutionContext;
 import com.google.devtools.build.lib.actions.ActionKeyContext;
 import com.google.devtools.build.lib.actions.ActionOwner;
 import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.analysis.actions.AbstractFileWriteAction;
 import com.google.devtools.build.lib.analysis.actions.DeterministicWriter;
+import com.google.devtools.build.lib.collect.nestedset.NestedSet;
 import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
 import com.google.devtools.build.lib.collect.nestedset.Order;
 import com.google.devtools.build.lib.concurrent.ThreadSafety.Immutable;
@@ -99,6 +102,8 @@ public final class SourceManifestAction extends AbstractFileWriteAction {
 
   private final boolean remotableSourceManifestActions;
 
+  private NestedSet<Artifact> symlinkArtifacts = null;
+
   /**
    * Creates a new AbstractSourceManifestAction instance using latin1 encoding to write the manifest
    * file and with a specified root path for manifest entries.
@@ -133,6 +138,17 @@ public final class SourceManifestAction extends AbstractFileWriteAction {
     this.manifestWriter = manifestWriter;
     this.runfiles = runfiles;
     this.remotableSourceManifestActions = remotableSourceManifestActions;
+  }
+
+  @Override
+  public synchronized NestedSet<Artifact> getInputs() {
+    if (symlinkArtifacts == null) {
+      ImmutableList<Artifact> symlinks = runfiles.getArtifacts().toList().stream()
+          .filter(Artifact::isSymlink)
+          .collect(toImmutableList());
+      symlinkArtifacts = NestedSetBuilder.wrap(Order.STABLE_ORDER, symlinks);
+    }
+    return symlinkArtifacts;
   }
 
   @VisibleForTesting
@@ -227,7 +243,11 @@ public final class SourceManifestAction extends AbstractFileWriteAction {
         // This trailing whitespace is REQUIRED to process the single entry line correctly.
         manifestWriter.append(' ');
         if (symlink != null) {
-          manifestWriter.append(symlink.getPath().getPathString());
+          if (symlink.isSymlink()) {
+            manifestWriter.append(symlink.getPath().readSymbolicLink().getPathString());
+          } else {
+            manifestWriter.append(symlink.getPath().getPathString());
+          }
         }
         manifestWriter.append('\n');
       }
