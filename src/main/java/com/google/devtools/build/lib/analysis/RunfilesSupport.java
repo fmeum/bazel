@@ -14,8 +14,11 @@
 
 package com.google.devtools.build.lib.analysis;
 
+import static com.google.common.collect.ImmutableMap.toImmutableMap;
+
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Preconditions;
+import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
 import com.google.devtools.build.lib.actions.ActionEnvironment;
 import com.google.devtools.build.lib.actions.Artifact;
@@ -25,6 +28,8 @@ import com.google.devtools.build.lib.analysis.actions.ActionConstructionContext;
 import com.google.devtools.build.lib.analysis.actions.SymlinkTreeAction;
 import com.google.devtools.build.lib.analysis.config.BuildConfigurationValue;
 import com.google.devtools.build.lib.analysis.config.RunUnder;
+import com.google.devtools.build.lib.cmdline.RepositoryMapping;
+import com.google.devtools.build.lib.cmdline.RepositoryName;
 import com.google.devtools.build.lib.collect.nestedset.NestedSet;
 import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
 import com.google.devtools.build.lib.concurrent.ThreadSafety.Immutable;
@@ -75,6 +80,7 @@ import javax.annotation.Nullable;
 public final class RunfilesSupport {
   private static final String RUNFILES_DIR_EXT = ".runfiles";
   private static final String INPUT_MANIFEST_EXT = ".runfiles_manifest";
+  private static final String REPO_MAPPING_MANIFEST_EXT = ".repo_mapping";
   private static final String OUTPUT_MANIFEST_BASENAME = "MANIFEST";
 
   private final Runfiles runfiles;
@@ -105,6 +111,17 @@ public final class RunfilesSupport {
     boolean createManifest = ruleContext.getConfiguration().buildRunfilesManifests();
     boolean buildRunfileLinks = ruleContext.getConfiguration().buildRunfileLinks();
 
+    Artifact repositoryMappingManifest = createRepositoryMappingManifestAction(ruleContext,
+        runfiles, owningExecutable, ruleContext.getWorkspaceName());
+    // TODO(fmeum): Adding a root symlink is a hack here, we should eventually solve this more
+    //  efficiently.
+    runfiles = new Runfiles.Builder(
+        ruleContext.getWorkspaceName(),
+        ruleContext.getConfiguration().legacyExternalRunfiles())
+        .merge(runfiles)
+        .addRootSymlink(PathFragment.create("_repo_mapping"), repositoryMappingManifest)
+        .build();
+
     // Adding run_under target to the runfiles manifest so it would become part
     // of runfiles tree and would be executable everywhere.
     RunUnder runUnder = ruleContext.getConfiguration().getRunUnder();
@@ -132,8 +149,11 @@ public final class RunfilesSupport {
       runfilesInputManifest = null;
       runfilesManifest = null;
     }
-    Artifact runfilesMiddleman =
-        createRunfilesMiddleman(ruleContext, owningExecutable, runfiles, runfilesManifest);
+    Artifact runfilesMiddleman = createRunfilesMiddleman(ruleContext,
+        owningExecutable,
+        runfiles,
+        runfilesManifest,
+        repositoryMappingManifest);
 
     boolean runfilesEnabled = ruleContext.getConfiguration().runfilesEnabled();
 
@@ -327,11 +347,15 @@ public final class RunfilesSupport {
       ActionConstructionContext context,
       Artifact owningExecutable,
       Runfiles runfiles,
-      @Nullable Artifact runfilesManifest) {
+      @Nullable Artifact runfilesManifest,
+      @Nullable Artifact repositoryMappingManifest) {
     NestedSetBuilder<Artifact> deps = NestedSetBuilder.stableOrder();
     deps.addTransitive(runfiles.getAllArtifacts());
     if (runfilesManifest != null) {
       deps.add(runfilesManifest);
+    }
+    if (repositoryMappingManifest != null) {
+      deps.add(repositoryMappingManifest);
     }
     return context
         .getAnalysisEnvironment()
@@ -446,6 +470,38 @@ public final class RunfilesSupport {
         runfiles,
         computeArgs(ruleContext, appendingArgs),
         computeActionEnvironment(ruleContext));
+  }
+
+  private static Artifact createRepositoryMappingManifestAction(
+      RuleContext ruleContext,
+      Runfiles runfiles,
+      Artifact executable,
+      String workspaceName) {
+    RunfilesLibraryUsersProvider provider = RunfilesLibraryUsersCollector.collectUsers(ruleContext);
+    ImmutableList<RepositoryNameAndMapping> users = provider != null ? provider.getUsers().toList() : ImmutableList.of();
+    Map<RepositoryName, RepositoryMapping> repositoryMappings = users.stream()
+        .collect(toImmutableMap(RepositoryNameAndMapping::getRepositoryName,
+            RepositoryNameAndMapping::getRepositoryMapping));
+    Artifact repositoryMappingManifest = createRepositoryMappingManifestArtifact(ruleContext,
+        executable);
+    ruleContext
+        .getAnalysisEnvironment()
+        .registerAction(
+            new RepositoryMappingsManifestAction(ruleContext.getActionOwner(),
+                repositoryMappingManifest,
+                runfiles,
+                repositoryMappings,
+                workspaceName));
+    return repositoryMappingManifest;
+  }
+
+  private static Artifact createRepositoryMappingManifestArtifact(
+      RuleContext context, Artifact owningExecutable) {
+    PathFragment relativePath = owningExecutable.getOutputDirRelativePath(
+        context.getConfiguration().isSiblingRepositoryLayout());
+    String basename = relativePath.getBaseName();
+    PathFragment inputManifestPath = relativePath.replaceName(basename + REPO_MAPPING_MANIFEST_EXT);
+    return context.getDerivedArtifact(inputManifestPath, context.getBinDirectory());
   }
 
   private static CommandLine computeArgs(RuleContext ruleContext, CommandLine additionalArgs) {
