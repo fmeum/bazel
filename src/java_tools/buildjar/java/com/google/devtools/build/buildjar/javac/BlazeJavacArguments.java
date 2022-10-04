@@ -81,6 +81,9 @@ public abstract class BlazeJavacArguments {
 
   public abstract OptionalInt requestId();
 
+  @Nullable
+  public abstract String repositoryName();
+
   public static Builder builder() {
     return new AutoValue_BlazeJavacArguments.Builder()
         .classPath(ImmutableList.of())
@@ -95,7 +98,8 @@ public abstract class BlazeJavacArguments {
         .plugins(ImmutableList.of())
         .failFast(false)
         .inputsAndDigest(ImmutableMap.of())
-        .requestId(OptionalInt.empty());
+        .requestId(OptionalInt.empty())
+        .repositoryName(null);
   }
 
   /** {@link BlazeJavacArguments}Builder. */
@@ -132,6 +136,8 @@ public abstract class BlazeJavacArguments {
     Builder inputsAndDigest(ImmutableMap<String, ByteString> inputsAndDigest);
 
     Builder requestId(OptionalInt requestId);
+
+    Builder repositoryName(String repositoryName);
 
     BlazeJavacArguments build();
   }

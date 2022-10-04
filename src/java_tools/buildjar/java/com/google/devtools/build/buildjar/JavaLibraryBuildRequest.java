@@ -365,6 +365,14 @@ public final class JavaLibraryBuildRequest {
     return injectingRuleKind;
   }
 
+  @Nullable
+  public String getRepositoryName() {
+    if (targetLabel == null) {
+      return null;
+    }
+    return targetLabel.substring(targetLabel.indexOf('@') + 1, targetLabel.indexOf('/'));
+  }
+
   public BlazeJavacArguments toBlazeJavacArguments(ImmutableList<Path> classPath) {
     BlazeJavacArguments.Builder builder =
         BlazeJavacArguments.builder()
@@ -379,7 +387,8 @@ public final class JavaLibraryBuildRequest {
             .processorPath(getProcessorPath())
             .plugins(getPlugins())
             .inputsAndDigest(getInputsAndDigest())
-            .requestId(getRequestId());
+            .requestId(getRequestId())
+            .repositoryName(getRepositoryName());
     addJavacArguments(builder);
     // Performance optimization: when reduced classpaths are enabled, stop the compilation after
     // the first diagnostic that would result in fallback to the transitive classpath. The user

@@ -23,6 +23,7 @@ import static java.util.Comparator.comparing;
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
+import com.google.common.collect.Iterables;
 import com.google.devtools.build.buildjar.InvalidCommandLineException;
 import com.google.devtools.build.buildjar.javac.BlazeJavacResult.Status;
 import com.google.devtools.build.buildjar.javac.CancelCompilerPlugin.CancelRequestException;
@@ -45,6 +46,7 @@ import java.io.IOError;
 import java.io.IOException;
 import java.io.PrintWriter;
 import java.io.StringWriter;
+import java.net.URI;
 import java.net.URL;
 import java.net.URLClassLoader;
 import java.nio.file.Path;
@@ -54,11 +56,13 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.function.Function;
 import javax.annotation.Nullable;
 import javax.tools.Diagnostic;
 import javax.tools.DiagnosticListener;
 import javax.tools.JavaFileObject;
 import javax.tools.JavaFileObject.Kind;
+import javax.tools.SimpleJavaFileObject;
 import javax.tools.StandardLocation;
 
 /**
@@ -117,9 +121,10 @@ public class BlazeJavacMain {
     options.put("-Xlint:path", "path");
     options.put("expandJarClassPaths", "false");
 
-    try (ClassloaderMaskingFileManager fileManager =
-        new ClassloaderMaskingFileManager(
-            context, arguments.builtinProcessors(), getMatchingBootFileManager(arguments))) {
+    try (ClassloaderMaskingFileManager fileManager = new ClassloaderMaskingFileManager(context,
+      arguments.builtinProcessors(),
+      getMatchingBootFileManager(arguments),
+      injectRepositoryNameForRunfiles(arguments.repositoryName()))) {
 
       setLocations(fileManager, arguments);
 
@@ -321,6 +326,27 @@ public class BlazeJavacMain {
     }
   }
 
+  private static Function<String, Iterable<InjectedJavaSourceFile>> injectRepositoryNameForRunfiles(@Nullable String repositoryName) {
+    if (repositoryName == null) {
+      return s -> ImmutableList.of();
+    }
+    String runfilesPackage = "com.google.devtools.build.runfiles";
+    InjectedJavaSourceFile runfilesConstants = new InjectedJavaSourceFile(
+      runfilesPackage + ".RunfilesConstants",
+          "package " + runfilesPackage + ";\n" +
+            "public final class RunfilesConstants {\n" +
+            "  public static final String CURRENT_REPOSITORY = \"" + repositoryName + "\";\n" +
+            "  private RunfilesConstants() {}\n" +
+            "}\n"
+      );
+    return packageName -> {
+      if (runfilesPackage.equals(packageName)) {
+        return ImmutableList.of(runfilesConstants);
+      }
+      return ImmutableList.of();
+    };
+  }
+
   private static final boolean BOOT_CLASSPATH_CACHE_ENABLED =
       Boolean.parseBoolean(
           System.getProperty(
@@ -358,6 +384,26 @@ public class BlazeJavacMain {
         key, x -> new BootClassPathCachingFileManager(new Context(), key));
   }
 
+  private static final class InjectedJavaSourceFile extends SimpleJavaFileObject {
+    private final String binaryName;
+    private final String content;
+
+    InjectedJavaSourceFile(String className, String content) {
+      super(URI.create("string:///" + className.replace('.', '/') + Kind.SOURCE.extension), Kind.SOURCE);
+      this.binaryName = className.substring(className.lastIndexOf('.') + 1);
+      this.content = content;
+    }
+
+    @Override
+    public CharSequence getCharContent(boolean ignoreEncodingErrors) {
+      return content;
+    }
+
+    public String getBinaryName() {
+      return binaryName;
+    }
+  }
+
   /**
    * When Bazel invokes JavaBuilder, it puts javac.jar on the bootstrap class path and
    * JavaBuilder_deploy.jar on the user class path. We need Error Prone to be available on the
@@ -370,14 +416,17 @@ public class BlazeJavacMain {
     private final ImmutableSet<String> builtinProcessors;
     /** the BootClassPathCachingFileManager instance used for BootClassPaths only. */
     private final BootClassPathCachingFileManager bootFileManger;
+    private final Function<String, Iterable<InjectedJavaSourceFile>> sourceFileInjector;
 
     public ClassloaderMaskingFileManager(
         Context context,
         ImmutableSet<String> builtinProcessors,
-        BootClassPathCachingFileManager bootFileManager) {
+        BootClassPathCachingFileManager bootFileManager,
+        Function<String, Iterable<InjectedJavaSourceFile>> sourceFileInjector) {
       super(context, true, UTF_8);
       this.builtinProcessors = builtinProcessors;
       this.bootFileManger = bootFileManager;
+      this.sourceFileInjector = sourceFileInjector;
     }
 
     @Override
@@ -387,7 +436,19 @@ public class BlazeJavacMain {
       if (this.bootFileManger != null && location == StandardLocation.PLATFORM_CLASS_PATH) {
         return this.bootFileManger.list(location, packageName, kinds, recurse);
       }
-      return super.list(location, packageName, kinds, recurse);
+      Iterable<JavaFileObject> result = super.list(location, packageName, kinds, recurse);
+      if (kinds.contains(Kind.SOURCE)) {
+        result = Iterables.concat(result, sourceFileInjector.apply(packageName));
+      }
+      return result;
+    }
+
+    @Override
+    public String inferBinaryName(Location location, JavaFileObject file) {
+      if (file instanceof InjectedJavaSourceFile) {
+        return ((InjectedJavaSourceFile) file).getBinaryName();
+      }
+      return super.inferBinaryName(location, file);
     }
 
     @Override
