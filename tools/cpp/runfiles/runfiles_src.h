@@ -95,19 +95,19 @@ class Runfiles {
 
   // Returns a new `Runfiles` instance.
   //
-  // Use this from within `cc_test` rules.
+  // Use this from within `cc_test` targets or in libraries that are only meant
+  // to be linked into tests.
   //
   // Returns nullptr on error. If `error` is provided, the method prints an
   // error message into it.
   //
-  // This method looks at the RUNFILES_MANIFEST_FILE and TEST_SRCDIR
-  // environment variables.
+  // This method looks at the RUNFILES_MANIFEST_FILE and RUNFILES_DIR
+  // environment variables, which are always set in tests.
   static Runfiles* CreateForTest(std::string* error = nullptr);
 
   // Returns a new `Runfiles` instance.
   //
-  // Use this from `cc_binary` or `cc_library` rules. You may pass an empty
-  // `argv0` if `argv[0]` from the `main` method is unknown.
+  // Use this from `cc_binary` or `cc_library` targets.
   //
   // Returns nullptr on error. If `error` is provided, the method prints an
   // error message into it.
@@ -122,8 +122,7 @@ class Runfiles {
   // Returns a new `Runfiles` instance.
   //
   // Use this from any `cc_*` rule if you want to manually specify the paths to
-  // the runfiles manifest and/or runfiles directory. You may pass an empty
-  // `argv0` if `argv[0]` from the `main` method is unknown.
+  // the runfiles manifest and/or runfiles directory.
   //
   // This method is the same as `Create(argv0, error)`, except it uses
   // `runfiles_manifest_file` and `runfiles_dir` as the corresponding

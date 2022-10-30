@@ -259,9 +259,9 @@ Runfiles* Runfiles::Create(const string& argv0, string* error) {
                           GetEnv("RUNFILES_DIR"), error);
 }
 
-Runfiles* Runfiles::CreateForTest(std::string* error) {
-  return Runfiles::Create(std::string(), GetEnv("RUNFILES_MANIFEST_FILE"),
-                          GetEnv("TEST_SRCDIR"), error);
+Runfiles* Runfiles::CreateForTest(string* error) {
+  // Tests always have RUNFILES_DIR or RUNFILES_MANIFEST_FILE set.
+  return Runfiles::Create("", error);
 }
 
 namespace {
