@@ -554,6 +554,10 @@ def _check_experimental_cc_shared_library():
     cc_common_internal.check_private_api(allowlist = _PRIVATE_STARLARKIFICATION_ALLOWLIST)
     return cc_common_internal.check_experimental_cc_shared_library()
 
+def _check_experimental_cc_static_library():
+    cc_common_internal.check_private_api(allowlist = _PRIVATE_STARLARKIFICATION_ALLOWLIST)
+    return cc_common_internal.check_experimental_cc_static_library()
+
 def _create_module_map(*, file, name, umbrella_header = None):
     cc_common_internal.check_private_api(allowlist = _PRIVATE_STARLARKIFICATION_ALLOWLIST)
     return cc_common_internal.create_module_map(
@@ -841,6 +845,7 @@ cc_common = struct(
     merge_compilation_contexts = _merge_compilation_contexts,
     merge_linking_contexts = _merge_linking_contexts,
     check_experimental_cc_shared_library = _check_experimental_cc_shared_library,
+    check_experimental_cc_static_library = _check_experimental_cc_static_library,
     create_module_map = _create_module_map,
     create_debug_context = _create_debug_context,
     merge_debug_context = _merge_debug_context,

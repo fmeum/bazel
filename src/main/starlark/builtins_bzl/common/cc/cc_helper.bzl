@@ -1268,4 +1268,6 @@ cc_helper = struct(
     linker_scripts = _linker_scripts,
     copts_filter = _copts_filter,
     package_exec_path = _package_exec_path,
+    get_base_name = _get_base_name,
+    replace_name = _replace_name,
 )

@@ -206,6 +206,14 @@ def _impl(ctx):
     action_configs.append(llvm_cov_action)
     action_configs.append(objcopy_action)
 
+    if ctx.attr.validate_static_library_path:
+        validate_static_library_action = action_config(
+            action_name = ACTION_NAMES.validate_static_library,
+            tools = [tool(path = ctx.attr.validate_static_library_path)],
+        )
+
+        action_configs.append(validate_static_library_action)
+
     supports_pic_feature = feature(
         name = "supports_pic",
         enabled = True,
@@ -1492,6 +1500,7 @@ cc_toolchain_config = rule(
         "coverage_link_flags": attr.string_list(),
         "supports_start_end_lib": attr.bool(),
         "builtin_sysroot": attr.string(),
+        "validate_static_library_path": attr.string(),
         "_xcode_config": attr.label(default = configuration_field(
             fragment = "apple",
             name = "xcode_config_label",

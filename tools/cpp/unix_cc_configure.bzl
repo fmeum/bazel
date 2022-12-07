@@ -329,6 +329,7 @@ def configure_unix_toolchain(repository_ctx, cpu_value, overriden_tools):
         "@bazel_tools//tools/cpp:armeabi_cc_toolchain_config.bzl",
         "@bazel_tools//tools/cpp:unix_cc_toolchain_config.bzl",
         "@bazel_tools//tools/cpp:linux_cc_wrapper.sh.tpl",
+        "@bazel_tools//tools/cpp:nm_validate_static_library.sh.tpl",
         "@bazel_tools//tools/cpp:osx_cc_wrapper.sh.tpl",
     ])
 
@@ -501,6 +502,17 @@ def configure_unix_toolchain(repository_ctx, cpu_value, overriden_tools):
             paths["@bazel_tools//tools/cpp:generate_system_module_map.sh"],
         ))
 
+    validate_static_library_path = None
+    if tool_paths["nm"]:
+        repository_ctx.template(
+            "validate_static_library.sh",
+            paths["@bazel_tools//tools/cpp:nm_validate_static_library.sh.tpl"],
+            {
+                "%{nm}": escape_string(str(repository_ctx.path(tool_paths["nm"]))),
+            },
+        )
+        validate_static_library_path = "validate_static_library.sh"
+
     write_builtin_include_directory_paths(repository_ctx, cc, builtin_include_directories)
     repository_ctx.template(
         "BUILD",
@@ -511,6 +523,8 @@ def configure_unix_toolchain(repository_ctx, cpu_value, overriden_tools):
             "%{modulemap}": ("\":module.modulemap\"" if is_clang else "None"),
             "%{cc_compiler_deps}": get_starlark_list([":builtin_include_directory_paths"] + (
                 [":cc_wrapper"] if darwin else []
+            ) + (
+                [":validate_static_library"] if validate_static_library_path else []
             )),
             "%{compiler}": escape_string(get_env_var(
                 repository_ctx,
@@ -657,5 +671,6 @@ def configure_unix_toolchain(repository_ctx, cpu_value, overriden_tools):
             "%{coverage_compile_flags}": coverage_compile_flags,
             "%{coverage_link_flags}": coverage_link_flags,
             "%{supports_start_end_lib}": "True" if gold_or_lld_linker_path else "False",
+            "%{validate_static_library_path}": validate_static_library_path,
         },
     )

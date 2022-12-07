@@ -104,6 +104,7 @@ import com.google.devtools.build.lib.rules.config.ConfigRules;
 import com.google.devtools.build.lib.rules.core.CoreRules;
 import com.google.devtools.build.lib.rules.cpp.CcSharedLibraryRule;
 import com.google.devtools.build.lib.rules.cpp.CcStarlarkInternal;
+import com.google.devtools.build.lib.rules.cpp.CcStaticLibraryRule;
 import com.google.devtools.build.lib.rules.cpp.proto.CcProtoLibraryRule;
 import com.google.devtools.build.lib.rules.objc.BazelObjcStarlarkInternal;
 import com.google.devtools.build.lib.rules.objc.ObjcStarlarkInternal;
@@ -497,6 +498,7 @@ public class BazelRuleClassProvider {
           builder.addRuleDefinition(new AndroidNdkRepositoryRule());
           builder.addRuleDefinition(new LocalConfigPlatformRule());
           builder.addRuleDefinition(new CcSharedLibraryRule());
+          builder.addRuleDefinition(new CcStaticLibraryRule());
 
           try {
             builder.addWorkspaceFileSuffix(

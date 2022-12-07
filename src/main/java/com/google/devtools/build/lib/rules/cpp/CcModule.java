@@ -1043,6 +1043,12 @@ public abstract class CcModule
   }
 
   @Override
+  public boolean checkExperimentalCcStaticLibrary(StarlarkThread thread) throws EvalException {
+    isCalledFromStarlarkCcCommon(thread);
+    return thread.getSemantics().getBool(BuildLanguageOptions.EXPERIMENTAL_CC_STATIC_LIBRARY);
+  }
+
+  @Override
   public CcLinkingContext createCcLinkingInfo(
       Object linkerInputs,
       Object librariesToLinkObject,

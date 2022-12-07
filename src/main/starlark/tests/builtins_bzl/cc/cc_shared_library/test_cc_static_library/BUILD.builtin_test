@@ -1,0 +1,29 @@
+cc_static_library(
+    name = "static",
+    deps = [":bar"],
+)
+
+cc_library(
+    name = "bar",
+    srcs = ["bar.cc"],
+    hdrs = ["bar.h"],
+    deps = [":foo"],
+)
+
+cc_library(
+    name = "foo",
+    srcs = ["foo.cc"],
+    hdrs = ["foo.h"],
+)
+
+cc_import(
+    name = "static_import",
+    static_library = ":static",
+    hdrs = ["bar.h"],
+)
+
+cc_test(
+    name = "test",
+    srcs = ["test.cc"],
+    deps = [":static_import"],
+)

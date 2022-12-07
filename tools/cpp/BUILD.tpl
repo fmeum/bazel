@@ -55,6 +55,11 @@ filegroup(
 )
 
 filegroup(
+    name = "validate_static_library",
+    srcs = ["validate_static_library.sh"],
+)
+
+filegroup(
     name = "compiler_deps",
     srcs = glob(["extra_tools/**"], allow_empty = True) + [%{cc_compiler_deps}],
 )
@@ -112,6 +117,7 @@ cc_toolchain_config(
     coverage_compile_flags = [%{coverage_compile_flags}],
     coverage_link_flags = [%{coverage_link_flags}],
     supports_start_end_lib = %{supports_start_end_lib},
+    validate_static_library_path = "%{validate_static_library_path}",
 )
 
 # Android tooling requires a default toolchain for the armeabi-v7a cpu.
