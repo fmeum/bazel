@@ -32,14 +32,14 @@ def _get_static_library_artifact(ctx, cc_toolchain, suffix = ""):
     )
     return ctx.actions.declare_file(cc_helper.replace_name(name, new_name + suffix))
 
-def _collect_objects(deps):
+def _collect_linker_inputs(deps):
     transitive_linker_inputs = [dep[CcInfo].linking_context.linker_inputs for dep in deps]
+    return depset(transitive = transitive_linker_inputs)
 
+def _collect_objects(linker_inputs):
     # Flattening a depset to get the action inputs.
-    linker_inputs = depset(transitive = transitive_linker_inputs).to_list()
-
     transitive_objects = []
-    for linker_input in linker_inputs:
+    for linker_input in linker_inputs.to_list():
         for lib in linker_input.libraries:
             if lib.pic_objects:
                 transitive_objects.append(depset(lib.pic_objects))
@@ -136,7 +136,7 @@ def _cc_static_library_impl(ctx):
         unsupported_features = ctx.disabled_features,
     )
 
-    objects = _collect_objects(ctx.attr.deps)
+    linker_inputs = _collect_linker_inputs(ctx.attr.deps)
 
     output_archive = _get_static_library_artifact(ctx, cc_toolchain)
 
@@ -145,7 +145,7 @@ def _cc_static_library_impl(ctx):
         cc_toolchain = cc_toolchain,
         feature_configuration = feature_configuration,
         output = output_archive,
-        objects = objects,
+        objects = _collect_objects(linker_inputs),
     )
 
     validation_output = _validate_archive(
@@ -155,6 +155,25 @@ def _cc_static_library_impl(ctx):
         feature_configuration = feature_configuration,
         archive = output_archive,
     )
+
+    linkdeps_file = ctx.actions.declare_file(ctx.attr.name + "_linkdeps.txt")
+
+    linkopts_file = ctx.actions.declare_file(ctx.attr.name + "_linkopts.txt")
+    linkopts_dict = ctx.actions.template_dict()
+    linkopts_dict.add_joined(
+        "",
+        linker_inputs,
+        join_with = "\n",
+        map_each = _map_linkopts,
+        uniquify = True,
+    )
+    ctx.actions.expand_template(
+        template = file,
+        output = linkopts_file,
+        computed_substitutions = linkopts_dict,
+    )
+
+    targets_file = ctx.actions.declare_file(ctx.attr.name + "_targets.txt")
 
     runfiles_list = []
     for data_dep in ctx.attr.data:
@@ -166,7 +185,11 @@ def _cc_static_library_impl(ctx):
 
     runfiles = ctx.runfiles().merge_all(runfiles_list)
 
-    output_groups = {}
+    output_groups = {
+        "linkdeps": depset([linkdeps_file]),
+        "linkopts": depset([linkopts_file]),
+        "targets": depset([targets_file]),
+    }
     if validation_output:
         output_groups["_validation"] = depset([validation_output])
 
@@ -185,6 +208,9 @@ cc_static_library = rule(
         "deps": attr.label_list(providers = [CcInfo]),
         "_cc_toolchain": attr.label(
             default = "@" + semantics.get_repo() + "//tools/cpp:current_cc_toolchain",
+        ),
+        "_empty_file": attr.label(
+            default = "@" + semantics.get_repo() + "//tools/cpp",
         ),
     },
     toolchains = cc_helper.use_cpp_toolchain(),

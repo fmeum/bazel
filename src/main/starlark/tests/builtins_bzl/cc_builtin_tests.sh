@@ -74,4 +74,46 @@ EOF
     //src/main/starlark/tests/builtins_bzl/cc/... || fail "expected success"
 }
 
+function test_cc_static_library_duplicate_symbol() {
+  mkdir -p pkg
+  cat > pkg/BUILD<<'EOF'
+cc_static_library(
+    name = "static",
+    deps = [
+        ":direct1",
+        ":direct2",
+    ],
+)
+
+cc_library(
+    name = "direct1",
+    srcs = ["direct1.cc"],
+)
+
+cc_library(
+    name = "direct2",
+    srcs = ["direct2.cc"],
+    deps = [":indirect"],
+)
+
+cc_library(
+    name = "indirect",
+    srcs = ["indirect.cc"],
+)
+EOF
+  cat > pkg/direct1.cc<<'EOF'
+int foo() { return 42; }
+EOF
+  cat > pkg/direct2.cc<<'EOF'
+int bar() { return 21; }
+EOF
+  cat > pkg/indirect.cc<<'EOF'
+int foo() { return 21; }
+EOF
+
+  bazel build --experimental_cc_static_library //pkg:static \
+    &> $TEST_log && fail "Expected build to fail"
+  expect_log "foobarbaz"
+}
+
 run_suite "cc_* built starlark test"
