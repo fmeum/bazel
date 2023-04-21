@@ -189,3 +189,5 @@ compiler_flag(name = "compiler")
 load("@bazel_tools//tools/cpp:cc_flags_supplier.bzl", "cc_flags_supplier")
 
 cc_flags_supplier(name = "cc_flags")
+
+exports_files(["empty_file"])

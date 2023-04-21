@@ -113,7 +113,10 @@ EOF
 
   bazel build --experimental_cc_static_library //pkg:static \
     &> $TEST_log && fail "Expected build to fail"
-  expect_log "foobarbaz"
+  expect_log "Duplicate symbols found"
+  expect_log ":direct1"
+  expect_log ":indirect"
+  expect_log "T foo()"
 }
 
 run_suite "cc_* built starlark test"

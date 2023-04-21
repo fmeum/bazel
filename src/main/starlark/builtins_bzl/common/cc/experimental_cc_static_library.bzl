@@ -124,6 +124,9 @@ def _validate_archive(*, name, actions, cc_toolchain, feature_configuration, arc
 
     return validation_output
 
+def _map_linkopts(linker_input):
+    return str(linker_input)
+
 def _cc_static_library_impl(ctx):
     if not cc_common.check_experimental_cc_static_library():
         fail("cc_static_library is an experimental rule and must be enabled with --experimental_cc_static_library")
@@ -156,7 +159,7 @@ def _cc_static_library_impl(ctx):
         archive = output_archive,
     )
 
-    linkdeps_file = ctx.actions.declare_file(ctx.attr.name + "_linkdeps.txt")
+    #    linkdeps_file = ctx.actions.declare_file(ctx.attr.name + "_linkdeps.txt")
 
     linkopts_file = ctx.actions.declare_file(ctx.attr.name + "_linkopts.txt")
     linkopts_dict = ctx.actions.template_dict()
@@ -168,12 +171,12 @@ def _cc_static_library_impl(ctx):
         uniquify = True,
     )
     ctx.actions.expand_template(
-        template = file,
+        template = ctx.file._empty_file,
         output = linkopts_file,
         computed_substitutions = linkopts_dict,
     )
 
-    targets_file = ctx.actions.declare_file(ctx.attr.name + "_targets.txt")
+    #    targets_file = ctx.actions.declare_file(ctx.attr.name + "_targets.txt")
 
     runfiles_list = []
     for data_dep in ctx.attr.data:
@@ -186,9 +189,9 @@ def _cc_static_library_impl(ctx):
     runfiles = ctx.runfiles().merge_all(runfiles_list)
 
     output_groups = {
-        "linkdeps": depset([linkdeps_file]),
+        #        "linkdeps": depset([linkdeps_file]),
         "linkopts": depset([linkopts_file]),
-        "targets": depset([targets_file]),
+        #        "targets": depset([targets_file]),
     }
     if validation_output:
         output_groups["_validation"] = depset([validation_output])
@@ -210,7 +213,8 @@ cc_static_library = rule(
             default = "@" + semantics.get_repo() + "//tools/cpp:current_cc_toolchain",
         ),
         "_empty_file": attr.label(
-            default = "@" + semantics.get_repo() + "//tools/cpp",
+            default = "@" + semantics.get_repo() + "//tools/cpp:empty_file",
+            allow_single_file = True,
         ),
     },
     toolchains = cc_helper.use_cpp_toolchain(),
