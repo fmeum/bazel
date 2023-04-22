@@ -210,6 +210,7 @@ def _impl(ctx):
         validate_static_library_action = action_config(
             action_name = ACTION_NAMES.validate_static_library,
             tools = [tool(path = ctx.attr.validate_static_library_path)],
+            enabled = True,
         )
 
         action_configs.append(validate_static_library_action)

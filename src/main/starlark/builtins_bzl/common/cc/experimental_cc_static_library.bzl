@@ -19,24 +19,38 @@ rely on this.
 """
 
 load(":common/cc/action_names.bzl", "ACTION_NAMES")
-load(":common/cc/cc_helper.bzl", "artifact_category", "cc_helper")
-load(":common/cc/semantics.bzl", "semantics")
-load(":common/cc/cc_info.bzl", "CcInfo")
 load(":common/cc/cc_common.bzl", "cc_common")
+load(":common/cc/cc_helper.bzl", "artifact_category", "cc_helper")
+load(":common/cc/cc_info.bzl", "CcInfo")
+load(":common/cc/semantics.bzl", "semantics")
 
-def _get_static_library_artifact(ctx, cc_toolchain, suffix = ""):
+_TEMPLATE_CONTENT = "%content%"
+
+def _get_static_library_artifact(ctx, cc_toolchain):
     name = ctx.label.name
     new_name = cc_toolchain.get_artifact_name_for_category(
         category = artifact_category.STATIC_LIBRARY,
         output_name = cc_helper.get_base_name(name),
     )
-    return ctx.actions.declare_file(cc_helper.replace_name(name, new_name + suffix))
+    return ctx.actions.declare_file(cc_helper.replace_name(name, new_name))
 
 def _collect_linker_inputs(deps):
     transitive_linker_inputs = [dep[CcInfo].linking_context.linker_inputs for dep in deps]
     return depset(transitive = transitive_linker_inputs)
 
-def _collect_objects(linker_inputs):
+def _has_objects(linker_input):
+    for lib in linker_input.libraries:
+        if lib.pic_objects or lib.objects:
+            return True
+    return False
+
+def _has_libraries(linker_input):
+    for lib in linker_input.libraries:
+        if lib.pic_static_library or lib.static_library or lib.dynamic_library:
+            return True
+    return False
+
+def _flatten_and_get_objects(linker_inputs):
     # Flattening a depset to get the action inputs.
     transitive_objects = []
     for linker_input in linker_inputs.to_list():
@@ -94,11 +108,11 @@ def _archive_objects(*, actions, cc_toolchain, feature_configuration, output, ob
     )
 
 def _validate_archive(*, name, actions, cc_toolchain, feature_configuration, archive):
-    #    if not cc_common.action_is_enabled(
-    #        feature_configuration = feature_configuration,
-    #        action_name = ACTION_NAMES.validate_static_library,
-    #    ):
-    #        return None
+    if not cc_common.action_is_enabled(
+        feature_configuration = feature_configuration,
+        action_name = ACTION_NAMES.validate_static_library,
+    ):
+        return None
 
     validation_output = actions.declare_file(name + "_validation_output.txt")
 
@@ -118,14 +132,74 @@ def _validate_archive(*, name, actions, cc_toolchain, feature_configuration, arc
             transitive = [cc_toolchain.all_files],
         ),
         outputs = [validation_output],
-        mnemonic = "ValidateArchive",
+        mnemonic = "ValidateStaticLibrary",
         progress_message = "Validating static library %{input}",
     )
 
     return validation_output
 
-def _map_linkopts(linker_input):
-    return str(linker_input)
+def _format_linkdeps(linker_input):
+    if _has_objects(linker_input):
+        # Has been added to the archive.
+        return None
+    if not _has_libraries(linker_input):
+        # Does not require linking, but may have contributed linkopts.
+        return None
+    return str(linker_input.owner) + "\n"
+
+def _create_linkdeps_file(*, actions, template, prefix, linker_inputs):
+    linkdeps_file = actions.declare_file(prefix + "_linkopts.txt")
+    linkdeps_dict = actions.template_dict().add_joined(
+        _TEMPLATE_CONTENT,
+        linker_inputs,
+        join_with = "",
+        map_each = _format_linkdeps,
+    )
+    actions.expand_template(
+        template = template,
+        output = linkdeps_file,
+        computed_substitutions = linkdeps_dict,
+    )
+    return linkdeps_file
+
+def _format_linkopts(linker_input):
+    return [opt + "\n" for opt in linker_input.user_link_flags]
+
+def _create_linkopts_file(*, actions, template, prefix, linker_inputs):
+    linkopts_file = actions.declare_file(prefix + "_linkopts.txt")
+    linkopts_dict = actions.template_dict().add_joined(
+        _TEMPLATE_CONTENT,
+        linker_inputs,
+        join_with = "",
+        map_each = _format_linkopts,
+    )
+    actions.expand_template(
+        template = template,
+        output = linkopts_file,
+        computed_substitutions = linkopts_dict,
+    )
+    return linkopts_file
+
+def _format_targets(linker_input):
+    if not _has_objects(linker_input):
+        return None
+    return str(linker_input.owner) + "\n"
+
+def _create_targets_file(*, actions, template, prefix, linker_inputs):
+    targets_file = actions.declare_file(prefix + "_targets.txt")
+    targets_dict = actions.template_dict().add_joined(
+        _TEMPLATE_CONTENT,
+        linker_inputs,
+        join_with = "",
+        map_each = _format_linkopts,
+        uniquify = True,
+    )
+    actions.expand_template(
+        template = template,
+        output = targets_file,
+        computed_substitutions = targets_dict,
+    )
+    return targets_file
 
 def _cc_static_library_impl(ctx):
     if not cc_common.check_experimental_cc_static_library():
@@ -148,7 +222,7 @@ def _cc_static_library_impl(ctx):
         cc_toolchain = cc_toolchain,
         feature_configuration = feature_configuration,
         output = output_archive,
-        objects = _collect_objects(linker_inputs),
+        objects = _flatten_and_get_objects(linker_inputs),
     )
 
     validation_output = _validate_archive(
@@ -159,42 +233,39 @@ def _cc_static_library_impl(ctx):
         archive = output_archive,
     )
 
-    #    linkdeps_file = ctx.actions.declare_file(ctx.attr.name + "_linkdeps.txt")
-
-    linkopts_file = ctx.actions.declare_file(ctx.attr.name + "_linkopts.txt")
-    linkopts_dict = ctx.actions.template_dict()
-    linkopts_dict.add_joined(
-        "",
-        linker_inputs,
-        join_with = "\n",
-        map_each = _map_linkopts,
-        uniquify = True,
-    )
-    ctx.actions.expand_template(
-        template = ctx.file._empty_file,
-        output = linkopts_file,
-        computed_substitutions = linkopts_dict,
+    linkdeps_file = _create_linkdeps_file(
+        actions = ctx.actions,
+        template = ctx.file._lazy_content_template,
+        prefix = ctx.attr.name,
+        linker_inputs = linker_inputs,
     )
 
-    #    targets_file = ctx.actions.declare_file(ctx.attr.name + "_targets.txt")
+    linkopts_file = _create_linkopts_file(
+        actions = ctx.actions,
+        template = ctx.file._lazy_content_template,
+        prefix = ctx.attr.name,
+        linker_inputs = linker_inputs,
+    )
 
-    runfiles_list = []
-    for data_dep in ctx.attr.data:
-        if data_dep[DefaultInfo].data_runfiles.files:
-            runfiles_list.append(data_dep[DefaultInfo].data_runfiles)
-        else:
-            runfiles_list.append(ctx.runfiles(transitive_files = data_dep[DefaultInfo].files))
-            runfiles_list.append(data_dep[DefaultInfo].default_runfiles)
-
-    runfiles = ctx.runfiles().merge_all(runfiles_list)
+    targets_file = _create_targets_file(
+        actions = ctx.actions,
+        template = ctx.file._lazy_content_template,
+        prefix = ctx.attr.name,
+        linker_inputs = linker_inputs,
+    )
 
     output_groups = {
-        #        "linkdeps": depset([linkdeps_file]),
+        "linkdeps": depset([linkdeps_file]),
         "linkopts": depset([linkopts_file]),
-        #        "targets": depset([targets_file]),
+        "targets": depset([targets_file]),
     }
     if validation_output:
         output_groups["_validation"] = depset([validation_output])
+
+    runfiles = ctx.runfiles().merge_all([
+        dep[DefaultInfo].default_runfiles
+        for dep in ctx.attr.deps
+    ])
 
     return [
         DefaultInfo(
@@ -207,13 +278,12 @@ def _cc_static_library_impl(ctx):
 cc_static_library = rule(
     implementation = _cc_static_library_impl,
     attrs = {
-        "data": attr.label_list(allow_files = True),
         "deps": attr.label_list(providers = [CcInfo]),
         "_cc_toolchain": attr.label(
             default = "@" + semantics.get_repo() + "//tools/cpp:current_cc_toolchain",
         ),
-        "_empty_file": attr.label(
-            default = "@" + semantics.get_repo() + "//tools/cpp:empty_file",
+        "_lazy_content_template": attr.label(
+            default = "@" + semantics.get_repo() + "//tools/cpp:lazy_content_template.txt",
             allow_single_file = True,
         ),
     },
