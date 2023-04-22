@@ -11,8 +11,8 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-#include "src/main/starlark/tests/builtins_bzl/cc/cc_shared_library/test_cc_static_library/bar.h"
-#include "src/main/starlark/tests/builtins_bzl/cc/cc_shared_library/test_cc_static_library/foo.h"
+#include "src/main/starlark/tests/builtins_bzl/cc/cc_static_library/test_cc_static_library/bar.h"
+#include "src/main/starlark/tests/builtins_bzl/cc/cc_static_library/test_cc_static_library/foo.h"
 
 int bar() {
   return 2 * foo();

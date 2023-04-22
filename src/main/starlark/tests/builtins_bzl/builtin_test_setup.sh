@@ -20,6 +20,7 @@
 
 function setup_tests() {
   setup_skylib_support
+  add_rules_testing_to_workspace WORKSPACE
   src=$(get_runfiles_dir $1)
   dest="${2:-$1}"
   if [ ! -e "$src" ]; then

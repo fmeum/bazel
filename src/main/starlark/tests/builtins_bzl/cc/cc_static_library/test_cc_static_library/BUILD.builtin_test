@@ -1,3 +1,5 @@
+load(":starlark_tests.bzl", "my_test_suite")
+
 cc_static_library(
     name = "static",
     deps = [":bar"],
@@ -18,8 +20,8 @@ cc_library(
 
 cc_import(
     name = "static_import",
-    static_library = ":static",
     hdrs = ["bar.h"],
+    static_library = ":static",
 )
 
 cc_test(
@@ -27,3 +29,5 @@ cc_test(
     srcs = ["test.cc"],
     deps = [":static_import"],
 )
+
+my_test_suite(name = "my_test_suite")

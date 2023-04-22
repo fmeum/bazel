@@ -16,7 +16,7 @@
 set -eu
 
 DUPLICATE_SYMBOLS=$(
-  "%{nm}" --demangle --print-file-name "$1" |
+  "%{nm}" --defined-only --demangle --print-file-name "$1" |
   LC_ALL=C sort --key=3 |
   uniq -D --skip-field=2)
 if [[ -n "$DUPLICATE_SYMBOLS" ]]; then
