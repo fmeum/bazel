@@ -203,17 +203,20 @@ def _impl(ctx):
         ],
     )
 
+    validate_static_library_action = action_config(
+        action_name = ACTION_NAMES.validate_static_library,
+        tools = [tool(path = ctx.attr.validate_static_library_path)],
+    )
+
     action_configs.append(llvm_cov_action)
     action_configs.append(objcopy_action)
+    action_configs.append(validate_static_library_action)
 
-    if ctx.attr.validate_static_library_path:
-        validate_static_library_action = action_config(
-            action_name = ACTION_NAMES.validate_static_library,
-            tools = [tool(path = ctx.attr.validate_static_library_path)],
-            enabled = True,
-        )
-
-        action_configs.append(validate_static_library_action)
+    static_library_validation_feature = feature(
+        name = "static_library_validation",
+        implies = [ACTION_NAMES.validate_static_library],
+        enabled = bool(ctx.attr.validate_static_library_path),
+    )
 
     supports_pic_feature = feature(
         name = "supports_pic",
@@ -1416,6 +1419,7 @@ def _impl(ctx):
             unfiltered_compile_flags_feature,
             treat_warnings_as_errors_feature,
             archive_param_file_feature,
+            static_library_validation_feature,
         ] + layering_check_features(ctx.attr.compiler)
     else:
         # macOS artifact name patterns differ from the defaults only for dynamic
@@ -1454,6 +1458,7 @@ def _impl(ctx):
             unfiltered_compile_flags_feature,
             treat_warnings_as_errors_feature,
             archive_param_file_feature,
+            static_library_validation_feature,
         ] + layering_check_features(ctx.attr.compiler)
 
     return cc_common.create_cc_toolchain_config_info(
