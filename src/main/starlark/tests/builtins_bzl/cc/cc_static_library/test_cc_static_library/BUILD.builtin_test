@@ -1,4 +1,4 @@
-load(":starlark_tests.bzl", "my_test_suite")
+load(":starlark_tests.bzl", "analysis_test_suite")
 
 cc_static_library(
     name = "static",
@@ -30,4 +30,4 @@ cc_test(
     deps = [":static_import"],
 )
 
-my_test_suite(name = "my_test_suite")
+analysis_test_suite(name = "analysis_test_suite")
