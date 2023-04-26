@@ -139,7 +139,14 @@ def _test_default_outputs_impl(env, target):
 
     action = env.expect.that_target(target).action_generating(subject_path)
     action.mnemonic().equals("CppTransitiveArchive")
-    action.argv().contains_exactly([])
+
+    action_env = action.env()
+    action_env.contains_at_least({"MY_KEY": "my_value"})
+    action_env.keys().contains("PATH")
+
+    argv = action.argv()
+    argv.contains("abc")
+    argv.contains_at_least([file.path for file in action.actual.inputs.to_list() if file.basename.endswith(".o")]).in_order()
 
 def analysis_test_suite(name):
     test_suite(
