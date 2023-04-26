@@ -16,8 +16,9 @@
 
 load("@rules_testing//lib:analysis_test.bzl", "analysis_test", "test_suite")
 load("@rules_testing//lib:util.bzl", "util")
+load(":mock_toolchain.bzl", "mock_cc_toolchain")
 
-def _test_output_groups(name):
+def _set_up_subject(name):
     util.helper_target(
         native.cc_import,
         name = name + "_dynamic_import",
@@ -78,6 +79,9 @@ def _test_output_groups(name):
             name + "_imports",
         ],
     )
+
+def _test_output_groups(name):
+    _set_up_subject(name)
     analysis_test(
         name = name,
         impl = _test_output_groups_impl,
@@ -99,7 +103,15 @@ def _test_output_groups_impl(env, target):
     ]).in_order()
 
     subject.output_group("linkopts").contains_exactly([path_prefix + "_linkopts.txt"])
-    subject.action_generating(path_prefix + "_linkopts.txt").content().split("\n").contains_exactly([]).in_order()
+    subject.action_generating(path_prefix + "_linkopts.txt").content().split("\n").contains_exactly([
+        "dep_1_arg_1",
+        "dep_1_arg_2",
+        "dep_1_arg_1",
+        "linkopts_only_arg_1",
+        "linkopts_only_arg_2",
+        "linkopts_only_arg_1",
+        "",
+    ]).in_order()
 
     subject.output_group("targets").contains_exactly([path_prefix + "_targets.txt"])
     subject.action_generating(path_prefix + "_targets.txt").content().split("\n").contains_exactly([
@@ -107,10 +119,33 @@ def _test_output_groups_impl(env, target):
         "",
     ]).in_order()
 
+def _test_default_outputs(name):
+    _set_up_subject(name)
+    mock_cc_toolchain(name + "_toolchain")
+    analysis_test(
+        name = name,
+        impl = _test_default_outputs_impl,
+        target = name + "_subject",
+        config_settings = {
+            "//command_line_option:extra_toolchains": [str(native.package_relative_label(name + "_toolchain"))],
+            "//command_line_option:incompatible_enable_cc_toolchain_resolution": True,
+        },
+    )
+
+def _test_default_outputs_impl(env, target):
+    subject_path = target.label.package + "/" + "prefix" + target.label.name + ".lib"
+
+    env.expect.that_target(target).default_outputs().contains_exactly([subject_path])
+
+    action = env.expect.that_target(target).action_generating(subject_path)
+    action.mnemonic().equals("CppTransitiveArchive")
+    action.argv().contains_exactly([])
+
 def analysis_test_suite(name):
     test_suite(
         name = name,
         tests = [
+            _test_default_outputs,
             _test_output_groups,
         ],
     )
