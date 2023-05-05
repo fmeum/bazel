@@ -158,21 +158,7 @@ public class StarlarkRepositoryFunction extends RepositoryFunction {
     }
     ImmutableSet<PathFragment> ignoredPatterns = checkNotNull(ignoredPackagesValue).getPatterns();
 
-    try (Mutability mu = Mutability.create("Starlark repository")) {
-      StarlarkThread thread = new StarlarkThread(mu, starlarkSemantics);
-      thread.setPrintHandler(Event.makeDebugPrintHandler(env.getListener()));
-
-      // The fetch phase does not need the tools repository
-      // or the fragment map because it happens before analysis.
-      new BazelStarlarkContext(
-              BazelStarlarkContext.Phase.LOADING, // ("fetch")
-              /*toolsRepository=*/ null,
-              /*fragmentNameToClass=*/ null,
-              new SymbolGenerator<>(key),
-              /*analysisRuleLabel=*/ null,
-              /*networkAllowlistForTests=*/ null)
-          .storeInThread(thread);
-
+    try {
       StarlarkRepositoryContext starlarkRepositoryContext =
           new StarlarkRepositoryContext(
               rule,
@@ -209,24 +195,41 @@ public class StarlarkRepositoryFunction extends RepositoryFunction {
         // means the rule might get restarted for legitimate reasons.
       }
 
-      // This rule is mainly executed for its side effect. Nevertheless, the return value is
-      // of importance, as it provides information on how the call has to be modified to be a
-      // reproducible rule.
-      //
-      // Also we do a lot of stuff in there, maybe blocking operations and we should certainly make
-      // it possible to return null and not block but it doesn't seem to be easy with Starlark
-      // structure as it is.
       Object result;
-      try (SilentCloseable c =
-          Profiler.instance()
-              .profile(ProfilerTask.STARLARK_REPOSITORY_FN, () -> rule.getLabel().toString())) {
-        result =
-            Starlark.call(
-                thread,
-                function,
-                /*args=*/ ImmutableList.of(starlarkRepositoryContext),
-                /*kwargs=*/ ImmutableMap.of());
+      try (Mutability mu = Mutability.create("Starlark repository")) {
+        StarlarkThread thread = new StarlarkThread(mu, starlarkSemantics);
+        thread.setPrintHandler(Event.makeDebugPrintHandler(env.getListener()));
+
+        // The fetch phase does not need the tools repository
+        // or the fragment map because it happens before analysis.
+        new BazelStarlarkContext(
+            BazelStarlarkContext.Phase.LOADING, // ("fetch")
+            /*toolsRepository=*/ null,
+            /*fragmentNameToClass=*/ null,
+            new SymbolGenerator<>(key),
+            /*analysisRuleLabel=*/ null,
+            /*networkAllowlistForTests=*/ null)
+            .storeInThread(thread);
+
+        // This rule is mainly executed for its side effect. Nevertheless, the return value is
+        // of importance, as it provides information on how the call has to be modified to be a
+        // reproducible rule.
+        //
+        // Also we do a lot of stuff in there, maybe blocking operations and we should certainly make
+        // it possible to return null and not block but it doesn't seem to be easy with Starlark
+        // structure as it is.
+        try (SilentCloseable c =
+            Profiler.instance()
+                .profile(ProfilerTask.STARLARK_REPOSITORY_FN, () -> rule.getLabel().toString())) {
+          result =
+              Starlark.call(
+                  thread,
+                  function,
+                  /*args=*/ ImmutableList.of(starlarkRepositoryContext),
+                  /*kwargs=*/ ImmutableMap.of());
+        }
       }
+
       RepositoryResolvedEvent resolved =
           new RepositoryResolvedEvent(
               rule, starlarkRepositoryContext.getAttr(), outputDirectory, result);
