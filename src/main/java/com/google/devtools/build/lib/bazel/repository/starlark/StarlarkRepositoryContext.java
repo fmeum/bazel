@@ -87,7 +87,7 @@ public class StarlarkRepositoryContext extends StarlarkBaseExternalContext {
       PathPackageLocator packageLocator,
       Path outputDirectory,
       ImmutableSet<PathFragment> ignoredPatterns,
-      Environment environment,
+      EnvironmentClosure environmentClosure,
       ImmutableMap<String, String> env,
       DownloadManager downloadManager,
       double timeoutScaling,
@@ -99,7 +99,7 @@ public class StarlarkRepositoryContext extends StarlarkBaseExternalContext {
       throws EvalException {
     super(
         outputDirectory,
-        environment,
+        environmentClosure,
         env,
         downloadManager,
         timeoutScaling,
@@ -208,7 +208,7 @@ public class StarlarkRepositoryContext extends StarlarkBaseExternalContext {
             linkPath.toString(),
             getIdentifyingStringForLogging(),
             thread.getCallerLocation());
-    env.getListener().post(w);
+    envClosure.getListener().post(w);
     try {
       checkInOutputDirectory("write", linkPath);
       makeDirectories(linkPath.getPath());
@@ -287,7 +287,7 @@ public class StarlarkRepositoryContext extends StarlarkBaseExternalContext {
             executable,
             getIdentifyingStringForLogging(),
             thread.getCallerLocation());
-    env.getListener().post(w);
+    envClosure.getListener().post(w);
     try {
       checkInOutputDirectory("write", p);
       makeDirectories(p.getPath());
@@ -347,7 +347,7 @@ public class StarlarkRepositoryContext extends StarlarkBaseExternalContext {
     WorkspaceRuleEvent w =
         WorkspaceRuleEvent.newDeleteEvent(
             starlarkPath.toString(), getIdentifyingStringForLogging(), thread.getCallerLocation());
-    env.getListener().post(w);
+    envClosure.getListener().post(w);
     try {
       Path path = starlarkPath.getPath();
       path.deleteTreesBelow();
@@ -394,7 +394,7 @@ public class StarlarkRepositoryContext extends StarlarkBaseExternalContext {
             strip,
             getIdentifyingStringForLogging(),
             thread.getCallerLocation());
-    env.getListener().post(w);
+    envClosure.getListener().post(w);
     try {
       PatchUtil.apply(starlarkPath.getPath(), strip, workingDirectory);
     } catch (PatchFailedException e) {
@@ -484,9 +484,9 @@ public class StarlarkRepositoryContext extends StarlarkBaseExternalContext {
             renameFilesMap,
             getIdentifyingStringForLogging(),
             thread.getCallerLocation());
-    env.getListener().post(w);
+    envClosure.getListener().post(w);
 
-    env.getListener()
+    envClosure.getListener()
         .post(
             new ExtractProgress(
                 outputPath.getPath().toString(), "Extracting " + archivePath.getBasename()));
@@ -498,7 +498,7 @@ public class StarlarkRepositoryContext extends StarlarkBaseExternalContext {
             .setPrefix(stripPrefix)
             .setRenameFiles(renameFilesMap)
             .build());
-    env.getListener().post(new ExtractProgress(outputPath.getPath().toString()));
+    envClosure.getListener().post(new ExtractProgress(outputPath.getPath().toString()));
   }
 
   @Override

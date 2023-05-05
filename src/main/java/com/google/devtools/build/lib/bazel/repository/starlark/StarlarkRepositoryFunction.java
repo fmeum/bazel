@@ -46,12 +46,16 @@ import com.google.devtools.build.lib.util.CPU;
 import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.build.lib.vfs.PathFragment;
 import com.google.devtools.build.lib.vfs.SyscallCache;
+import com.google.devtools.build.skyframe.SkyFunction;
 import com.google.devtools.build.skyframe.SkyFunction.Environment;
 import com.google.devtools.build.skyframe.SkyFunctionException.Transience;
 import com.google.devtools.build.skyframe.SkyKey;
 import java.io.IOException;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.locks.Condition;
+import java.util.concurrent.locks.ReentrantLock;
 import javax.annotation.Nullable;
 import net.starlark.java.eval.EvalException;
 import net.starlark.java.eval.Mutability;
@@ -175,7 +179,7 @@ public class StarlarkRepositoryFunction extends RepositoryFunction {
               packageLocator,
               outputDirectory,
               ignoredPatterns,
-              env,
+              EnvironmentClosure.synchronous(env),
               ImmutableMap.copyOf(clientEnvironment),
               downloadManager,
               timeoutScaling,
@@ -322,4 +326,63 @@ public class StarlarkRepositoryFunction extends RepositoryFunction {
   public void setRepositoryRemoteExecutor(RepositoryRemoteExecutor repositoryRemoteExecutor) {
     this.repositoryRemoteExecutor = repositoryRemoteExecutor;
   }
+
+  private static final ConcurrentHashMap<Label, Continuation> continuations =
+      new ConcurrentHashMap<>();
+
+  static class Continuation {
+    private final Thread thread;
+    private final ReentrantLock lock;
+    private final Condition restartRequested;
+    private final Condition envUpdateAvailable;
+    private volatile SkyFunction.Environment env;
+
+    private Continuation(Thread thread, ReentrantLock lock,
+        Condition restartRequested, Condition envUpdateAvailable) {
+      this.thread = thread;
+      this.lock = lock;
+      this.restartRequested = restartRequested;
+      this.envUpdateAvailable = envUpdateAvailable;
+    }
+
+    SkyFunction.Environment requestEnvUpdate() throws InterruptedException {
+      lock.lock();
+      try {
+        restartRequested.signal();
+        envUpdateAvailable.await();
+        return env;
+      } finally {
+        lock.unlock();
+      }
+    }
+
+    void updateEnv(SkyFunction.Environment env) throws InterruptedException {
+      lock.lock();
+      try {
+        this.env = env;
+        envUpdateAvailable.signal();
+        restartRequested.await();
+      } finally {
+        lock.unlock();
+      }
+    }
+
+    void done() throws InterruptedException {
+      lock.lock();
+      try {
+        restartRequested.signal();
+      } finally {
+        lock.unlock();
+      }
+    }
+
+    static Continuation create() {
+      ReentrantLock lock = new ReentrantLock();
+      Condition waitingForRestart = lock.newCondition();
+      Condition waitingForEnvUpdate = lock.newCondition();
+      return new Continuation(Thread.currentThread(), lock, waitingForRestart,
+          waitingForEnvUpdate);
+    }
+  }
+
 }

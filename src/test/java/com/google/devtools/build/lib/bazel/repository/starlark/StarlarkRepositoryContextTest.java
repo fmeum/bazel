@@ -162,7 +162,7 @@ public final class StarlarkRepositoryContextTest {
             packageLocator,
             outputDirectory,
             ignoredPathFragments,
-            environment,
+            EnvironmentClosure.synchronous(environment),
             envVariables,
             downloader,
             1.0,

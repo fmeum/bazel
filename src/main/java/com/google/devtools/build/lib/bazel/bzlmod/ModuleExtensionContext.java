@@ -17,6 +17,7 @@ package com.google.devtools.build.lib.bazel.bzlmod;
 import com.google.common.collect.ImmutableMap;
 import com.google.devtools.build.docgen.annot.DocCategory;
 import com.google.devtools.build.lib.bazel.repository.downloader.DownloadManager;
+import com.google.devtools.build.lib.bazel.repository.starlark.EnvironmentClosure;
 import com.google.devtools.build.lib.bazel.repository.starlark.StarlarkBaseExternalContext;
 import com.google.devtools.build.lib.runtime.ProcessWrapper;
 import com.google.devtools.build.lib.runtime.RepositoryRemoteExecutor;
@@ -60,7 +61,7 @@ public class ModuleExtensionContext extends StarlarkBaseExternalContext {
       StarlarkList<StarlarkBazelModule> modules) {
     super(
         workingDirectory,
-        env,
+        EnvironmentClosure.synchronous(env),
         envVariables,
         downloadManager,
         timeoutScaling,

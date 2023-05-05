@@ -43,7 +43,6 @@ import com.google.devtools.build.lib.packages.semantics.BuildLanguageOptions;
 import com.google.devtools.build.lib.profiler.Profiler;
 import com.google.devtools.build.lib.profiler.ProfilerTask;
 import com.google.devtools.build.lib.profiler.SilentCloseable;
-import com.google.devtools.build.lib.rules.repository.NeedsSkyframeRestartException;
 import com.google.devtools.build.lib.rules.repository.RepositoryFunction;
 import com.google.devtools.build.lib.rules.repository.RepositoryFunction.RepositoryFunctionException;
 import com.google.devtools.build.lib.runtime.ProcessWrapper;
@@ -91,13 +90,18 @@ import net.starlark.java.eval.StarlarkThread;
 import net.starlark.java.eval.StarlarkValue;
 import net.starlark.java.syntax.Location;
 
-/** A common base class for Starlark "ctx" objects related to external dependencies. */
+/**
+ * A common base class for Starlark "ctx" objects related to external dependencies.
+ */
 public abstract class StarlarkBaseExternalContext implements StarlarkValue {
-  /** Max. number of command line args added as a profiler description. */
+
+  /**
+   * Max. number of command line args added as a profiler description.
+   */
   private static final int MAX_PROFILE_ARGS_LEN = 80;
 
   protected final Path workingDirectory;
-  protected final Environment env;
+  protected final EnvironmentClosure envClosure;
   protected final ImmutableMap<String, String> envVariables;
   private final StarlarkOS osObject;
   protected final DownloadManager downloadManager;
@@ -109,7 +113,7 @@ public abstract class StarlarkBaseExternalContext implements StarlarkValue {
 
   protected StarlarkBaseExternalContext(
       Path workingDirectory,
-      Environment env,
+      EnvironmentClosure envClosure,
       Map<String, String> envVariables,
       DownloadManager downloadManager,
       double timeoutScaling,
@@ -117,7 +121,7 @@ public abstract class StarlarkBaseExternalContext implements StarlarkValue {
       StarlarkSemantics starlarkSemantics,
       @Nullable RepositoryRemoteExecutor remoteExecutor) {
     this.workingDirectory = workingDirectory;
-    this.env = env;
+    this.envClosure = envClosure;
     this.envVariables = ImmutableMap.copyOf(envVariables);
     this.osObject = new StarlarkOS(this.envVariables);
     this.downloadManager = downloadManager;
@@ -474,7 +478,7 @@ public abstract class StarlarkBaseExternalContext implements StarlarkValue {
             executable,
             getIdentifyingStringForLogging(),
             thread.getCallerLocation());
-    env.getListener().post(w);
+    envClosure.getListener().post(w);
     Path downloadedPath;
     try (SilentCloseable c =
         Profiler.instance().profile("fetching: " + getIdentifyingStringForLogging())) {
@@ -488,7 +492,7 @@ public abstract class StarlarkBaseExternalContext implements StarlarkValue {
               canonicalId,
               Optional.<String>absent(),
               outputPath.getPath(),
-              env.getListener(),
+              envClosure.getListener(),
               envVariables,
               getIdentifyingStringForLogging());
       if (executable) {
@@ -689,15 +693,15 @@ public abstract class StarlarkBaseExternalContext implements StarlarkValue {
               canonicalId,
               Optional.of(type),
               downloadDirectory,
-              env.getListener(),
+              envClosure.getListener(),
               envVariables,
               getIdentifyingStringForLogging());
     } catch (InterruptedException e) {
-      env.getListener().post(w);
+      envClosure.getListener().post(w);
       throw new RepositoryFunctionException(
           new IOException("thread interrupted"), Transience.TRANSIENT);
     } catch (IOException e) {
-      env.getListener().post(w);
+      envClosure.getListener().post(w);
       if (allowFail) {
         return StarlarkInfo.create(
             StructProvider.STRUCT, ImmutableMap.of("success", false), Location.BUILTIN);
@@ -708,10 +712,10 @@ public abstract class StarlarkBaseExternalContext implements StarlarkValue {
     if (checksumValidation != null) {
       throw checksumValidation;
     }
-    env.getListener().post(w);
+    envClosure.getListener().post(w);
     try (SilentCloseable c =
         Profiler.instance().profile("extracting: " + getIdentifyingStringForLogging())) {
-      env.getListener()
+      envClosure.getListener()
           .post(
               new ExtractProgress(
                   outputPath.getPath().toString(), "Extracting " + downloadedPath.getBaseName()));
@@ -723,7 +727,7 @@ public abstract class StarlarkBaseExternalContext implements StarlarkValue {
               .setPrefix(stripPrefix)
               .setRenameFiles(renameFilesMap)
               .build());
-      env.getListener().post(new ExtractProgress(outputPath.getPath().toString()));
+      envClosure.getListener().post(new ExtractProgress(outputPath.getPath().toString()));
     }
 
     StructImpl downloadResult = calculateDownloadResult(checksum, downloadedPath);
@@ -822,7 +826,7 @@ public abstract class StarlarkBaseExternalContext implements StarlarkValue {
             executable,
             getIdentifyingStringForLogging(),
             thread.getCallerLocation());
-    env.getListener().post(w);
+    envClosure.getListener().post(w);
     try {
       checkInOutputDirectory("write", p);
       makeDirectories(p.getPath());
@@ -901,7 +905,7 @@ public abstract class StarlarkBaseExternalContext implements StarlarkValue {
     WorkspaceRuleEvent w =
         WorkspaceRuleEvent.newReadEvent(
             p.toString(), getIdentifyingStringForLogging(), thread.getCallerLocation());
-    env.getListener().post(w);
+    envClosure.getListener().post(w);
     try {
       return FileSystemUtils.readContent(p.getPath(), ISO_8859_1);
     } catch (IOException e) {
@@ -928,7 +932,7 @@ public abstract class StarlarkBaseExternalContext implements StarlarkValue {
             doc = "string describing the current status of the fetch progress")
       })
   public void reportProgress(String status) {
-    env.getListener()
+    envClosure.getListener()
         .post(
             new FetchProgress() {
               @Override
@@ -959,7 +963,7 @@ public abstract class StarlarkBaseExternalContext implements StarlarkValue {
     // offending ctx.os expression.
     WorkspaceRuleEvent w =
         WorkspaceRuleEvent.newOsEvent(getIdentifyingStringForLogging(), Location.BUILTIN);
-    env.getListener().post(w);
+    envClosure.getListener().post(w);
     return osObject;
   }
 
@@ -1169,7 +1173,7 @@ public abstract class StarlarkBaseExternalContext implements StarlarkValue {
             quiet,
             getIdentifyingStringForLogging(),
             thread.getCallerLocation());
-    env.getListener().post(w);
+    envClosure.getListener().post(w);
     createDirectory(workingDirectory);
 
     long timeoutMillis = Math.round(timeout * 1000L * timeoutScaling);
@@ -1218,7 +1222,7 @@ public abstract class StarlarkBaseExternalContext implements StarlarkValue {
     WorkspaceRuleEvent w =
         WorkspaceRuleEvent.newWhichEvent(
             program, getIdentifyingStringForLogging(), thread.getCallerLocation());
-    env.getListener().post(w);
+    envClosure.getListener().post(w);
     if (program.contains("/") || program.contains("\\")) {
       throw Starlark.errorf(
           "Program argument of which() may not contain a / or a \\ ('%s' given)", program);
@@ -1265,18 +1269,17 @@ public abstract class StarlarkBaseExternalContext implements StarlarkValue {
 
   // Resolve the label given by value into a file path.
   protected StarlarkPath getPathFromLabel(Label label) throws EvalException, InterruptedException {
-    RootedPath rootedPath = RepositoryFunction.getRootedPathFromLabel(label, env);
+    RootedPath rootedPath = envClosure.with(
+        env -> RepositoryFunction.getRootedPathFromLabel(label, env));
     SkyKey fileSkyKey = FileValue.key(rootedPath);
-    FileValue fileValue;
-    try {
-      fileValue = (FileValue) env.getValueOrThrow(fileSkyKey, IOException.class);
-    } catch (IOException e) {
-      throw Starlark.errorf("%s", e.getMessage());
-    }
+    FileValue fileValue = (FileValue) envClosure.with(env -> {
+      try {
+        return env.getValueOrThrow(fileSkyKey, IOException.class);
+      } catch (IOException e) {
+        throw Starlark.errorf("%s", e.getMessage());
+      }
+    });
 
-    if (fileValue == null) {
-      throw new NeedsSkyframeRestartException();
-    }
     if (!fileValue.isFile() || fileValue.isSpecialFile()) {
       throw Starlark.errorf("Not a regular file: %s", rootedPath.asPath().getPathString());
     }
