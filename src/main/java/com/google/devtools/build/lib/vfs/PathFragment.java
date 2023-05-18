@@ -69,6 +69,9 @@ public abstract class PathFragment
     if (path.isEmpty()) {
       return EMPTY_FRAGMENT;
     }
+    if (path.chars().anyMatch(c -> c > 0xff)) {
+      throw new IllegalArgumentException("Non-Latin-1 path: " + path);
+    }
     int normalizationLevel = OS.needsToNormalize(path);
     String normalizedPath =
         normalizationLevel != OsPathPolicy.NORMALIZED
