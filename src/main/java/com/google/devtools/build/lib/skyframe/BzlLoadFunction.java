@@ -767,7 +767,8 @@ public class BzlLoadFunction implements SkyFunction {
             pkg,
             repoMapping,
             key.isSclDialect(),
-            isSclFlagEnabled);
+            isSclFlagEnabled,
+            key instanceof BzlLoadValue.KeyForBzlmodRootModuleLoad);
     if (loadLabels == null) {
       throw new BzlLoadFailedException(
           String.format(
@@ -1049,7 +1050,8 @@ public class BzlLoadFunction implements SkyFunction {
    * <p>If {@code withinSclDialect} is true, the labels are validated according to the rules of the
    * .scl dialect: Only strings beginning with {@code //} are allowed (no repo syntax, no relative
    * labels), and only .scl files may be loaded (not .bzl). If {@code isSclFlagEnabled} is true,
-   * then ".scl" is mentioned as a possible file extension in error messages.
+   * then ".scl" is mentioned as a possible file extension in error messages. If {@code
+   * isRootModuleFileLoad} is true, then load labels must be repo-relative.
    */
   @Nullable
   private static ImmutableList<Label> getLoadLabels(
@@ -1058,7 +1060,8 @@ public class BzlLoadFunction implements SkyFunction {
       PackageIdentifier base,
       RepositoryMapping repoMapping,
       boolean withinSclDialect,
-      boolean isSclFlagEnabled) {
+      boolean isSclFlagEnabled,
+      boolean isRootModuleFileLoad) {
     boolean ok = true;
 
     ImmutableList.Builder<Label> loadLabels = ImmutableList.builderWithExpectedSize(loads.size());
@@ -1069,6 +1072,10 @@ public class BzlLoadFunction implements SkyFunction {
       try {
         if (withinSclDialect && !unparsedLabel.startsWith("//")) {
           throw new LabelSyntaxException("in .scl files, load labels must begin with \"//\"");
+        }
+        if (isRootModuleFileLoad && unparsedLabel.startsWith("@")) {
+          throw new LabelSyntaxException(
+              "load labels in files loaded from MODULE.bazel files must not begin with \"@\"");
         }
         Label label =
             Label.parseWithPackageContext(unparsedLabel, PackageContext.of(base, repoMapping));
@@ -1106,7 +1113,8 @@ public class BzlLoadFunction implements SkyFunction {
         repoMapping,
         /* withinSclDialect= */ false,
         /* isSclFlagEnabled= */ starlarkSemantics.getBool(
-            BuildLanguageOptions.EXPERIMENTAL_ENABLE_SCL_DIALECT));
+            BuildLanguageOptions.EXPERIMENTAL_ENABLE_SCL_DIALECT),
+        /* isFromModuleFile= */ false);
   }
 
   /** Extracts load statements from compiled program (see {@link #getLoadLabels}). */

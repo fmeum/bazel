@@ -523,6 +523,11 @@ public final class StarlarkThread {
     return stack.build();
   }
 
+  /** Returns true if the current stack frame is a top-level call. */
+  public boolean isInTopLevelCall() {
+    return callstack.size() == 2 && callstack.get(0).fn.getName().equals(TOP_LEVEL);
+  }
+
   /** Sets the given throwable's stack trace to a Java-style version of {@link #getCallStack}. */
   void fillInStackTrace(Throwable throwable) {
     StackTraceElement[] trace = new StackTraceElement[callstack.size()];

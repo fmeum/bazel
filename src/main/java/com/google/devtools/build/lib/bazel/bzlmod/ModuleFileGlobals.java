@@ -209,6 +209,7 @@ public class ModuleFileGlobals {
       Iterable<?> bazelCompatibility,
       StarlarkThread thread)
       throws EvalException {
+    checkTopLevelCall(thread);
     if (moduleCalled) {
       throw Starlark.errorf("the module() directive can only be called once");
     }
@@ -320,7 +321,7 @@ public class ModuleFileGlobals {
       boolean devDependency,
       StarlarkThread thread)
       throws EvalException {
-    checkCalledFromModuleFile("bazel_dep", thread);
+    checkTopLevelCall(thread);
     hadNonModuleCall = true;
     if (repoName.isEmpty()) {
       repoName = name;
@@ -351,6 +352,7 @@ public class ModuleFileGlobals {
               + " selected. Should be absolute target patterns (ie. beginning with either"
               + " <code>@</code> or <code>//</code>). See <a href=\"${link toolchains}\">toolchain"
               + " resolution</a> for more information.",
+      useStarlarkThread = true,
       parameters = {
         @Param(
             name = "dev_dependency",
@@ -366,8 +368,10 @@ public class ModuleFileGlobals {
               name = "platform_labels",
               allowedTypes = {@ParamType(type = Sequence.class, generic1 = String.class)},
               doc = "The labels of the platforms to register."))
-  public void registerExecutionPlatforms(boolean devDependency, Sequence<?> platformLabels)
+  public void registerExecutionPlatforms(
+      boolean devDependency, Sequence<?> platformLabels, StarlarkThread thread)
       throws EvalException {
+    checkTopLevelCall(thread);
     hadNonModuleCall = true;
     if (ignoreDevDeps && devDependency) {
       return;
@@ -383,6 +387,7 @@ public class ModuleFileGlobals {
               + " Should be absolute target patterns (ie. beginning with either <code>@</code> or"
               + " <code>//</code>). See <a href=\"${link toolchains}\">toolchain resolution</a> for"
               + " more information.",
+      useStarlarkThread = true,
       parameters = {
         @Param(
             name = "dev_dependency",
@@ -401,8 +406,10 @@ public class ModuleFileGlobals {
                   "The labels of the toolchains to register. Labels can include "
                       + "<code>:all</code>, in which case, all toolchain-providing targets in the "
                       + "package will be registered in lexicographical order by name."))
-  public void registerToolchains(boolean devDependency, Sequence<?> toolchainLabels)
+  public void registerToolchains(
+      boolean devDependency, Sequence<?> toolchainLabels, StarlarkThread thread)
       throws EvalException {
+    checkTopLevelCall(thread);
     hadNonModuleCall = true;
     if (ignoreDevDeps && devDependency) {
       return;
@@ -439,7 +446,9 @@ public class ModuleFileGlobals {
       String rawExtensionBzlFile,
       String extensionName,
       boolean devDependency,
-      StarlarkThread thread) {
+      StarlarkThread thread)
+      throws EvalException {
+    checkTopLevelCall(thread);
     hadNonModuleCall = true;
 
     String extensionBzlFile = normalizeLabelString(rawExtensionBzlFile);
@@ -556,6 +565,8 @@ public class ModuleFileGlobals {
               extraKeywords = @Param(name = "kwargs"),
               useStarlarkThread = true)
           public void call(Dict<String, Object> kwargs, StarlarkThread thread) {
+            // Tags are explicitly allowed to be created within functions, not just at the top level
+            // of the MODULE.bazel file.
             tags.add(
                 Tag.builder()
                     .setTagName(tagName)
@@ -606,6 +617,7 @@ public class ModuleFileGlobals {
       Dict<String, Object> kwargs,
       StarlarkThread thread)
       throws EvalException {
+    checkTopLevelCall(thread);
     hadNonModuleCall = true;
     Location location = thread.getCallerLocation();
     for (String arg : Sequence.cast(args, String.class, "args")) {
@@ -632,6 +644,7 @@ public class ModuleFileGlobals {
               + " be pinned, or its registry overridden, or a list of patches applied. This"
               + " directive only takes effect in the root module; in other words, if a module"
               + " is used as a dependency by others, its own overrides are ignored.",
+      useStarlarkThread = true,
       parameters = {
         @Param(
             name = "module_name",
@@ -687,8 +700,10 @@ public class ModuleFileGlobals {
       String registry,
       Iterable<?> patches,
       Iterable<?> patchCmds,
-      StarlarkInt patchStrip)
+      StarlarkInt patchStrip,
+      StarlarkThread thread)
       throws EvalException {
+    checkTopLevelCall(thread);
     hadNonModuleCall = true;
     Version parsedVersion;
     try {
@@ -715,6 +730,7 @@ public class ModuleFileGlobals {
               + " more details. This"
               + " directive only takes effect in the root module; in other words, if a module"
               + " is used as a dependency by others, its own overrides are ignored.",
+      useStarlarkThread = true,
       parameters = {
         @Param(
             name = "module_name",
@@ -742,8 +758,10 @@ public class ModuleFileGlobals {
             positional = false,
             defaultValue = "''"),
       })
-  public void multipleVersionOverride(String moduleName, Iterable<?> versions, String registry)
+  public void multipleVersionOverride(
+      String moduleName, Iterable<?> versions, String registry, StarlarkThread thread)
       throws EvalException {
+    checkTopLevelCall(thread);
     hadNonModuleCall = true;
     ImmutableList.Builder<Version> parsedVersionsBuilder = new ImmutableList.Builder<>();
     try {
@@ -767,6 +785,7 @@ public class ModuleFileGlobals {
               + " certain location, instead of from a registry. This"
               + " directive only takes effect in the root module; in other words, if a module"
               + " is used as a dependency by others, its own overrides are ignored.",
+      useStarlarkThread = true,
       parameters = {
         @Param(
             name = "module_name",
@@ -826,8 +845,10 @@ public class ModuleFileGlobals {
       String stripPrefix,
       Iterable<?> patches,
       Iterable<?> patchCmds,
-      StarlarkInt patchStrip)
+      StarlarkInt patchStrip,
+      StarlarkThread thread)
       throws EvalException {
+    checkTopLevelCall(thread);
     hadNonModuleCall = true;
     ImmutableList<String> urlList =
         urls instanceof String
@@ -850,6 +871,7 @@ public class ModuleFileGlobals {
           "Specifies that a dependency should come from a certain commit of a Git repository. This"
               + " directive only takes effect in the root module; in other words, if a module"
               + " is used as a dependency by others, its own overrides are ignored.",
+      useStarlarkThread = true,
       parameters = {
         @Param(
             name = "module_name",
@@ -898,8 +920,10 @@ public class ModuleFileGlobals {
       String commit,
       Iterable<?> patches,
       Iterable<?> patchCmds,
-      StarlarkInt patchStrip)
+      StarlarkInt patchStrip,
+      StarlarkThread thread)
       throws EvalException {
+    checkTopLevelCall(thread);
     hadNonModuleCall = true;
     addOverride(
         moduleName,
@@ -917,6 +941,7 @@ public class ModuleFileGlobals {
           "Specifies that a dependency should come from a certain directory on local disk. This"
               + " directive only takes effect in the root module; in other words, if a module"
               + " is used as a dependency by others, its own overrides are ignored.",
+      useStarlarkThread = true,
       parameters = {
         @Param(
             name = "module_name",
@@ -929,7 +954,9 @@ public class ModuleFileGlobals {
             named = true,
             positional = false),
       })
-  public void localPathOverride(String moduleName, String path) throws EvalException {
+  public void localPathOverride(String moduleName, String path, StarlarkThread thread)
+      throws EvalException {
+    checkTopLevelCall(thread);
     hadNonModuleCall = true;
     addOverride(moduleName, LocalPathOverride.create(path));
   }
@@ -949,10 +976,12 @@ public class ModuleFileGlobals {
     return ImmutableMap.copyOf(overrides);
   }
 
-  private static void checkCalledFromModuleFile(String function, StarlarkThread starlarkThread)
-      throws EvalException {
-    if (!starlarkThread.getCallerLocation().file().endsWith("/MODULE.bazel")) {
-      throw Starlark.errorf("%s() can only be called from a MODULE.bazel file", function);
+  private static void checkTopLevelCall(StarlarkThread starlarkThread) throws EvalException {
+    if (!starlarkThread.isInTopLevelCall()) {
+      ImmutableList<StarlarkThread.CallStackEntry> callStack = starlarkThread.getCallStack();
+      throw Starlark.errorf(
+          "%s() can only be called at the top level of a MODULE.bazel file, not from a function",
+          callStack.get(callStack.size() - 1).name);
     }
   }
 }

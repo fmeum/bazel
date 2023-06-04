@@ -51,10 +51,7 @@ public class BazelBuildApiGlobals implements StarlarkBuildApiGlobals {
     // Fail if we're not called from the top level. (We prohibit calling visibility() from within
     // helper functions because it's more magical / less readable, and it makes it more difficult
     // for static tooling to mechanically find and modify visibility() declarations.)
-    ImmutableList<StarlarkThread.CallStackEntry> callStack = thread.getCallStack();
-    if (!(callStack.size() == 2
-        && callStack.get(0).name.equals(StarlarkThread.TOP_LEVEL)
-        && callStack.get(1).name.equals("visibility"))) {
+    if (!thread.isInTopLevelCall()) {
       throw Starlark.errorf(
           "load visibility may only be set at the top level, not inside a function");
     }

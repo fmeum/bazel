@@ -348,6 +348,8 @@ public class ModuleFileFunction implements SkyFunction {
     for (String load : program.getLoads()) {
       try {
         if (load.startsWith("@")) {
+          throw new LabelSyntaxException(
+              "load labels in MODULE.bazel files must not begin with \"@\"");
         }
         Label label = Label.parseWithRepoContext(load, repoContext);
         loadToBzlKeyBuilder.put(load, BzlLoadValue.keyForBzlmodRootModuleLoad(label));
