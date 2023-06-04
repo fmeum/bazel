@@ -363,9 +363,34 @@ public class BzlLoadValue implements SkyValue {
     }
   }
 
+  @Immutable
+  @AutoCodec.VisibleForSerialization
+  static final class KeyForBzlmodRootModuleLoad extends Key {
+    private final Label label;
+
+    private KeyForBzlmodRootModuleLoad(Label label) {
+      this.label = checkNotNull(label);
+    }
+
+    @Override
+    Label getLabel() {
+      return label;
+    }
+
+    @Override
+    Key getKeyForLoad(Label loadLabel) {
+      return keyForBzlmodRootModuleLoad(loadLabel);
+    }
+
+    @Override
+    BzlCompileValue.Key getCompileKey(Root root) {
+      return BzlCompileValue.key(root, label);
+    }
+  }
+
   /** Constructs a key for loading a regular (non-workspace) .bzl file, from the .bzl's label. */
   public static Key keyForBuild(Label label) {
-    return keyInterner.intern(new KeyForBuild(label, /*isBuildPrelude=*/ false));
+    return keyInterner.intern(new KeyForBuild(label, /* isBuildPrelude= */ false));
   }
 
   /**
@@ -393,5 +418,15 @@ public class BzlLoadValue implements SkyValue {
   /** Constructs a key for loading a .bzl for Bzlmod repos */
   public static Key keyForBzlmod(Label label) {
     return keyInterner.intern(new KeyForBzlmod(label));
+  }
+
+  public static Key keyForBzlmodRootModuleLoad(Label label) {
+//    if (!label.getRepository().equals(RepositoryName.MAIN)) {
+//      throw new LabelSyntaxException(
+//          "The MODULE.bazel file of the root module can only load from the root module's"
+//              + " repository, but got a load from "
+//              + label);
+//    }
+    return keyInterner.intern(new KeyForBzlmodRootModuleLoad(label));
   }
 }

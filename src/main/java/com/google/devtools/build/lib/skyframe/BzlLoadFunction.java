@@ -644,6 +644,10 @@ public class BzlLoadFunction implements SkyFunction {
       return key.getCompileKey(getBuiltinsRoot(builtinsBzlPath));
     }
 
+    if (key instanceof BzlLoadValue.KeyForBzlmodRootModuleLoad) {
+      return key.getCompileKey(Root.fromPath(directories.getWorkspace()));
+    }
+
     // Do package lookup.
     PathFragment dir = Label.getContainingDirectory(label);
     PackageIdentifier dirId = PackageIdentifier.create(label.getRepository(), dir);
@@ -880,6 +884,10 @@ public class BzlLoadFunction implements SkyFunction {
       // Otherwise, builtins .bzls should use the repo mapping of @bazel_tools, and *do* request a
       // normal RepositoryMappingValue (see logic in RepositoryMappingFunction).
       return RepositoryMapping.ALWAYS_FALLBACK;
+    }
+
+    if (key instanceof BzlLoadValue.KeyForBzlmodRootModuleLoad) {
+      return RepositoryMapping.create(ImmutableMap.of(), RepositoryName.MAIN);
     }
 
     Label enclosingFileLabel = key.getLabel();
@@ -1302,7 +1310,8 @@ public class BzlLoadFunction implements SkyFunction {
       }
       fp.addBytes(builtins.transitiveDigest);
       return builtins.predeclaredForWorkspaceBzl;
-    } else if (key instanceof BzlLoadValue.KeyForBzlmod) {
+    } else if (key instanceof BzlLoadValue.KeyForBzlmod
+        || key instanceof BzlLoadValue.KeyForBzlmodRootModuleLoad) {
       return starlarkEnv.getBzlmodBzlEnv();
     } else if (key instanceof BzlLoadValue.KeyForBuiltins) {
       return starlarkEnv.getBuiltinsBzlEnv();

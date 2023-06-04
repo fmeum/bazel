@@ -320,6 +320,7 @@ public class ModuleFileGlobals {
       boolean devDependency,
       StarlarkThread thread)
       throws EvalException {
+    checkCalledFromModuleFile("bazel_dep", thread);
     hadNonModuleCall = true;
     if (repoName.isEmpty()) {
       repoName = name;
@@ -946,5 +947,12 @@ public class ModuleFileGlobals {
 
   public ImmutableMap<String, ModuleOverride> buildOverrides() {
     return ImmutableMap.copyOf(overrides);
+  }
+
+  private static void checkCalledFromModuleFile(String function, StarlarkThread starlarkThread)
+      throws EvalException {
+    if (!starlarkThread.getCallerLocation().file().endsWith("/MODULE.bazel")) {
+      throw Starlark.errorf("%s() can only be called from a MODULE.bazel file", function);
+    }
   }
 }

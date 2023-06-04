@@ -23,11 +23,16 @@ import com.google.common.collect.Maps;
 import com.google.devtools.build.lib.actions.FileValue;
 import com.google.devtools.build.lib.bazel.bzlmod.ModuleFileValue.NonRootModuleFileValue;
 import com.google.devtools.build.lib.bazel.bzlmod.ModuleFileValue.RootModuleFileValue;
+import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.cmdline.LabelConstants;
+import com.google.devtools.build.lib.cmdline.LabelSyntaxException;
+import com.google.devtools.build.lib.cmdline.RepositoryMapping;
 import com.google.devtools.build.lib.cmdline.RepositoryName;
 import com.google.devtools.build.lib.events.Event;
 import com.google.devtools.build.lib.rules.repository.RepositoryDirectoryValue;
 import com.google.devtools.build.lib.server.FailureDetails.ExternalDeps.Code;
+import com.google.devtools.build.lib.skyframe.BzlLoadFunction;
+import com.google.devtools.build.lib.skyframe.BzlLoadValue;
 import com.google.devtools.build.lib.skyframe.PrecomputedValue;
 import com.google.devtools.build.lib.skyframe.PrecomputedValue.Precomputed;
 import com.google.devtools.build.lib.util.Fingerprint;
@@ -39,6 +44,7 @@ import com.google.devtools.build.skyframe.SkyFunction;
 import com.google.devtools.build.skyframe.SkyFunctionException;
 import com.google.devtools.build.skyframe.SkyKey;
 import com.google.devtools.build.skyframe.SkyValue;
+import com.google.devtools.build.skyframe.SkyframeLookupResult;
 import com.google.errorprone.annotations.FormatMethod;
 import java.io.IOException;
 import java.net.URISyntaxException;
@@ -49,6 +55,7 @@ import java.util.Objects;
 import java.util.Optional;
 import javax.annotation.Nullable;
 import net.starlark.java.eval.EvalException;
+import net.starlark.java.eval.Module;
 import net.starlark.java.eval.Mutability;
 import net.starlark.java.eval.Starlark;
 import net.starlark.java.eval.StarlarkSemantics;
@@ -161,6 +168,9 @@ public class ModuleFileFunction implements SkyFunction {
             /* ignoreDevDeps= */ Objects.requireNonNull(IGNORE_DEV_DEPS.get(env)),
             starlarkSemantics,
             env);
+    if (moduleFileGlobals == null) {
+      return null;
+    }
     InterimModule module = moduleFileGlobals.buildModule();
 
     ImmutableMap<String, ModuleOverride> moduleOverrides = moduleFileGlobals.buildOverrides();
@@ -205,14 +215,21 @@ public class ModuleFileFunction implements SkyFunction {
 
     ModuleFileGlobals moduleFileGlobals =
         new ModuleFileGlobals(builtinModules, moduleKey, registry, ignoreDevDeps);
-    try (Mutability mu = Mutability.create("module file", moduleKey)) {
       net.starlark.java.eval.Module predeclaredEnv =
           getPredeclaredEnv(moduleFileGlobals, starlarkSemantics);
+    try {
       Program program = Program.compileFile(starlarkFile, predeclaredEnv);
       // TODO(wyv): check that `program` has no `def`, `if`, etc
-      StarlarkThread thread = new StarlarkThread(mu, starlarkSemantics);
-      thread.setPrintHandler(Event.makeDebugPrintHandler(env.getListener()));
-      Starlark.execFileProgram(program, predeclaredEnv, thread);
+      Optional<StarlarkThread.Loader> loader = getLoader(program, moduleKey, env);
+      if (loader == null) {
+        return null;
+      }
+      try (Mutability mu = Mutability.create("module file", moduleKey)) {
+        StarlarkThread thread = new StarlarkThread(mu, starlarkSemantics);
+        thread.setPrintHandler(Event.makeDebugPrintHandler(env.getListener()));
+        loader.ifPresent(thread::setLoader);
+        Starlark.execFileProgram(program, predeclaredEnv, thread);
+      }
     } catch (SyntaxError.Exception e) {
       Event.replayEventsOn(env.getListener(), e.errors());
       throw errorf(Code.BAD_MODULE, "error executing MODULE.bazel file for %s", moduleKey);
@@ -314,6 +331,49 @@ public class ModuleFileFunction implements SkyFunction {
     ImmutableMap.Builder<String, Object> env = ImmutableMap.builder();
     Starlark.addMethods(env, moduleFileGlobals, starlarkSemantics);
     return net.starlark.java.eval.Module.withPredeclared(starlarkSemantics, env.buildOrThrow());
+  }
+
+  private static Optional<StarlarkThread.Loader> getLoader(
+      Program program, ModuleKey module, Environment env)
+      throws EvalException, InterruptedException {
+    if (!module.equals(ModuleKey.ROOT)) {
+      return Optional.empty();
+    }
+    
+    Label.RepoContext repoContext =
+        Label.RepoContext.of(
+            RepositoryName.MAIN, RepositoryMapping.create(ImmutableMap.of(), RepositoryName.MAIN));
+    ImmutableMap.Builder<String, BzlLoadValue.Key> loadToBzlKeyBuilder =
+        ImmutableMap.builderWithExpectedSize(program.getLoads().size());
+    for (String load : program.getLoads()) {
+      try {
+        if (load.startsWith("@")) {
+        }
+        Label label = Label.parseWithRepoContext(load, repoContext);
+        loadToBzlKeyBuilder.put(load, BzlLoadValue.keyForBzlmodRootModuleLoad(label));
+      } catch (LabelSyntaxException e) {
+        throw Starlark.errorf("invalid load label %s: %s", load, e.getMessage());
+      }
+    }
+    ImmutableMap<String, BzlLoadValue.Key> loadToBzlKey = loadToBzlKeyBuilder.buildOrThrow();
+
+    ImmutableMap.Builder<String, Module> modules =
+        ImmutableMap.builderWithExpectedSize(loadToBzlKey.size());
+    SkyframeLookupResult result = env.getValuesAndExceptions(loadToBzlKey.values());
+    try {
+      for (Map.Entry<String, BzlLoadValue.Key> entry : loadToBzlKey.entrySet()) {
+        SkyValue bzlLoadValue =
+            result.getOrThrow(entry.getValue(), BzlLoadFunction.BzlLoadFailedException.class);
+        if (bzlLoadValue == null) {
+          return null;
+        }
+        modules.put(entry.getKey(), ((BzlLoadValue) bzlLoadValue).getModule());
+      }
+    } catch (BzlLoadFunction.BzlLoadFailedException e) {
+      throw Starlark.errorf("%s", e.getMessage());
+    }
+
+    return Optional.of(modules.buildOrThrow()::get);
   }
 
   @FormatMethod
