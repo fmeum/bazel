@@ -20,6 +20,7 @@ import static com.google.devtools.build.lib.bazel.bzlmod.BzlmodTestUtil.createMo
 import static org.junit.Assert.assertThrows;
 import static org.junit.Assert.fail;
 
+import com.github.benmanes.caffeine.cache.Caffeine;
 import com.google.common.base.Suppliers;
 import com.google.common.collect.ImmutableBiMap;
 import com.google.common.collect.ImmutableList;
@@ -42,6 +43,7 @@ import com.google.devtools.build.lib.rules.repository.LocalRepositoryRule;
 import com.google.devtools.build.lib.rules.repository.RepositoryDelegatorFunction;
 import com.google.devtools.build.lib.rules.repository.RepositoryFunction;
 import com.google.devtools.build.lib.skyframe.BazelSkyframeExecutorConstants;
+import com.google.devtools.build.lib.skyframe.BzlLoadFunction;
 import com.google.devtools.build.lib.skyframe.BzlmodRepoRuleFunction;
 import com.google.devtools.build.lib.skyframe.ExternalFilesHelper;
 import com.google.devtools.build.lib.skyframe.ExternalFilesHelper.ExternalFileAction;
@@ -54,6 +56,7 @@ import com.google.devtools.build.lib.starlarkbuildapi.repository.RepositoryBoots
 import com.google.devtools.build.lib.testutil.FoundationTestCase;
 import com.google.devtools.build.lib.testutil.TestRuleClassProvider;
 import com.google.devtools.build.lib.util.io.TimestampGranularityMonitor;
+import com.google.devtools.build.lib.vfs.DigestHashFunction;
 import com.google.devtools.build.lib.vfs.FileStateKey;
 import com.google.devtools.build.lib.vfs.Root;
 import com.google.devtools.build.lib.vfs.SyscallCache;
@@ -152,6 +155,13 @@ public class ModuleFileFunctionTest extends FoundationTestCase {
                 .put(
                     BzlmodRepoRuleValue.BZLMOD_REPO_RULE,
                     new BzlmodRepoRuleFunction(ruleClassProvider, directories))
+                .put(
+                    SkyFunctions.BZL_LOAD,
+                    BzlLoadFunction.create(
+                        ruleClassProvider,
+                        directories,
+                        DigestHashFunction.SHA256.getHashFunction(),
+                        Caffeine.newBuilder().build()))
                 .buildOrThrow(),
             differencer);
 
@@ -1011,5 +1021,116 @@ public class ModuleFileFunctionTest extends FoundationTestCase {
     evaluator.evaluate(ImmutableList.of(ModuleFileValue.KEY_FOR_ROOT_MODULE), evaluationContext);
 
     assertContainsEvent("if module() is called, it must be called before any other functions");
+  }
+
+  @Test
+  public void load() throws Exception {
+    scratch.file(
+        rootDirectory.getRelative("MODULE.bazel").getPathString(),
+        "load('//dir:foo.bzl', 'declare_foo_tags', 'FOO_REPOS')",
+        "load('//:deps.bzl', 'DEPS')",
+        "module(name='aaa',version='0.1')",
+        "[bazel_dep(name = name, version = version) for name, version in DEPS.items()]",
+        "foo_deps = use_extension('@foo//:extensions.bzl', 'foo_deps')",
+        "declare_foo_tags(foo_deps)",
+        "use_repo(foo_deps, *FOO_REPOS)");
+    scratch.file(
+        rootDirectory.getRelative("dir/foo.bzl").getPathString(),
+        "load(':indirect.bzl', _FOO_REPOS = 'FOO_REPOS')",
+        "def declare_foo_tags(foo_deps):",
+        "  foo_deps.mod(name = 'baz', version = '1.0')",
+        "  foo_deps.mod(name = 'quz', version = '2.0')",
+        "FOO_REPOS = _FOO_REPOS");
+    scratch.file(
+        rootDirectory.getRelative("dir/indirect.bzl").getPathString(),
+        "FOO_REPOS = ['baz', 'quz']");
+    scratch.file(
+        rootDirectory.getRelative("deps.bzl").getPathString(),
+        "DEPS = {'bar': '1.0', 'foo': '2.0'}");
+    FakeRegistry registry = registryFactory.newFakeRegistry("/foo");
+    ModuleFileFunction.REGISTRIES.set(differencer, ImmutableList.of(registry.getUrl()));
+
+    EvaluationResult<RootModuleFileValue> result =
+        evaluator.evaluate(
+            ImmutableList.of(ModuleFileValue.KEY_FOR_ROOT_MODULE), evaluationContext);
+    if (result.hasError()) {
+      fail(result.getError().toString());
+    }
+    RootModuleFileValue rootModuleFileValue = result.get(ModuleFileValue.KEY_FOR_ROOT_MODULE);
+    assertThat(rootModuleFileValue.getModule())
+        .isEqualTo(
+            InterimModuleBuilder.create("aaa", "0.1")
+                .setKey(ModuleKey.ROOT)
+                .addDep("bar", ModuleKey.create("bar", Version.parse("1.0")))
+                .addDep("foo", ModuleKey.create("foo", Version.parse("2.0")))
+                .addExtensionUsage(
+                    ModuleExtensionUsage.builder()
+                        .setExtensionBzlFile("@foo//:extensions.bzl")
+                        .setExtensionName("foo_deps")
+                        .setLocation(Location.fromFileLineColumn("<root>/MODULE.bazel", 5, 25))
+                        .setImports(ImmutableBiMap.of("baz", "baz", "quz", "quz"))
+                        .setDevImports(ImmutableSet.of())
+                        .setUsingModule(ModuleKey.ROOT)
+                        .addTag(
+                            Tag.builder()
+                                .setTagName("mod")
+                                .setLocation(
+                                    Location.fromFileLineColumn("/workspace/dir/foo.bzl", 3, 15))
+                                .setDevDependency(false)
+                                .setAttributeValues(
+                                    AttributeValues.create(
+                                        ImmutableMap.of(
+                                            "name", "baz",
+                                            "version", "1.0")))
+                                .build())
+                        .addTag(
+                            Tag.builder()
+                                .setTagName("mod")
+                                .setLocation(
+                                    Location.fromFileLineColumn("/workspace/dir/foo.bzl", 4, 15))
+                                .setDevDependency(false)
+                                .setAttributeValues(
+                                    AttributeValues.create(
+                                        ImmutableMap.of(
+                                            "name", "quz",
+                                            "version", "2.0")))
+                                .build())
+                        .build())
+                .build());
+  }
+
+  @Test
+  public void load_directLabelWithRepoFails() throws Exception {
+    scratch.file(
+        rootDirectory.getRelative("MODULE.bazel").getPathString(),
+        "load('@other_mod//:foo.bzl', 'foo')");
+    FakeRegistry registry = registryFactory.newFakeRegistry("/foo");
+    ModuleFileFunction.REGISTRIES.set(differencer, ImmutableList.of(registry.getUrl()));
+
+    reporter.removeHandler(failFastHandler); // expect failures
+    evaluator.evaluate(ImmutableList.of(ModuleFileValue.KEY_FOR_ROOT_MODULE), evaluationContext);
+
+    assertContainsEvent(
+        "ERROR <root>/MODULE.bazel:1:6: invalid load label @other_mod//:foo.bzl: in MODULE.bazel"
+            + " files, load labels must begin with \"//\"");
+  }
+
+  @Test
+  public void load_indirectLabelWithRepoFails() throws Exception {
+    scratch.file(
+        rootDirectory.getRelative("MODULE.bazel").getPathString(), "load('//:foo.bzl', 'foo')");
+    scratch.file(
+        rootDirectory.getRelative("foo.bzl").getPathString(),
+        "load('@other_mod//:foo.bzl', _foo = 'foo')",
+        "foo = _foo");
+    FakeRegistry registry = registryFactory.newFakeRegistry("/foo");
+    ModuleFileFunction.REGISTRIES.set(differencer, ImmutableList.of(registry.getUrl()));
+
+    reporter.removeHandler(failFastHandler); // expect failures
+    evaluator.evaluate(ImmutableList.of(ModuleFileValue.KEY_FOR_ROOT_MODULE), evaluationContext);
+
+    assertContainsEvent(
+        "ERROR /workspace/foo.bzl:1:6: in load statement: in files loaded from MODULE.bazel "
+            + "files, load labels must not begin with \"@\"");
   }
 }

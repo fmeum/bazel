@@ -335,26 +335,32 @@ public class ModuleFileFunction implements SkyFunction {
 
   private static Optional<StarlarkThread.Loader> getLoader(
       Program program, ModuleKey module, Environment env)
-      throws EvalException, InterruptedException {
+      throws InterruptedException, ModuleFileFunctionException {
     if (!module.equals(ModuleKey.ROOT)) {
       return Optional.empty();
     }
-    
+
     Label.RepoContext repoContext =
         Label.RepoContext.of(
             RepositoryName.MAIN, RepositoryMapping.create(ImmutableMap.of(), RepositoryName.MAIN));
     ImmutableMap.Builder<String, BzlLoadValue.Key> loadToBzlKeyBuilder =
         ImmutableMap.builderWithExpectedSize(program.getLoads().size());
-    for (String load : program.getLoads()) {
+    for (int i = 0; i < program.getLoads().size(); i++) {
+      String load = program.getLoads().get(i);
       try {
-        if (load.startsWith("@")) {
+        if (!load.startsWith("//")) {
           throw new LabelSyntaxException(
-              "load labels in MODULE.bazel files must not begin with \"@\"");
+              "in MODULE.bazel files, load labels must begin with \"//\"");
         }
         Label label = Label.parseWithRepoContext(load, repoContext);
         loadToBzlKeyBuilder.put(load, BzlLoadValue.keyForBzlmodRootModuleLoad(label));
       } catch (LabelSyntaxException e) {
-        throw Starlark.errorf("invalid load label %s: %s", load, e.getMessage());
+        env.getListener()
+            .handle(
+                Event.error(
+                    program.getLoadLocation(i),
+                    String.format("invalid load label %s: %s", load, e.getMessage())));
+        throw errorf(Code.BAD_MODULE, e, "Invalid load label %s", load);
       }
     }
     ImmutableMap<String, BzlLoadValue.Key> loadToBzlKey = loadToBzlKeyBuilder.buildOrThrow();
@@ -372,7 +378,7 @@ public class ModuleFileFunction implements SkyFunction {
         modules.put(entry.getKey(), ((BzlLoadValue) bzlLoadValue).getModule());
       }
     } catch (BzlLoadFunction.BzlLoadFailedException e) {
-      throw Starlark.errorf("%s", e.getMessage());
+      throw errorf(Code.BAD_MODULE, e, "load failed");
     }
 
     return Optional.of(modules.buildOrThrow()::get);

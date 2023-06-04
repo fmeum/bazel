@@ -1075,7 +1075,7 @@ public class BzlLoadFunction implements SkyFunction {
         }
         if (isRootModuleFileLoad && unparsedLabel.startsWith("@")) {
           throw new LabelSyntaxException(
-              "load labels in files loaded from MODULE.bazel files must not begin with \"@\"");
+              "in files loaded from MODULE.bazel files, load labels must not begin with \"@\"");
         }
         Label label =
             Label.parseWithPackageContext(unparsedLabel, PackageContext.of(base, repoMapping));
