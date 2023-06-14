@@ -13,17 +13,27 @@
 // limitations under the License.
 package com.google.devtools.build.lib.analysis.producers;
 
+import static java.util.Comparator.comparing;
+
 import com.google.devtools.build.lib.analysis.ConfiguredTargetValue;
 import com.google.devtools.build.lib.causes.Cause;
 import com.google.devtools.build.lib.cmdline.PackageIdentifier;
 import com.google.devtools.build.lib.collect.nestedset.NestedSet;
 import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
 import com.google.devtools.build.lib.packages.Package;
+import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.concurrent.ConcurrentHashMap;
 import javax.annotation.Nullable;
 
 /** Tuple storing state associated with transitive dependencies. */
 public final class TransitiveDependencyState {
+  private static final Comparator<Package> PACKAGE_COMPARATOR =
+      comparing(Package::getPackageIdentifier);
+  private static final Comparator<ConfiguredTargetValue> CONFIGURED_TARGET_VALUE_COMPARATOR =
+      comparing((ConfiguredTargetValue value) -> value.getConfiguredTarget().getLabel())
+          .thenComparing(value -> value.getConfiguredTarget().getConfigurationChecksum());
+
   private final NestedSetBuilder<Cause> transitiveRootCauses;
 
   /**
@@ -36,6 +46,7 @@ public final class TransitiveDependencyState {
    * com.google.devtools.build.lib.skyframe.SkyframeExecutor#shouldStoreTransitivePackagesInLoadingAndAnalysis}.
    */
   @Nullable private final NestedSetBuilder<Package> transitivePackages;
+  private final ArrayList<Object> depsToBeSorted = new ArrayList<>();
 
   /**
    * Contains packages that were previously computed.
@@ -75,6 +86,21 @@ public final class TransitiveDependencyState {
 
   @Nullable
   public NestedSetBuilder<Package> transitivePackages() {
+    if (transitivePackages == null) {
+      return null;
+    }
+    depsToBeSorted.stream()
+        .filter(dep -> dep instanceof Package)
+        .map(dep -> (Package) dep)
+        .sorted(PACKAGE_COMPARATOR)
+        .forEachOrdered(transitivePackages::add);
+    depsToBeSorted.stream()
+        .filter(dep -> dep instanceof ConfiguredTargetValue)
+        .map(dep -> (ConfiguredTargetValue) dep)
+        .sorted(CONFIGURED_TARGET_VALUE_COMPARATOR)
+        .map(ConfiguredTargetValue::getTransitivePackages)
+        .forEachOrdered(transitivePackages::addTransitive);
+    depsToBeSorted.clear();
     return transitivePackages;
   }
 
@@ -95,7 +121,7 @@ public final class TransitiveDependencyState {
     if (transitivePackages == null) {
       return;
     }
-    transitivePackages.addTransitive(configuredTarget.getTransitivePackages());
+    depsToBeSorted.add(configuredTarget);
   }
 
   /**
@@ -107,7 +133,7 @@ public final class TransitiveDependencyState {
     if (transitivePackages == null) {
       return;
     }
-    transitivePackages.add(pkg);
+    depsToBeSorted.add(pkg);
   }
 
   @Nullable
