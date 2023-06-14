@@ -15,6 +15,7 @@ package com.google.devtools.build.lib.analysis;
 
 import static com.google.common.collect.ImmutableSet.toImmutableSet;
 import static com.google.common.collect.ImmutableSortedMap.toImmutableSortedMap;
+import static com.google.devtools.build.lib.actions.ActionKeyContext.describeNestedSetFingerprint;
 import static java.nio.charset.StandardCharsets.ISO_8859_1;
 import static java.util.Comparator.comparing;
 
@@ -26,10 +27,11 @@ import com.google.devtools.build.lib.actions.ActionOwner;
 import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.actions.Artifact.ArtifactExpander;
 import com.google.devtools.build.lib.actions.CommandLineExpansionException;
-import com.google.devtools.build.lib.actions.CommandLineItem.MapFn;
+import com.google.devtools.build.lib.actions.CommandLineItem.ExceptionlessMapFn;
 import com.google.devtools.build.lib.actions.ExecException;
 import com.google.devtools.build.lib.analysis.actions.AbstractFileWriteAction;
 import com.google.devtools.build.lib.analysis.actions.DeterministicWriter;
+import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.cmdline.RepositoryMapping;
 import com.google.devtools.build.lib.cmdline.RepositoryName;
 import com.google.devtools.build.lib.collect.nestedset.NestedSet;
@@ -50,7 +52,7 @@ public final class RepoMappingManifestAction extends AbstractFileWriteAction {
 
   // Uses MapFn's args parameter just like Fingerprint#addString to compute a cacheable fingerprint
   // of just the repo name and mapping of a given Package.
-  private static final MapFn<Package> REPO_AND_MAPPING_DIGEST_FN =
+  private static final ExceptionlessMapFn<Package> REPO_AND_MAPPING_DIGEST_FN =
       (pkg, args) -> {
         args.accept(pkg.getPackageIdentifier().getRepository().getName());
 
@@ -61,6 +63,14 @@ public final class RepoMappingManifestAction extends AbstractFileWriteAction {
               args.accept(apparentName);
               args.accept(canonicalName.getName());
             });
+      };
+
+  private static final ExceptionlessMapFn<Artifact> OWNER_FN =
+      (pkg, args) -> {
+        Label owner = pkg.getOwner();
+        if (owner != null) {
+          args.accept(owner.getRepository().getName());
+        }
       };
 
   private final NestedSet<Package> transitivePackages;
@@ -97,8 +107,19 @@ public final class RepoMappingManifestAction extends AbstractFileWriteAction {
       throws CommandLineExpansionException, EvalException, InterruptedException {
     fp.addUUID(MY_UUID);
     actionKeyContext.addNestedSetToFingerprint(REPO_AND_MAPPING_DIGEST_FN, fp, transitivePackages);
-    actionKeyContext.addNestedSetToFingerprint(fp, runfilesArtifacts);
+    actionKeyContext.addNestedSetToFingerprint(OWNER_FN, fp, runfilesArtifacts);
     fp.addString(workspaceName);
+  }
+
+  @Override
+  public String describeKey() {
+    return String.format("uuid: %s\n", MY_UUID)
+        + String.format(
+            "transitivePackages: %s\n",
+            describeNestedSetFingerprint(REPO_AND_MAPPING_DIGEST_FN, transitivePackages))
+        + String.format(
+            "runfilesArtifacts: %s\n", describeNestedSetFingerprint(OWNER_FN, runfilesArtifacts))
+        + String.format("workspaceName: %s\n", workspaceName);
   }
 
   @Override
