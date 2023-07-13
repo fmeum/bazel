@@ -13,13 +13,19 @@
 // limitations under the License.
 package com.google.devtools.build.lib.runtime.commands;
 
+import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableSet;
 import com.google.common.hash.HashFunction;
+import com.google.devtools.build.lib.cmdline.RepositoryName;
+import com.google.devtools.build.lib.cmdline.SignedTargetPattern;
+import com.google.devtools.build.lib.cmdline.TargetParsingException;
 import com.google.devtools.build.lib.events.Event;
 import com.google.devtools.build.lib.packages.Target;
 import com.google.devtools.build.lib.pkgcache.PackageOptions;
 import com.google.devtools.build.lib.profiler.Profiler;
 import com.google.devtools.build.lib.profiler.SilentCloseable;
 import com.google.devtools.build.lib.query2.common.AbstractBlazeQueryEnvironment;
+import com.google.devtools.build.lib.query2.common.UniverseScope;
 import com.google.devtools.build.lib.query2.engine.QueryEvalResult;
 import com.google.devtools.build.lib.query2.engine.QueryException;
 import com.google.devtools.build.lib.query2.engine.QueryExpression;
@@ -41,6 +47,8 @@ import com.google.devtools.build.lib.server.FailureDetails;
 import com.google.devtools.build.lib.server.FailureDetails.FailureDetail;
 import com.google.devtools.build.lib.server.FailureDetails.Query;
 import com.google.devtools.build.lib.server.FailureDetails.Query.Code;
+import com.google.devtools.build.lib.skyframe.PrecomputedValue;
+import com.google.devtools.build.lib.skyframe.TransitiveBaseTraversalFunction;
 import com.google.devtools.build.lib.util.DetailedExitCode;
 import com.google.devtools.build.lib.util.Either;
 import com.google.devtools.build.lib.util.ExitCode;
@@ -50,6 +58,7 @@ import java.io.IOException;
 import java.io.OutputStream;
 import java.nio.channels.ClosedByInterruptException;
 import java.util.Set;
+import java.util.function.Predicate;
 
 /** Command line wrapper for executing a query with blaze. */
 @Command(
@@ -143,6 +152,21 @@ public final class QueryCommand extends QueryEnvironmentBasedCommand {
       callback = QueryUtil.newOrderedAggregateAllOutputFormatterCallback(queryEnv);
     }
 
+    BlazeCommandResult[] mutableResult = new BlazeCommandResult[1];
+    computeReposToTraverse(env, queryOptions, queryEnv, expr)
+        .consume(
+            result -> mutableResult[0] = result,
+            reposToTraverse ->
+                env.getSkyframeExecutor()
+                    .injectExtraPrecomputedValues(
+                        ImmutableList.of(
+                            PrecomputedValue.injected(
+                                TransitiveBaseTraversalFunction.REPOS_TO_TRAVERSE,
+                                reposToTraverse))));
+    if (mutableResult[0] != null) {
+      return Either.ofLeft(mutableResult[0]);
+    }
+
     QueryEvalResult result;
     boolean catastrophe = true;
     try {
@@ -202,11 +226,60 @@ public final class QueryCommand extends QueryEnvironmentBasedCommand {
     return Either.ofRight(result);
   }
 
+  private static Either<BlazeCommandResult, Predicate<RepositoryName>> computeReposToTraverse(
+      CommandEnvironment env,
+      QueryOptions queryOptions,
+      AbstractBlazeQueryEnvironment<Target> queryEnv,
+      QueryExpression expr) {
+    if (!queryOptions.assumeClosedUniverse) {
+      return Either.ofRight(repositoryName -> true);
+    }
+
+    UniverseScope universeScope = queryEnv.getUniverseScope();
+    if (universeScope.isEmpty()) {
+      String message = "--assume_closed_universe requires SkyQuery";
+      env.getReporter().handle(Event.error(null, message));
+      return Either.ofLeft(
+          BlazeCommandResult.detailedExitCode(
+              DetailedExitCode.of(
+                  FailureDetail.newBuilder()
+                      .setMessage(message)
+                      .setQuery(Query.newBuilder().setCode(Code.ILLEGAL_FLAG_COMBINATION))
+                      .build())));
+    }
+
+    ImmutableList<String> patterns =
+        universeScope.getUniverseKey(expr, env.getRelativeWorkingDirectory()).getPatterns();
+    ImmutableSet.Builder<RepositoryName> reposToTraverseBuilder = ImmutableSet.builder();
+    for (String pattern : patterns) {
+      try {
+        reposToTraverseBuilder.add(
+            SignedTargetPattern.parse(pattern, queryEnv.getTargetPatternParser())
+                .pattern()
+                .getRepository());
+      } catch (TargetParsingException e) {
+        String message =
+            String.format(
+                "Error while parsing signed target pattern '%s' in universe scope: %s",
+                pattern, e.getMessage());
+        env.getReporter().handle(Event.error(null, message));
+        return Either.ofLeft(
+            BlazeCommandResult.detailedExitCode(
+                DetailedExitCode.of(
+                    FailureDetail.newBuilder()
+                        .setMessage(e.getMessage())
+                        .setQuery(Query.newBuilder().setCode(Code.SYNTAX_ERROR))
+                        .build())));
+      }
+    }
+    return Either.ofRight(reposToTraverseBuilder.build()::contains);
+  }
+
   /**
-   * When Blaze is used with --color=no or not in a tty a ansi characters filter is set so that
-   * we don't print fancy colors in non-supporting terminal outputs. But query output, specifically
-   * the binary formatters, can print actual data that contain ansi bytes/chars. Because of that
-   * we need to remove the filtering before printing any query result.
+   * When Blaze is used with --color=no or not in a tty a ansi characters filter is set so that we
+   * don't print fancy colors in non-supporting terminal outputs. But query output, specifically the
+   * binary formatters, can print actual data that contain ansi bytes/chars. Because of that we need
+   * to remove the filtering before printing any query result.
    */
   private static void disableAnsiCharactersFiltering(CommandEnvironment env) {
     env.getReporter().switchToAnsiAllowingHandler();

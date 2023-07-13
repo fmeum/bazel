@@ -17,6 +17,7 @@ java_library(
         "AbstractBlazeQueryEnvironment.java",
     ],
     deps = [
+        ":universe-scope",
         "//src/main/java/com/google/devtools/build/lib/bugreport",
         "//src/main/java/com/google/devtools/build/lib/cmdline",
         "//src/main/java/com/google/devtools/build/lib/events",

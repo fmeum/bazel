@@ -169,6 +169,11 @@ public class GraphlessBlazeQueryEnvironment extends AbstractBlazeQueryEnvironmen
   }
 
   @Override
+  public Parser getTargetPatternParser() {
+    return mainRepoTargetParser;
+  }
+
+  @Override
   public Collection<Target> getSiblingTargetsInPackage(Target target) {
     return target.getPackage().getTargets().values();
   }

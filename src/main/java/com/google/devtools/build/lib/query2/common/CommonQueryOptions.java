@@ -128,6 +128,19 @@ public class CommonQueryOptions extends OptionsBase {
   public boolean includeNoDepDeps;
 
   @Option(
+      name = "assume_closed_universe",
+      defaultValue = "false",
+      documentationCategory = OptionDocumentationCategory.QUERY,
+      effectTags = {OptionEffectTag.LOADING_AND_ANALYSIS},
+      help =
+          "If true, query will assume that the repositories mentioned in the universe scope "
+              + "(explicit or inferred) have no incoming or outgoing dependency edges to other "
+              + "repositories. This can speed up the evaluation of queries by avoiding the need "
+              + "to fetch repositories outside the universe, but can also lead to incorrect "
+              + "results if the assumption is violated. Requires SkyQuery.")
+  public boolean assumeClosedUniverse;
+
+  @Option(
       name = "include_aspects",
       defaultValue = "true",
       documentationCategory = OptionDocumentationCategory.QUERY,

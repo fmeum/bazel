@@ -637,6 +637,11 @@ public abstract class PostAnalysisQueryEnvironment<T> extends AbstractBlazeQuery
   @Override
   public void close() {}
 
+  @Override
+  public TargetPattern.Parser getTargetPatternParser() {
+    return mainRepoTargetParser;
+  }
+
   /** A wrapper class for the set of top-level configurations in a query. */
   public static class TopLevelConfigurations {
 

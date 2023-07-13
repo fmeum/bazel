@@ -18,6 +18,7 @@ import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Lists;
 import com.google.common.collect.Multimap;
 import com.google.devtools.build.lib.cmdline.Label;
+import com.google.devtools.build.lib.cmdline.RepositoryName;
 import com.google.devtools.build.lib.events.EventHandler;
 import com.google.devtools.build.lib.packages.AdvertisedProviderSet;
 import com.google.devtools.build.lib.packages.Aspect;
@@ -29,6 +30,7 @@ import com.google.devtools.build.lib.packages.NoSuchPackageException;
 import com.google.devtools.build.lib.packages.NoSuchTargetException;
 import com.google.devtools.build.lib.packages.Rule;
 import com.google.devtools.build.lib.packages.Target;
+import com.google.devtools.build.lib.skyframe.PrecomputedValue.Precomputed;
 import com.google.devtools.build.lib.skyframe.TargetLoadingUtil.TargetAndErrorIfAny;
 import com.google.devtools.build.skyframe.SkyFunction;
 import com.google.devtools.build.skyframe.SkyFunctionException;
@@ -37,6 +39,7 @@ import com.google.devtools.build.skyframe.SkyValue;
 import com.google.devtools.build.skyframe.SkyframeLookupResult;
 import java.util.Collection;
 import java.util.List;
+import java.util.function.Predicate;
 import javax.annotation.Nullable;
 
 /**
@@ -53,6 +56,10 @@ import javax.annotation.Nullable;
  * #computeSkyValue} with the {#code ProcessedTargets} to get the {@link SkyValue} to return.
  */
 public abstract class TransitiveBaseTraversalFunction<ProcessedTargetsT> implements SkyFunction {
+
+  public static final Precomputed<Predicate<RepositoryName>> REPOS_TO_TRAVERSE =
+      new Precomputed<>("repos_to_traverse");
+
   /**
    * Returns a {@link SkyKey} corresponding to the traversal of a target specified by {@code label}
    * and its transitive dependencies.
@@ -60,11 +67,11 @@ public abstract class TransitiveBaseTraversalFunction<ProcessedTargetsT> impleme
    * <p>Extenders of this class should implement this function to return a key with their
    * specialized {@link SkyFunction}'s name.
    *
-   * <p>{@link TransitiveBaseTraversalFunction} calls this for each dependency of a target, and
-   * then gets their values from the environment.
+   * <p>{@link TransitiveBaseTraversalFunction} calls this for each dependency of a target, and then
+   * gets their values from the environment.
    *
-   * <p>The key's {@link SkyFunction} may throw at most {@link NoSuchPackageException} and
-   * {@link NoSuchTargetException}. Other exception types are not handled by {@link
+   * <p>The key's {@link SkyFunction} may throw at most {@link NoSuchPackageException} and {@link
+   * NoSuchTargetException}. Other exception types are not handled by {@link
    * TransitiveBaseTraversalFunction}.
    */
   abstract SkyKey getKey(Label label);
@@ -91,6 +98,11 @@ public abstract class TransitiveBaseTraversalFunction<ProcessedTargetsT> impleme
   @Override
   public SkyValue compute(SkyKey key, Environment env)
       throws TransitiveBaseTraversalFunctionException, InterruptedException {
+    Predicate<RepositoryName> reposToTraverse = REPOS_TO_TRAVERSE.get(env);
+    if (reposToTraverse == null) {
+      return null;
+    }
+
     Label label = argumentFromKey(key);
     TargetAndErrorIfAny targetAndErrorIfAny;
     try {
@@ -106,7 +118,7 @@ public abstract class TransitiveBaseTraversalFunction<ProcessedTargetsT> impleme
 
     // Process deps from attributes. It is essential that the last getValue(s) call we made to
     // skyframe for building this node was for the corresponding PackageValue.
-    Collection<SkyKey> labelDepKeys = getLabelDepKeys(env, targetAndErrorIfAny);
+    Collection<SkyKey> labelDepKeys = getLabelDepKeys(env, targetAndErrorIfAny, reposToTraverse);
 
     SkyframeLookupResult depMap = env.getValuesAndExceptions(labelDepKeys);
     if (env.valuesMissing()) {
@@ -115,7 +127,7 @@ public abstract class TransitiveBaseTraversalFunction<ProcessedTargetsT> impleme
     // Process deps from aspects. It is essential that the second-to-last getValue(s) call we
     // made to skyframe for building this node was for the corresponding PackageValue.
     Iterable<SkyKey> labelAspectKeys =
-        getStrictLabelAspectDepKeys(env, depMap, targetAndErrorIfAny);
+        getStrictLabelAspectDepKeys(env, depMap, targetAndErrorIfAny, reposToTraverse);
     SkyframeLookupResult labelAspectEntries = env.getValuesAndExceptions(labelAspectKeys);
     if (env.valuesMissing()) {
       return null;
@@ -134,22 +146,29 @@ public abstract class TransitiveBaseTraversalFunction<ProcessedTargetsT> impleme
   }
 
   Collection<SkyKey> getLabelDepKeys(
-      SkyFunction.Environment env, TargetAndErrorIfAny targetAndErrorIfAny)
+      Environment env,
+      TargetAndErrorIfAny targetAndErrorIfAny,
+      Predicate<RepositoryName> reposToTraverse)
       throws InterruptedException {
     ImmutableSet.Builder<SkyKey> depsBuilder = ImmutableSet.builder();
     LabelVisitationUtils.visitTarget(
         targetAndErrorIfAny.getTarget(),
         DependencyFilter.NO_NODEP_ATTRIBUTES_EXCEPT_VISIBILITY,
-        (fromTarget, attribute, toLabel) -> depsBuilder.add(getKey(toLabel)));
+        (fromTarget, attribute, toLabel) -> {
+          if (reposToTraverse.test(toLabel.getRepository())) {
+            depsBuilder.add(getKey(toLabel));
+          }
+        });
     return depsBuilder.build();
   }
 
   Iterable<SkyKey> getStrictLabelAspectDepKeys(
       SkyFunction.Environment env,
       SkyframeLookupResult depMap,
-      TargetAndErrorIfAny targetAndErrorIfAny)
+      TargetAndErrorIfAny targetAndErrorIfAny,
+      Predicate<RepositoryName> reposToTraverse)
       throws InterruptedException {
-    return getStrictLabelAspectKeys(targetAndErrorIfAny.getTarget(), depMap, env);
+    return getStrictLabelAspectKeys(targetAndErrorIfAny.getTarget(), depMap, env, reposToTraverse);
   }
 
   @Override
@@ -164,7 +183,11 @@ public abstract class TransitiveBaseTraversalFunction<ProcessedTargetsT> impleme
    * dependencies from the env to do so.
    */
   private Iterable<SkyKey> getStrictLabelAspectKeys(
-      Target target, SkyframeLookupResult depMap, Environment env) throws InterruptedException {
+      Target target,
+      SkyframeLookupResult depMap,
+      Environment env,
+      Predicate<RepositoryName> reposToTraverse)
+      throws InterruptedException {
     if (!(target instanceof Rule)) {
       // Aspects can be declared only for Rules.
       return ImmutableList.of();
@@ -177,7 +200,9 @@ public abstract class TransitiveBaseTraversalFunction<ProcessedTargetsT> impleme
 
     List<SkyKey> depKeys = Lists.newArrayList();
     Multimap<Attribute, Label> transitions =
-        rule.getTransitions(DependencyFilter.NO_NODEP_ATTRIBUTES);
+        rule.getTransitions(
+            DependencyFilter.NO_NODEP_ATTRIBUTES,
+            label -> reposToTraverse.test(label.getRepository()));
     for (Attribute attribute : transitions.keySet()) {
       for (Aspect aspect : attribute.getAspects(rule)) {
         if (hasDepThatSatisfies(aspect, transitions.get(attribute), depMap, env)) {

@@ -32,7 +32,9 @@ import com.google.devtools.build.lib.bugreport.BugReport;
 import com.google.devtools.build.lib.cmdline.BazelModuleContext.LoadGraphVisitor;
 import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.cmdline.PackageIdentifier;
+import com.google.devtools.build.lib.cmdline.RepositoryMapping;
 import com.google.devtools.build.lib.cmdline.TargetParsingException;
+import com.google.devtools.build.lib.cmdline.TargetPattern;
 import com.google.devtools.build.lib.events.ErrorSensingEventHandler;
 import com.google.devtools.build.lib.events.Event;
 import com.google.devtools.build.lib.events.ExtendedEventHandler;
@@ -108,6 +110,13 @@ public abstract class AbstractBlazeQueryEnvironment<T>
 
   @Override
   public abstract void close();
+
+  public abstract TargetPattern.Parser getTargetPatternParser();
+
+  @Override
+  public RepositoryMapping getMainRepoMapping() {
+    return getTargetPatternParser().getRepoMapping();
+  }
 
   private static DependencyFilter constructDependencyFilter(Set<Setting> settings) {
     DependencyFilter specifiedFilter =
@@ -570,6 +579,10 @@ public abstract class AbstractBlazeQueryEnvironment<T>
     builder.addAll(DEFAULT_QUERY_FUNCTIONS);
     builder.addAll(extraFunctions);
     return builder.build();
+  }
+
+  public UniverseScope getUniverseScope() {
+    return UniverseScope.EMPTY;
   }
 
   /** A {@link KeyExtractor} that extracts {@code Label}s out of {@link Target}s. */

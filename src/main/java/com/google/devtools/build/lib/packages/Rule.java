@@ -890,14 +890,24 @@ public class Rule implements Target, DependencyFilter.AttributeInfoProvider {
    *     {@code true} <em>and</em> the label is not an output.
    */
   public SetMultimap<Attribute, Label> getTransitions(DependencyFilter filter) {
+    return getTransitions(filter, label -> true);
+  }
+
+  public SetMultimap<Attribute, Label> getTransitions(
+      DependencyFilter filter, Predicate<Label> labelFilter) {
     SetMultimap<Attribute, Label> transitions = HashMultimap.create();
-    AggregatingAttributeMapper.of(this).visitLabels(filter, transitions::put);
+    AggregatingAttributeMapper.of(this)
+        .visitLabels(
+            filter,
+            (Attribute attribute, Label label) -> {
+              if (labelFilter.test(label)) {
+                transitions.put(attribute, label);
+              }
+            });
     return transitions;
   }
 
-  /**
-   * Check if this rule is valid according to the validityPredicate of its RuleClass.
-   */
+  /** Check if this rule is valid according to the validityPredicate of its RuleClass. */
   void checkValidityPredicate(EventHandler eventHandler) {
     PredicateWithMessage<Rule> predicate = ruleClass.getValidityPredicate();
     if (!predicate.apply(this)) {

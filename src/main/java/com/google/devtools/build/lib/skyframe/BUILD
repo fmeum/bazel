@@ -2655,6 +2655,7 @@ java_library(
     name = "transitive_base_traversal_function",
     srcs = ["TransitiveBaseTraversalFunction.java"],
     deps = [
+        ":precomputed_value",
         ":target_loading_util",
         "//src/main/java/com/google/devtools/build/lib/cmdline",
         "//src/main/java/com/google/devtools/build/lib/events",

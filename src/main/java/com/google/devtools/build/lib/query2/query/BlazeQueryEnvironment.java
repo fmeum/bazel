@@ -131,6 +131,11 @@ public class BlazeQueryEnvironment extends AbstractBlazeQueryEnvironment<Target>
   }
 
   @Override
+  public Parser getTargetPatternParser() {
+    return mainRepoTargetParser;
+  }
+
+  @Override
   public DigraphQueryEvalResult<Target> evaluateQuery(
       QueryExpression expr, ThreadSafeOutputFormatterCallback<Target> callback)
       throws QueryException, InterruptedException, IOException {
