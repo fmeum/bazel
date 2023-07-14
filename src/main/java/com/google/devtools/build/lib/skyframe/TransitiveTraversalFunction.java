@@ -14,9 +14,9 @@
 package com.google.devtools.build.lib.skyframe;
 
 import com.google.common.base.Preconditions;
+import com.google.common.base.Predicate;
 import com.google.devtools.build.lib.bugreport.BugReport;
 import com.google.devtools.build.lib.cmdline.Label;
-import com.google.devtools.build.lib.cmdline.RepositoryName;
 import com.google.devtools.build.lib.events.EventHandler;
 import com.google.devtools.build.lib.packages.AdvertisedProviderSet;
 import com.google.devtools.build.lib.packages.NoSuchPackageException;
@@ -29,7 +29,6 @@ import com.google.devtools.build.skyframe.SkyValue;
 import com.google.devtools.build.skyframe.SkyframeLookupResult;
 import java.util.Collection;
 import java.util.List;
-import java.util.function.Predicate;
 import javax.annotation.Nullable;
 
 /**
@@ -110,7 +109,9 @@ public class TransitiveTraversalFunction
 
   @Override
   Collection<SkyKey> getLabelDepKeys(
-      Environment env, TargetAndErrorIfAny targetAndErrorIfAny, Predicate<RepositoryName> reposToTraverse)
+      Environment env,
+      TargetAndErrorIfAny targetAndErrorIfAny,
+      Predicate<Label> labelsToTraverse)
       throws InterruptedException {
     // As a performance optimization we may already know the deps we are  about to request from
     // last time #compute was called. By requesting these from the environment, we can avoid
@@ -121,7 +122,7 @@ public class TransitiveTraversalFunction
     // TransitiveTraversalFunction#compute from this point forward.
     Collection<SkyKey> oldDepKeys = getDepsAfterLastPackageDep(env, /* offset= */ 1);
     return oldDepKeys == null
-        ? super.getLabelDepKeys(env, targetAndErrorIfAny, reposToTraverse)
+        ? super.getLabelDepKeys(env, targetAndErrorIfAny, labelsToTraverse)
         : oldDepKeys;
   }
 
@@ -130,7 +131,7 @@ public class TransitiveTraversalFunction
       SkyFunction.Environment env,
       SkyframeLookupResult depMap,
       TargetAndErrorIfAny targetAndErrorIfAny,
-      Predicate<RepositoryName> reposToTraverse)
+      Predicate<Label> labelsToTraverse)
       throws InterruptedException {
     // As a performance optimization we may already know the deps we are  about to request from
     // last time #compute was called. By requesting these from the environment, we can avoid
@@ -138,7 +139,7 @@ public class TransitiveTraversalFunction
     // aspect deps dependency group is requested two groups after the package.
     Collection<SkyKey> oldAspectDepKeys = getDepsAfterLastPackageDep(env, /* offset= */ 2);
     return oldAspectDepKeys == null
-        ? super.getStrictLabelAspectDepKeys(env, depMap, targetAndErrorIfAny, reposToTraverse)
+        ? super.getStrictLabelAspectDepKeys(env, depMap, targetAndErrorIfAny, labelsToTraverse)
         : oldAspectDepKeys;
   }
 

@@ -114,7 +114,7 @@ public abstract class AbstractBlazeQueryEnvironment<T>
   public abstract TargetPattern.Parser getTargetPatternParser();
 
   @Override
-  public RepositoryMapping getMainRepoMapping() {
+  public final RepositoryMapping getMainRepoMapping() {
     return getTargetPatternParser().getRepoMapping();
   }
 

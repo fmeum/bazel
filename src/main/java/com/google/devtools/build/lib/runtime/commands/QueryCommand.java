@@ -57,8 +57,8 @@ import java.io.BufferedOutputStream;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.nio.channels.ClosedByInterruptException;
+import java.util.Optional;
 import java.util.Set;
-import java.util.function.Predicate;
 
 /** Command line wrapper for executing a query with blaze. */
 @Command(
@@ -226,13 +226,14 @@ public final class QueryCommand extends QueryEnvironmentBasedCommand {
     return Either.ofRight(result);
   }
 
-  private static Either<BlazeCommandResult, Predicate<RepositoryName>> computeReposToTraverse(
-      CommandEnvironment env,
-      QueryOptions queryOptions,
-      AbstractBlazeQueryEnvironment<Target> queryEnv,
-      QueryExpression expr) {
+  private static Either<BlazeCommandResult, Optional<ImmutableSet<RepositoryName>>>
+      computeReposToTraverse(
+          CommandEnvironment env,
+          QueryOptions queryOptions,
+          AbstractBlazeQueryEnvironment<Target> queryEnv,
+          QueryExpression expr) {
     if (!queryOptions.assumeClosedUniverse) {
-      return Either.ofRight(repositoryName -> true);
+      return Either.ofRight(Optional.empty());
     }
 
     UniverseScope universeScope = queryEnv.getUniverseScope();
@@ -272,7 +273,7 @@ public final class QueryCommand extends QueryEnvironmentBasedCommand {
                         .build())));
       }
     }
-    return Either.ofRight(reposToTraverseBuilder.build()::contains);
+    return Either.ofRight(Optional.of(reposToTraverseBuilder.build()));
   }
 
   /**
