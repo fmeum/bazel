@@ -18,6 +18,7 @@ import com.google.common.collect.ImmutableMap;
 import com.google.devtools.build.docgen.annot.DocCategory;
 import com.google.devtools.build.lib.bazel.repository.downloader.DownloadManager;
 import com.google.devtools.build.lib.bazel.repository.starlark.StarlarkBaseExternalContext;
+import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.runtime.ProcessWrapper;
 import com.google.devtools.build.lib.runtime.RepositoryRemoteExecutor;
 import com.google.devtools.build.lib.vfs.Path;
@@ -33,6 +34,7 @@ import net.starlark.java.eval.NoneType;
 import net.starlark.java.eval.Sequence;
 import net.starlark.java.eval.StarlarkList;
 import net.starlark.java.eval.StarlarkSemantics;
+import net.starlark.java.eval.StarlarkThread;
 
 /** The Starlark object passed to the implementation function of module extensions. */
 @StarlarkBuiltin(
@@ -206,5 +208,16 @@ public class ModuleExtensionContext extends StarlarkBaseExternalContext {
       throws EvalException {
     return ModuleExtensionMetadata.create(
         rootModuleDirectDepsUnchecked, rootModuleDirectDevDepsUnchecked, extensionId);
+  }
+
+  @StarlarkMethod(
+      name = "extension_repo_label",
+      useStarlarkThread = true,
+      doc = "foo",
+      parameters = {@Param(name = "label_string", doc = "foo")})
+  public Label extensionRepoLabel(String labelString, StarlarkThread starlarkThread)
+      throws EvalException {
+    return ModuleExtensionEvalStarlarkThreadContext.from(starlarkThread)
+        .createExtensionRepoLabel(labelString, starlarkThread.getCallerLocation());
   }
 }

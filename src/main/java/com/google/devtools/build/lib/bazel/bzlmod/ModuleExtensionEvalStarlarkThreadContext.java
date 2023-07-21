@@ -15,10 +15,14 @@
 
 package com.google.devtools.build.lib.bazel.bzlmod;
 
+import static java.util.stream.Collectors.joining;
+
 import com.google.auto.value.AutoValue;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.Maps;
 import com.google.devtools.build.lib.analysis.BlazeDirectories;
+import com.google.devtools.build.lib.cmdline.Label;
+import com.google.devtools.build.lib.cmdline.LabelSyntaxException;
 import com.google.devtools.build.lib.cmdline.PackageIdentifier;
 import com.google.devtools.build.lib.cmdline.RepositoryMapping;
 import com.google.devtools.build.lib.cmdline.RepositoryName;
@@ -28,8 +32,11 @@ import com.google.devtools.build.lib.packages.Rule;
 import com.google.devtools.build.lib.packages.RuleClass;
 import com.google.devtools.build.lib.packages.RuleFactory.InvalidRuleException;
 import com.google.devtools.build.lib.packages.StarlarkNativeModule.ExistingRulesShouldBeNoOp;
+import com.google.devtools.build.lib.util.StringUtilities;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.Optional;
 import net.starlark.java.eval.Dict;
 import net.starlark.java.eval.EvalException;
 import net.starlark.java.eval.Starlark;
@@ -69,6 +76,7 @@ public final class ModuleExtensionEvalStarlarkThreadContext {
   private final BlazeDirectories directories;
   private final ExtendedEventHandler eventHandler;
   private final Map<String, RepoSpecAndLocation> generatedRepos = new HashMap<>();
+  private final Map<String, Location> locationForExtensionRepoLabel = new LinkedHashMap<>();
 
   public ModuleExtensionEvalStarlarkThreadContext(
       String repoPrefix,
@@ -134,5 +142,44 @@ public final class ModuleExtensionEvalStarlarkThreadContext {
   public ImmutableMap<String, RepoSpec> getGeneratedRepoSpecs() {
     return ImmutableMap.copyOf(
         Maps.transformValues(generatedRepos, RepoSpecAndLocation::getRepoSpec));
+  }
+
+  public Optional<String> getExtensionRepoLabelError() {
+    String invalidReposMessage =
+        locationForExtensionRepoLabel.entrySet().stream()
+            .filter(entry -> !generatedRepos.containsKey(entry.getKey()))
+            .map(e -> String.format("  %s at %s", e.getKey(), e.getValue()))
+            .collect(joining("\n"));
+    if (invalidReposMessage.isEmpty()) {
+      return Optional.empty();
+    } else {
+      return Optional.of(invalidReposMessage);
+    }
+  }
+
+  public Label createExtensionRepoLabel(String labelString, Location location)
+      throws EvalException {
+    if (!labelString.startsWith("@")) {
+      throw Starlark.errorf(
+          "label in extension_repo_label() must start with '@': %s",
+          StringUtilities.sanitizeControlChars(labelString));
+    }
+    Label rawLabel;
+    try {
+      rawLabel = Label.parseCanonical(labelString);
+    } catch (LabelSyntaxException e) {
+      throw Starlark.errorf("invalid label in label_in_repo(): %s", e.getMessage());
+    }
+    String generatedRepoName = rawLabel.getRepository().getName();
+    RepositoryName.validateUserProvidedRepoName(generatedRepoName);
+    locationForExtensionRepoLabel.putIfAbsent(generatedRepoName, location);
+    String canonicalRepoName = repoPrefix + generatedRepoName;
+    try {
+      return Label.create(
+          PackageIdentifier.create(canonicalRepoName, rawLabel.getPackageFragment()),
+          rawLabel.getName());
+    } catch (LabelSyntaxException e) {
+      throw new IllegalStateException(e);
+    }
   }
 }
