@@ -1,0 +1,16 @@
+baseline:
+File src/test/java/net/starlark/java/eval/testdata/bench_call.star:
+benchmark                        ops     cpu/op    wall/op   steps/op   alloc/op
+bench_call_bool            134217727      140ns      139ns          3        87B
+bench_call_dict_get         67108863      225ns      224ns          5       143B
+bench_call_list_append      67108863      234ns      233ns          5       207B
+bench_call_type             67108863      202ns      202ns          4       111B
+
+upstream:
+File src/test/java/net/starlark/java/eval/testdata/bench_call.star:
+benchmark                        ops     cpu/op    wall/op   steps/op   alloc/op
+bench_call_bool            134217727      139ns      138ns          3        87B
+bench_call_dict_get         67108863      220ns      220ns          5       143B
+bench_call_list_append      67108863      203ns      202ns          5       183B
+bench_call_type             67108863      178ns      178ns          4        87B
+
