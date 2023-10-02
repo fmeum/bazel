@@ -104,18 +104,16 @@ final class MethodDescriptor {
 
     if (extraKeywords || extraPositionals || useStarlarkSemantics || useStarlarkThread) {
       this.positionalsCanBeJavaArgumentVector = false;
-    } else if (!Arrays.stream(parameters)
-        .allMatch(MethodDescriptor::paramCanBeUsedAsPositionalWithoutChecks)) {
-      this.positionalsCanBeJavaArgumentVector = false;
-    } else {
-      this.positionalsCanBeJavaArgumentVector = true;
-    }
+    } else
+      this.positionalsCanBeJavaArgumentVector =
+          Arrays.stream(parameters)
+              .allMatch(MethodDescriptor::paramCanBeUsedAsPositionalWithoutChecks);
   }
 
   private static boolean paramCanBeUsedAsPositionalWithoutChecks(ParamDescriptor param) {
     return param.isPositional()
         && param.disabledByFlag() == null
-        && param.getAllowedClasses().contains(Object.class);
+        && param.getAllowedClasses() == null;
   }
 
   /** Returns the StarlarkMethod annotation corresponding to this method. */
