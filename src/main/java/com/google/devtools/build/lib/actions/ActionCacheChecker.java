@@ -13,6 +13,7 @@
 // limitations under the License.
 package com.google.devtools.build.lib.actions;
 
+import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkState;
 
 import com.google.auto.value.AutoValue;
@@ -46,7 +47,6 @@ import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.build.lib.vfs.PathFragment;
 import java.io.FileNotFoundException;
 import java.io.IOException;
-import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
@@ -149,28 +149,33 @@ public class ActionCacheChecker {
     return ActionCacheUtils.getCacheEntry(actionCache, action);
   }
 
-  private void removeCacheEntry(Action action) {
+  public void removeCacheEntry(Action action) {
+    checkState(enabled(), "Action cache disabled");
     ActionCacheUtils.removeCacheEntry(actionCache, action);
   }
 
   @Nullable
   private static FileArtifactValue getCachedMetadata(
       @Nullable CachedOutputMetadata cachedOutputMetadata, Artifact artifact) {
+    checkArgument(!artifact.isTreeArtifact());
+
     if (cachedOutputMetadata == null) {
       return null;
     }
 
-    if (artifact.isTreeArtifact()) {
-      TreeArtifactValue value =
-          cachedOutputMetadata.mergedTreeMetadata.get((SpecialArtifact) artifact);
-      if (value == null) {
-        return null;
-      }
+    return cachedOutputMetadata.fileMetadata.get(artifact);
+  }
 
-      return value.getMetadata();
-    } else {
-      return cachedOutputMetadata.remoteFileMetadata.get(artifact);
+  @Nullable
+  private static TreeArtifactValue getCachedTreeMetadata(
+      @Nullable CachedOutputMetadata cachedOutputMetadata, Artifact artifact) {
+    checkArgument(artifact.isTreeArtifact());
+
+    if (cachedOutputMetadata == null) {
+      return null;
     }
+
+    return cachedOutputMetadata.treeMetadata.get((SpecialArtifact) artifact);
   }
 
   /**
@@ -180,10 +185,11 @@ public class ActionCacheChecker {
    * @param action action to be validated.
    * @param actionInputs the inputs of the action. Normally just the result of action.getInputs(),
    *     but if this action doesn't yet know its inputs, we check the inputs from the cache.
-   * @param outputMetadataStore provider of metadata for the artifacts this action interacts with.
+   * @param outputMetadataStore provider of metadata for the action outputs.
    * @param checkOutput true to validate output artifacts, Otherwise, just validate inputs.
    * @param cachedOutputMetadata a set of cached metadata that should be used instead of loading
-   *     from {@code metadataHandler}.
+   *     from {@code outputMetadataStore}.
+   * @param remoteArtifactChecker used to check whether remote metadata should be trusted.
    * @return true if at least one artifact has changed, false - otherwise.
    */
   private static boolean validateArtifacts(
@@ -193,17 +199,36 @@ public class ActionCacheChecker {
       InputMetadataProvider inputMetadataProvider,
       OutputMetadataStore outputMetadataStore,
       boolean checkOutput,
-      @Nullable CachedOutputMetadata cachedOutputMetadata)
+      @Nullable CachedOutputMetadata cachedOutputMetadata,
+      @Nullable RemoteArtifactChecker remoteArtifactChecker)
       throws InterruptedException {
     Map<String, FileArtifactValue> mdMap = new HashMap<>();
     if (checkOutput) {
       for (Artifact artifact : action.getOutputs()) {
-        FileArtifactValue metadata = getCachedMetadata(cachedOutputMetadata, artifact);
-        if (metadata == null) {
-          metadata = getOutputMetadataMaybe(outputMetadataStore, artifact);
-        }
+        if (artifact.isTreeArtifact()) {
+          TreeArtifactValue treeMetadata = getCachedTreeMetadata(cachedOutputMetadata, artifact);
+          if (treeMetadata == null) {
+            treeMetadata = getOutputTreeMetadataMaybe(outputMetadataStore, artifact);
+          }
+          if (shouldTrustTreeMetadata(artifact, treeMetadata, remoteArtifactChecker)) {
+            mdMap.put(
+                artifact.getExecPathString(),
+                treeMetadata != null ? treeMetadata.getMetadata() : null);
+          } else {
+            mdMap.put(artifact.getExecPathString(), null);
+          }
 
-        mdMap.put(artifact.getExecPathString(), metadata);
+        } else {
+          FileArtifactValue metadata = getCachedMetadata(cachedOutputMetadata, artifact);
+          if (metadata == null) {
+            metadata = getOutputMetadataMaybe(outputMetadataStore, artifact);
+          }
+          if (shouldTrustMetadata(artifact, metadata, remoteArtifactChecker)) {
+            mdMap.put(artifact.getExecPathString(), metadata);
+          } else {
+            mdMap.put(artifact.getExecPathString(), null);
+          }
+        }
       }
     }
     for (Artifact artifact : actionInputs.toList()) {
@@ -211,6 +236,58 @@ public class ActionCacheChecker {
           artifact.getExecPathString(), getInputMetadataMaybe(inputMetadataProvider, artifact));
     }
     return !Arrays.equals(MetadataDigestUtils.fromMetadata(mdMap), entry.getFileDigest());
+  }
+
+  private static boolean shouldTrustMetadata(
+      Artifact artifact,
+      @Nullable FileArtifactValue metadata,
+      @Nullable RemoteArtifactChecker remoteArtifactChecker) {
+    checkArgument(!artifact.isTreeArtifact());
+    if (remoteArtifactChecker == null || metadata == null || !metadata.isRemote()) {
+      return true;
+    }
+    return remoteArtifactChecker.shouldTrustRemoteArtifact(
+        artifact, (RemoteFileArtifactValue) metadata);
+  }
+
+  private static boolean shouldTrustTreeMetadata(
+      Artifact artifact,
+      @Nullable TreeArtifactValue treeMetadata,
+      @Nullable RemoteArtifactChecker remoteArtifactChecker) {
+    checkArgument(artifact.isTreeArtifact());
+    if (remoteArtifactChecker == null || treeMetadata == null) {
+      return true;
+    }
+    if (treeMetadata.getArchivedRepresentation().isPresent()) {
+      ArchivedTreeArtifact archivedArtifact =
+          treeMetadata
+              .getArchivedRepresentation()
+              .map(ArchivedRepresentation::archivedTreeFileArtifact)
+              .orElseThrow();
+      FileArtifactValue archivedMetadata =
+          treeMetadata
+              .getArchivedRepresentation()
+              .map(ArchivedRepresentation::archivedFileValue)
+              .orElseThrow();
+      if (archivedMetadata.isRemote()
+          && !remoteArtifactChecker.shouldTrustRemoteArtifact(
+              archivedArtifact, (RemoteFileArtifactValue) archivedMetadata)) {
+        return false;
+      }
+    }
+    for (Map.Entry<TreeFileArtifact, FileArtifactValue> entry :
+        treeMetadata.getChildValues().entrySet()) {
+      TreeFileArtifact child = entry.getKey();
+      FileArtifactValue childMetadata = entry.getValue();
+      if (!childMetadata.isRemote()) {
+        continue;
+      }
+      if (!remoteArtifactChecker.shouldTrustRemoteArtifact(
+          child, (RemoteFileArtifactValue) childMetadata)) {
+        return false;
+      }
+    }
+    return true;
   }
 
   private void reportCommand(EventHandler handler, Action action) {
@@ -306,25 +383,30 @@ public class ActionCacheChecker {
     return usedEnvironment;
   }
 
+  /**
+   * The currently cached outputs when output metadata is stored (i.e., {@code
+   * CacheConfig#shouldStoreOutputMetadata}).
+   *
+   * <p>Metadata retrieved from the filesystem overrides the cached metadata. This way, an action
+   * will not be rerun if the cached metadata is still valid, unless the filesystem state needs to
+   * be updated.
+   */
   private static class CachedOutputMetadata {
-    private final ImmutableMap<Artifact, RemoteFileArtifactValue> remoteFileMetadata;
-    // TreeArtifactValues merged from local files and remote metadata pulled from the action cache.
-    private final ImmutableMap<SpecialArtifact, TreeArtifactValue> mergedTreeMetadata;
+    private final ImmutableMap<Artifact, FileArtifactValue> fileMetadata;
+    private final ImmutableMap<SpecialArtifact, TreeArtifactValue> treeMetadata;
 
     private CachedOutputMetadata(
-        ImmutableMap<Artifact, RemoteFileArtifactValue> remoteFileMetadata,
-        ImmutableMap<SpecialArtifact, TreeArtifactValue> mergedTreeMetadata) {
-      this.remoteFileMetadata = remoteFileMetadata;
-      this.mergedTreeMetadata = mergedTreeMetadata;
+        ImmutableMap<Artifact, FileArtifactValue> fileMetadata,
+        ImmutableMap<SpecialArtifact, TreeArtifactValue> treeMetadata) {
+      this.fileMetadata = fileMetadata;
+      this.treeMetadata = treeMetadata;
     }
   }
 
   private static CachedOutputMetadata loadCachedOutputMetadata(
       Action action, ActionCache.Entry entry, OutputMetadataStore outputMetadataStore)
       throws InterruptedException {
-    Instant now = Instant.now();
-    ImmutableMap.Builder<Artifact, RemoteFileArtifactValue> remoteFileMetadata =
-        ImmutableMap.builder();
+    ImmutableMap.Builder<Artifact, FileArtifactValue> mergedFileMetadata = ImmutableMap.builder();
     ImmutableMap.Builder<SpecialArtifact, TreeArtifactValue> mergedTreeMetadata =
         ImmutableMap.builder();
 
@@ -336,31 +418,6 @@ public class ActionCacheChecker {
           continue;
         }
 
-        // If any child is not alive, discard the entire tree
-        if (cachedTreeMetadata.childValues().values().stream()
-            .anyMatch(metadata -> !metadata.isAlive(now))) {
-          continue;
-        }
-
-        if (cachedTreeMetadata.archivedFileValue().isPresent()
-            && !cachedTreeMetadata.archivedFileValue().get().isAlive(now)) {
-          continue;
-        }
-
-        TreeArtifactValue localTreeMetadata;
-        try {
-          localTreeMetadata = outputMetadataStore.getTreeArtifactValue(parent);
-        } catch (IOException e) {
-          // Ignore the cached metadata if we encountered an error when loading corresponding
-          // local one.
-          logger.atWarning().withCause(e).log("Failed to load metadata for %s", parent);
-          continue;
-        }
-
-        boolean localTreeMetadataExists =
-            localTreeMetadata != null
-                && !localTreeMetadata.equals(TreeArtifactValue.MISSING_TREE_ARTIFACT);
-
         Map<TreeFileArtifact, FileArtifactValue> childValues = new HashMap<>();
         // Load remote child file metadata from cache.
         cachedTreeMetadata
@@ -368,57 +425,66 @@ public class ActionCacheChecker {
             .forEach(
                 (key, value) ->
                     childValues.put(TreeFileArtifact.createTreeOutput(parent, key), value));
-        // Or add local one.
-        if (localTreeMetadataExists) {
-          childValues.putAll(localTreeMetadata.getChildValues());
+
+        Optional<ArchivedRepresentation> archivedRepresentation =
+            cachedTreeMetadata
+                .archivedFileValue()
+                .map(
+                    fileArtifactValue ->
+                        ArchivedRepresentation.create(
+                            ArchivedTreeArtifact.createForTree(parent), fileArtifactValue));
+
+        TreeArtifactValue filesystemTreeMetadata;
+        try {
+          filesystemTreeMetadata = outputMetadataStore.getTreeArtifactValue(parent);
+        } catch (FileNotFoundException ignored) {
+          filesystemTreeMetadata = null;
+        } catch (IOException e) {
+          // Ignore the cached metadata if we encountered an error when loading its counterpart from
+          // the filesystem.
+          logger.atWarning().withCause(e).log("Failed to load metadata for %s", parent);
+          continue;
         }
 
-        Optional<ArchivedRepresentation> archivedRepresentation;
-        if (localTreeMetadataExists && localTreeMetadata.getArchivedRepresentation().isPresent()) {
-          archivedRepresentation = localTreeMetadata.getArchivedRepresentation();
-        } else {
-          archivedRepresentation =
-              cachedTreeMetadata
-                  .archivedFileValue()
-                  .map(
-                      fileArtifactValue ->
-                          ArchivedRepresentation.create(
-                              ArchivedTreeArtifact.createForTree(parent), fileArtifactValue));
+        if (filesystemTreeMetadata != null) {
+          // Filesystem metadata overrides the cached metadata.
+          childValues.putAll(filesystemTreeMetadata.getChildValues());
+          if (filesystemTreeMetadata.getArchivedRepresentation().isPresent()) {
+            archivedRepresentation = filesystemTreeMetadata.getArchivedRepresentation();
+          }
         }
 
         TreeArtifactValue.Builder merged = TreeArtifactValue.newBuilder(parent);
         childValues.forEach(merged::putChild);
         archivedRepresentation.ifPresent(merged::setArchivedRepresentation);
 
-        // Always inject merged tree if we have a tree from cache
         mergedTreeMetadata.put(parent, merged.build());
       } else {
         RemoteFileArtifactValue cachedMetadata = entry.getOutputFile(artifact);
-        if (cachedMetadata == null || !cachedMetadata.isAlive(now)) {
+        if (cachedMetadata == null) {
           continue;
         }
 
-        FileArtifactValue localMetadata;
+        FileArtifactValue filesystemMetadata;
         try {
-          localMetadata = getOutputMetadataOrConstant(outputMetadataStore, artifact);
+          filesystemMetadata = getOutputMetadataOrConstant(outputMetadataStore, artifact);
         } catch (FileNotFoundException ignored) {
-          localMetadata = null;
+          filesystemMetadata = null;
         } catch (IOException e) {
-          // Ignore the cached metadata if we encountered an error when loading the corresponding
-          // local one.
+          // Ignore the cached metadata if we encountered an error when loading its counterpart from
+          // the filesystem.
           logger.atWarning().withCause(e).log("Failed to load metadata for %s", artifact);
           continue;
         }
 
-        // Only inject remote metadata if the corresponding local one is missing.
-        if (localMetadata == null) {
-          remoteFileMetadata.put(artifact, cachedMetadata);
-        }
+        // Filesystem metadata overrides the cached metadata.
+        mergedFileMetadata.put(
+            artifact, filesystemMetadata != null ? filesystemMetadata : cachedMetadata);
       }
     }
 
     return new CachedOutputMetadata(
-        remoteFileMetadata.buildOrThrow(), mergedTreeMetadata.buildOrThrow());
+        mergedFileMetadata.buildOrThrow(), mergedTreeMetadata.buildOrThrow());
   }
 
   /**
@@ -428,8 +494,8 @@ public class ActionCacheChecker {
    * {@link Token} if the action needs to be executed, and null otherwise.
    *
    * <p>If this method returns non-null, indicating that the action will be executed, the {@code
-   * metadataHandler} must have any cached metadata cleared so that it does not serve stale metadata
-   * for the action's outputs after the action is executed.
+   * outputMetadataStore} must have any cached metadata cleared so that it does not serve stale
+   * metadata for the action's outputs after the action is executed.
    */
   // Note: the handler should only be used for DEPCHECKER events; there's no
   // guarantee it will be available for other events.
@@ -444,7 +510,7 @@ public class ActionCacheChecker {
       OutputMetadataStore outputMetadataStore,
       ArtifactExpander artifactExpander,
       Map<String, String> remoteDefaultPlatformProperties,
-      boolean loadCachedOutputMetadata)
+      @Nullable RemoteArtifactChecker remoteArtifactChecker)
       throws InterruptedException {
     // TODO(bazel-team): (2010) For RunfilesAction/SymlinkAction and similar actions that
     // produce only symlinks we should not check whether inputs are valid at all - all that matters
@@ -452,13 +518,8 @@ public class ActionCacheChecker {
     // are unnecessary. In other words, the only metadata we should check for them is file existence
     // itself.
 
-    MiddlemanType middlemanType = action.getActionType();
-    if (middlemanType.isMiddleman()) {
-      // Some types of middlemen are not checked because they should not
-      // propagate invalidation of their inputs.
-      if (middlemanType != MiddlemanType.SCHEDULING_DEPENDENCY_MIDDLEMAN) {
-        checkMiddlemanAction(action, handler, inputMetadataProvider, outputMetadataStore);
-      }
+    if (action.getActionType().isMiddleman()) {
+      checkMiddlemanAction(action, handler, inputMetadataProvider, outputMetadataStore);
       return null;
     }
     if (!cacheConfig.enabled()) {
@@ -486,11 +547,7 @@ public class ActionCacheChecker {
     }
     ActionCache.Entry entry = getCacheEntry(action);
     CachedOutputMetadata cachedOutputMetadata = null;
-    if (entry != null
-        && !entry.isCorrupted()
-        && cacheConfig.storeOutputMetadata()
-        && loadCachedOutputMetadata) {
-      // load remote metadata from action cache
+    if (entry != null && !entry.isCorrupted() && cacheConfig.storeOutputMetadata()) {
       cachedOutputMetadata = loadCachedOutputMetadata(action, entry, outputMetadataStore);
     }
 
@@ -505,7 +562,8 @@ public class ActionCacheChecker {
         clientEnv,
         outputPermissions,
         remoteDefaultPlatformProperties,
-        cachedOutputMetadata)) {
+        cachedOutputMetadata,
+        remoteArtifactChecker)) {
       if (entry != null) {
         removeCacheEntry(action);
       }
@@ -516,10 +574,10 @@ public class ActionCacheChecker {
       action.updateInputs(actionInputs);
     }
 
-    // Inject cached output metadata if we have an action cache hit
+    // Inject cached output metadata if we have an action cache hit.
     if (cachedOutputMetadata != null) {
-      cachedOutputMetadata.remoteFileMetadata.forEach(outputMetadataStore::injectFile);
-      cachedOutputMetadata.mergedTreeMetadata.forEach(outputMetadataStore::injectTree);
+      cachedOutputMetadata.fileMetadata.forEach(outputMetadataStore::injectFile);
+      cachedOutputMetadata.treeMetadata.forEach(outputMetadataStore::injectTree);
     }
 
     return null;
@@ -536,7 +594,8 @@ public class ActionCacheChecker {
       Map<String, String> clientEnv,
       OutputPermissions outputPermissions,
       Map<String, String> remoteDefaultPlatformProperties,
-      @Nullable CachedOutputMetadata cachedOutputMetadata)
+      @Nullable CachedOutputMetadata cachedOutputMetadata,
+      @Nullable RemoteArtifactChecker remoteArtifactChecker)
       throws InterruptedException {
     // Unconditional execution can be applied only for actions that are allowed to be executed.
     if (unconditionalExecution(action)) {
@@ -562,7 +621,8 @@ public class ActionCacheChecker {
         inputMetadataProvider,
         outputMetadataStore,
         true,
-        cachedOutputMetadata)) {
+        cachedOutputMetadata,
+        remoteArtifactChecker)) {
       reportChanged(handler, action);
       actionCache.accountMiss(MissReason.DIFFERENT_FILES);
       return true;
@@ -620,8 +680,20 @@ public class ActionCacheChecker {
   @Nullable
   private static FileArtifactValue getOutputMetadataMaybe(
       OutputMetadataStore outputMetadataStore, Artifact artifact) throws InterruptedException {
+    checkArgument(!artifact.isTreeArtifact());
     try {
       return getOutputMetadataOrConstant(outputMetadataStore, artifact);
+    } catch (IOException e) {
+      return null;
+    }
+  }
+
+  @Nullable
+  private static TreeArtifactValue getOutputTreeMetadataMaybe(
+      OutputMetadataStore outputMetadataStore, Artifact artifact) throws InterruptedException {
+    checkArgument(artifact.isTreeArtifact());
+    try {
+      return outputMetadataStore.getTreeArtifactValue((SpecialArtifact) artifact);
     } catch (IOException e) {
       return null;
     }
@@ -793,7 +865,8 @@ public class ActionCacheChecker {
           inputMetadataProvider,
           outputMetadataStore,
           false,
-          /* cachedOutputMetadata= */ null)) {
+          /* cachedOutputMetadata= */ null,
+          /* remoteArtifactChecker= */ null)) {
         reportChanged(handler, action);
         actionCache.accountMiss(MissReason.DIFFERENT_FILES);
         changed = true;
@@ -837,7 +910,7 @@ public class ActionCacheChecker {
       OutputMetadataStore outputMetadataStore,
       ArtifactExpander artifactExpander,
       Map<String, String> remoteDefaultPlatformProperties,
-      boolean loadCachedOutputMetadata)
+      @Nullable RemoteArtifactChecker remoteArtifactChecker)
       throws InterruptedException {
     if (action != null) {
       removeCacheEntry(action);
@@ -852,7 +925,7 @@ public class ActionCacheChecker {
         outputMetadataStore,
         artifactExpander,
         remoteDefaultPlatformProperties,
-        loadCachedOutputMetadata);
+        remoteArtifactChecker);
   }
 
   /** Returns an action key. It is always set to the first output exec path string. */

@@ -17,7 +17,6 @@ import static com.google.common.truth.Truth.assertAbout;
 
 import com.google.common.truth.FailureMetadata;
 import com.google.common.truth.IterableSubject;
-import com.google.common.truth.MapSubject;
 import com.google.common.truth.StringSubject;
 import com.google.common.truth.Subject;
 import com.google.devtools.build.lib.cmdline.Label;
@@ -33,11 +32,6 @@ public class ExecGroupSubject extends Subject {
     return assertAbout(ExecGroupSubject::new).that(execGroup);
   }
 
-  /** Static method for getting the subject factory (for use with assertAbout()). */
-  public static Subject.Factory<ExecGroupSubject, ExecGroup> execGroups() {
-    return ExecGroupSubject::new;
-  }
-
   // Instance fields.
 
   private final ExecGroup actual;
@@ -45,10 +39,6 @@ public class ExecGroupSubject extends Subject {
   protected ExecGroupSubject(FailureMetadata failureMetadata, ExecGroup subject) {
     super(failureMetadata, subject);
     this.actual = subject;
-  }
-
-  public MapSubject toolchainTypes() {
-    return check("toolchainTypes()").that(actual.toolchainTypesMap());
   }
 
   public ToolchainTypeRequirementSubject toolchainType(String toolchainTypeLabel) {

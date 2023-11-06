@@ -292,18 +292,10 @@ public class ExecutionOptions extends OptionsBase {
   public TestSummaryFormat testSummary;
 
   @Option(
-      name = "resource_autosense",
-      defaultValue = "false",
-      documentationCategory = OptionDocumentationCategory.UNDOCUMENTED,
-      effectTags = {OptionEffectTag.UNKNOWN},
-      help = "This flag has no effect, and is deprecated")
-  public boolean useResourceAutoSense;
-
-  @Option(
       name = "local_cpu_resources",
       defaultValue = "HOST_CPUS",
-      documentationCategory = OptionDocumentationCategory.UNCATEGORIZED,
-      effectTags = {OptionEffectTag.UNKNOWN},
+      documentationCategory = OptionDocumentationCategory.BUILD_TIME_OPTIMIZATION,
+      effectTags = {OptionEffectTag.HOST_MACHINE_RESOURCE_OPTIMIZATIONS},
       help =
           "Explicitly set the total number of local CPU cores available to Bazel to spend on build"
               + " actions executed locally. Takes an integer, or \"HOST_CPUS\", optionally followed"
@@ -316,8 +308,8 @@ public class ExecutionOptions extends OptionsBase {
   @Option(
       name = "local_ram_resources",
       defaultValue = "HOST_RAM*.67",
-      documentationCategory = OptionDocumentationCategory.UNCATEGORIZED,
-      effectTags = {OptionEffectTag.UNKNOWN},
+      documentationCategory = OptionDocumentationCategory.BUILD_TIME_OPTIMIZATION,
+      effectTags = {OptionEffectTag.HOST_MACHINE_RESOURCE_OPTIMIZATIONS},
       help =
           "Explicitly set the total amount of local host RAM (in MB) available to Bazel to spend on"
               + " build actions executed locally. Takes an integer, or \"HOST_RAM\", optionally"
@@ -330,8 +322,8 @@ public class ExecutionOptions extends OptionsBase {
   @Option(
       name = "local_extra_resources",
       defaultValue = "null",
-      documentationCategory = OptionDocumentationCategory.UNCATEGORIZED,
-      effectTags = {OptionEffectTag.UNKNOWN},
+      documentationCategory = OptionDocumentationCategory.BUILD_TIME_OPTIMIZATION,
+      effectTags = {OptionEffectTag.HOST_MACHINE_RESOURCE_OPTIMIZATIONS},
       allowMultiple = true,
       help =
           "Set the number of extra resources available to Bazel. "
@@ -362,25 +354,6 @@ public class ExecutionOptions extends OptionsBase {
   public boolean usingLocalTestJobs() {
     return localTestJobs != 0;
   }
-
-  @Option(
-      name = "experimental_prioritize_local_actions",
-      defaultValue = "true",
-      documentationCategory = OptionDocumentationCategory.UNCATEGORIZED,
-      effectTags = {OptionEffectTag.EXECUTION},
-      help =
-          "If set, actions that can only run locally are given first chance at acquiring resources,"
-              + " dynamically run workers get second chance, and dynamically-run standalone actions"
-              + " come last.")
-  public boolean prioritizeLocalActions;
-
-  @Option(
-      name = "debug_print_action_contexts",
-      defaultValue = "false",
-      documentationCategory = OptionDocumentationCategory.UNDOCUMENTED,
-      effectTags = {OptionEffectTag.UNKNOWN},
-      help = "Print the contents of the SpawnActionContext and ContextProviders maps.")
-  public boolean debugPrintActionContexts;
 
   @Option(
       name = "cache_computed_file_digests",
@@ -450,14 +423,6 @@ public class ExecutionOptions extends OptionsBase {
   public PathFragment executionLogBinaryFile;
 
   @Option(
-      name = "experimental_execution_log_spawn_metrics",
-      defaultValue = "false",
-      documentationCategory = OptionDocumentationCategory.UNCATEGORIZED,
-      effectTags = {OptionEffectTag.UNKNOWN},
-      help = "Include spawn metrics in the executed spawns log.")
-  public boolean executionLogSpawnMetrics;
-
-  @Option(
       name = "execution_log_json_file",
       defaultValue = "null",
       category = "verbosity",
@@ -515,7 +480,11 @@ public class ExecutionOptions extends OptionsBase {
       help =
           "The maximum number of attempts to retry if the build encountered remote cache eviction"
               + " error. A non-zero value will implicitly set"
-              + " --incompatible_remote_use_new_exit_code_for_lost_inputs to true.")
+              + " --incompatible_remote_use_new_exit_code_for_lost_inputs to true. A new invocation"
+              + " id will be generated for each attempt. If you generate invocation id and provide"
+              + " it to Bazel with --invocation_id, you should not use this flag. Instead, set flag"
+              + " --incompatible_remote_use_new_exit_code_for_lost_inputs and check for the exit"
+              + " code 39.")
   public int remoteRetryOnCacheEviction;
 
   /** An enum for specifying different formats of test output. */

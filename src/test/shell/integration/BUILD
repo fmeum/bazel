@@ -321,6 +321,16 @@ sh_test(
 )
 
 sh_test(
+    name = "bazel_aquery_test",
+    size = "large",
+    srcs = ["bazel_aquery_test.sh"],
+    data = [
+        ":test-deps",
+        "@bazel_tools//tools/bash/runfiles",
+    ],
+)
+
+sh_test(
     name = "bazel_command_log_test",
     size = "medium",
     srcs = ["bazel_command_log_test.sh"],
@@ -358,8 +368,10 @@ sh_test(
     data = [
         ":rules_proto_stanza.txt",
         ":test-deps",
+        "//third_party/zlib",
         "@bazel_tools//tools/bash/runfiles",
     ],
+    tags = ["requires-network"],  # Allow this test to access internet to fetch rules_proto dependencies.
 )
 
 sh_test(
@@ -368,17 +380,6 @@ sh_test(
     srcs = ["force_delete_output_test.sh"],
     data = [":test-deps"],
     tags = ["no_windows"],
-)
-
-sh_test(
-    name = "incompatible_changes_conflict_test",
-    size = "small",
-    timeout = "moderate",
-    srcs = ["incompatible_changes_conflict_test.sh"],
-    data = [
-        ":test-deps",
-        "@bazel_tools//tools/bash/runfiles",
-    ],
 )
 
 sh_test(
@@ -598,7 +599,7 @@ sh_test(
 
 sh_test(
     name = "client_test",
-    size = "medium",
+    size = "large",
     srcs = ["client_test.sh"],
     data = [":test-deps"],
     tags = ["no_windows"],
@@ -606,6 +607,7 @@ sh_test(
 
 sh_test(
     name = "test_test",
+    size = "large",
     srcs = ["test_test.sh"],
     data = [
         ":test-deps",
@@ -707,14 +709,6 @@ sh_test(
     name = "prelude_test",
     size = "medium",
     srcs = ["prelude_test.sh"],
-    data = [":test-deps"],
-    tags = ["no_windows"],
-)
-
-sh_test(
-    name = "sandboxfs_test",
-    size = "medium",
-    srcs = ["sandboxfs_test.sh"],
     data = [":test-deps"],
     tags = ["no_windows"],
 )
@@ -849,6 +843,46 @@ sh_test(
         "@bazel_tools//tools/bash/runfiles",
     ],
     tags = ["no_windows"],
+)
+
+sh_test(
+    name = "unicode_test",
+    srcs = ["unicode_test.sh"],
+    data = [
+        "unicode_test.bzl",
+        "unicode_test_BUILD",
+        "unicode_test_expected.txt",
+        ":test-deps",
+        "@bazel_tools//tools/bash/runfiles",
+    ],
+    # TODO(arostovtsev): figure out how to make this test Windows-compatible.
+    tags = ["no_windows"],
+)
+
+sh_test(
+    name = "subrules_test",
+    srcs = ["subrules_test.sh"],
+    data = [
+        ":test-deps",
+        "@bazel_tools//tools/bash/runfiles",
+    ],
+)
+
+sh_test(
+    name = "config_stripped_outputs_test",
+    size = "medium",
+    srcs = ["config_stripped_outputs_test.sh"],
+    data = [
+        ":config_stripped_outputs_lib",
+        ":test-deps",
+        "@bazel_tools//tools/bash/runfiles",
+    ],
+)
+
+sh_library(
+    name = "config_stripped_outputs_lib",
+    testonly = 1,
+    srcs = ["config_stripped_outputs_lib.sh"],
 )
 
 ########################################################################

@@ -28,6 +28,7 @@ import static org.junit.Assert.fail;
 
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
+import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Iterables;
 import com.google.common.collect.Lists;
 import com.google.common.eventbus.Subscribe;
@@ -53,6 +54,7 @@ import com.google.devtools.build.lib.analysis.starlark.StarlarkTransition.Transi
 import com.google.devtools.build.lib.analysis.util.AnalysisMock;
 import com.google.devtools.build.lib.analysis.util.AnalysisTestUtil;
 import com.google.devtools.build.lib.analysis.util.AnalysisTestUtil.DummyWorkspaceStatusActionContext;
+import com.google.devtools.build.lib.authandtls.credentialhelper.CredentialModule;
 import com.google.devtools.build.lib.bazel.BazelRepositoryModule;
 import com.google.devtools.build.lib.bugreport.BugReport;
 import com.google.devtools.build.lib.bugreport.BugReporter;
@@ -134,6 +136,7 @@ import com.google.devtools.common.options.OptionsParser;
 import com.google.devtools.common.options.OptionsParsingResult;
 import com.google.errorprone.annotations.FormatMethod;
 import com.google.errorprone.annotations.Keep;
+import com.google.protobuf.ByteString;
 import java.io.IOException;
 import java.lang.Thread.UncaughtExceptionHandler;
 import java.util.ArrayList;
@@ -143,6 +146,14 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
+import java.util.function.Predicate;
+import java.util.logging.Formatter;
+import java.util.logging.Handler;
+import java.util.logging.Level;
+import java.util.logging.LogRecord;
+import java.util.logging.Logger;
+import java.util.logging.SimpleFormatter;
+import java.util.logging.StreamHandler;
 import javax.annotation.Nullable;
 import javax.annotation.concurrent.GuardedBy;
 import org.junit.After;
@@ -199,8 +210,8 @@ public abstract class BuildIntegrationTestCase {
           PrecomputedValue.injected(
               RepositoryDelegatorFunction.REPOSITORY_OVERRIDES, ImmutableMap.of()),
           PrecomputedValue.injected(
-              RepositoryDelegatorFunction.DEPENDENCY_FOR_UNCONDITIONAL_FETCHING,
-              RepositoryDelegatorFunction.DONT_FETCH_UNCONDITIONALLY));
+              RepositoryDelegatorFunction.FORCE_FETCH,
+              RepositoryDelegatorFunction.FORCE_FETCH_DISABLED));
 
   protected EventCollectionApparatus createEvents() {
     return new EventCollectionApparatus();
@@ -303,6 +314,9 @@ public abstract class BuildIntegrationTestCase {
   }
 
   protected void createRuntimeWrapper() throws Exception {
+    if (runtimeWrapper != null) {
+      cleanupInterningPools();
+    }
     runtimeWrapper =
         new BlazeRuntimeWrapper(
             events,
@@ -340,15 +354,22 @@ public abstract class BuildIntegrationTestCase {
   }
 
   protected final void reinitializeAndPreserveOptions() throws Exception {
-    List<String> options = runtimeWrapper.getOptions();
+    ImmutableList<String> options = runtimeWrapper.getOptions();
+    ImmutableMap<String, Object> starlarkOptions = runtimeWrapper.getStarlarkOptions();
     createFilesAndMocks();
     runtimeWrapper.resetOptions();
     runtimeWrapper.addOptions(options);
+    runtimeWrapper.addStarlarkOptions(starlarkOptions);
   }
 
   protected void runPriorToBeforeMethods() throws Exception {
     // Allows tests such as SkyframeIntegrationInvalidationTest to execute code before all @Before
     // methods are being run.
+  }
+
+  @After
+  public final void cleanupInterningPools() {
+    getSkyframeExecutor().getEvaluator().cleanupInterningPools();
   }
 
   @After
@@ -360,9 +381,28 @@ public abstract class BuildIntegrationTestCase {
     LoggingUtil.installRemoteLoggerForTesting(null);
 
     if (OS.getCurrent() == OS.WINDOWS) {
-      // Bazel runtime still holds the file handle of windows_jni.dll making it impossible to delete
-      // on Windows. Try to delete all other files (and directories).
-      bestEffortDeleteTreesBelow(testRoot, "windows_jni.dll");
+      bestEffortDeleteTreesBelow(
+          testRoot,
+          filename -> {
+            // Bazel runtime still holds the file handle of windows_jni.dll making it impossible to
+            // delete on Windows.
+            if (filename.equals("windows_jni.dll")) {
+              return true;
+            }
+
+            // mockito's inline mock maker manipulates byte code of mocked methods and output new
+            // byte code in a temporary jarfile with pattern mockitobootXXXXXXX.jar. It then loads
+            // these jar files into JVM to make mock effective which means Bazel runtime still holds
+            // handles of these files making it impossible to delete on Windows.
+            //
+            // See https://github.com/mockito/mockito/issues/1379#issuecomment-466372914 and
+            // https://github.com/mockito/mockito/blob/91f18ea1648e389bea06289d818def7978e82288/src/main/java/org/mockito/internal/creation/bytebuddy/InlineDelegateByteBuddyMockMaker.java#L123C10-L123C10.
+            if (filename.startsWith("mockitoboot") && filename.endsWith(".jar")) {
+              return true;
+            }
+
+            return false;
+          });
     } else {
       testRoot.deleteTreesBelow(); // (comment out during debugging)
     }
@@ -373,7 +413,8 @@ public abstract class BuildIntegrationTestCase {
     Thread.interrupted(); // If there was a crash in test case, main thread was interrupted.
   }
 
-  private static void bestEffortDeleteTreesBelow(Path path, String canSkip) throws IOException {
+  private static void bestEffortDeleteTreesBelow(Path path, Predicate<String> canSkip)
+      throws IOException {
     for (Dirent dirent : path.readdir(Symlinks.NOFOLLOW)) {
       Path child = path.getRelative(dirent.getName());
       if (dirent.getType() == Dirent.Type.DIRECTORY) {
@@ -387,7 +428,7 @@ public abstract class BuildIntegrationTestCase {
       try {
         child.delete();
       } catch (IOException e) {
-        if (!child.getBaseName().equals(canSkip)) {
+        if (!canSkip.test(child.getBaseName())) {
           throw e;
         }
       }
@@ -563,7 +604,7 @@ public abstract class BuildIntegrationTestCase {
             .addBlazeModule(new OutputFilteringModule())
             .addBlazeModule(connectivityModule)
             .addBlazeModule(new SkymeldModule())
-            .addBlazeModule(getMockBazelRepositoryModule());
+            .addBlazeModule(new CredentialModule());
     getSpawnModules().forEach(builder::addBlazeModule);
     builder
         .addBlazeModule(getBuildInfoModule())
@@ -575,7 +616,10 @@ public abstract class BuildIntegrationTestCase {
       builder
           .addBlazeModule(new NoSpawnCacheModule())
           .addBlazeModule(new WorkerModule())
-          .addBlazeModule(new BazelRepositoryModule());
+          .addBlazeModule(
+              new BazelRepositoryModule(AnalysisMock.get().getBuiltinModules(directories)));
+    } else {
+      builder.addBlazeModule(getMockBazelRepositoryModule());
     }
     return builder;
   }
@@ -719,7 +763,7 @@ public abstract class BuildIntegrationTestCase {
     if (result == null) {
       return baseConfiguration;
     }
-    Set<BuildConfigurationValue> topLevelTargetConfigurations =
+    ImmutableSet<BuildConfigurationValue> topLevelTargetConfigurations =
         result.getActualTargets().stream()
             .map(this::getConfiguration)
             .filter(Objects::nonNull)
@@ -914,6 +958,10 @@ public abstract class BuildIntegrationTestCase {
 
   protected String readContentAsLatin1String(Artifact artifact) throws IOException {
     return new String(FileSystemUtils.readContentAsLatin1(artifact.getPath()));
+  }
+
+  protected ByteString readContentAsByteArray(Artifact artifact) throws IOException {
+    return ByteString.copyFrom(FileSystemUtils.readContent(artifact.getPath()));
   }
 
   /**
@@ -1111,5 +1159,36 @@ public abstract class BuildIntegrationTestCase {
           new InfoCommand(),
           new TestCommand());
     }
+  }
+
+  /** Redirect logging output to the given outErr stream at the given log level. */
+  protected void divertLogging(Level level, OutErr outErr, Iterable<Logger> loggers) {
+
+    StreamHandler streamHandler =
+        new StreamHandler(outErr.getErrorStream(), getFormatterForLogging()) {
+          @Override
+          public synchronized void publish(LogRecord record) {
+            super.publish(record);
+            flush();
+          }
+
+          @Override
+          public synchronized void close() {
+            throw new UnsupportedOperationException();
+          }
+        };
+    streamHandler.setLevel(Level.ALL);
+
+    for (Logger logger : loggers) {
+      for (Handler handler : logger.getHandlers()) {
+        logger.removeHandler(handler);
+      }
+      logger.addHandler(streamHandler);
+      logger.setLevel(level);
+    }
+  }
+
+  protected Formatter getFormatterForLogging() {
+    return new SimpleFormatter();
   }
 }

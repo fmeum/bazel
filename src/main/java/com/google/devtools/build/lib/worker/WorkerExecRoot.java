@@ -46,7 +46,7 @@ final class WorkerExecRoot {
 
   public void createFileSystem(
       Set<PathFragment> workerFiles, SandboxInputs inputs, SandboxOutputs outputs)
-      throws IOException {
+      throws IOException, InterruptedException {
     workDir.createDirectoryAndParents();
 
     // First compute all the inputs and directories that we need. This is based only on
@@ -58,8 +58,7 @@ final class WorkerExecRoot {
         inputsToCreate,
         dirsToCreate,
         Iterables.concat(workerFiles, inputs.getFiles().keySet(), inputs.getSymlinks().keySet()),
-        outputs.files(),
-        outputs.dirs());
+        outputs);
 
     // Then do a full traversal of the parent directory of `workDir`. This will use what we computed
     // above, delete anything unnecessary and update `inputsToCreate`/`dirsToCreate` if something is
@@ -77,8 +76,11 @@ final class WorkerExecRoot {
   }
 
   static void createInputs(Iterable<PathFragment> inputsToCreate, SandboxInputs inputs, Path dir)
-      throws IOException {
+      throws IOException, InterruptedException {
     for (PathFragment fragment : inputsToCreate) {
+      if (Thread.interrupted()) {
+        throw new InterruptedException();
+      }
       Path key = dir.getRelative(fragment);
       if (inputs.getFiles().containsKey(fragment)) {
         RootedPath fileDest = inputs.getFiles().get(fragment);

@@ -610,9 +610,11 @@ public final class BazelBuildEventServiceModuleTest extends BuildIntegrationTest
     runBuildWithOptions();
     BuildEventServiceOptions besOptions = new BuildEventServiceOptions();
     besOptions.besKeywords = ImmutableList.of("keyword0", "keyword1", "keyword0");
+    besOptions.besSystemKeywords = ImmutableList.of("sys_keyword0", "sys_keyword1", "sys_keyword0");
 
     assertThat(besModule.getBesKeywords(besOptions, null))
-        .containsExactly("user_keyword=keyword0", "user_keyword=keyword1");
+        .containsExactly(
+            "user_keyword=keyword0", "user_keyword=keyword1", "sys_keyword0", "sys_keyword1");
   }
 
   @Test
@@ -727,7 +729,7 @@ public final class BazelBuildEventServiceModuleTest extends BuildIntegrationTest
     testOom(
         () -> {
           OutOfMemoryError oom = new OutOfMemoryError();
-          // Simulates an OOM coming from RetainedHeapLimiter, which reports the error by calling
+          // Simulates an OOM coming from GcThrashingDetector, which reports the error by calling
           // handleCrash. Uses keepAlive() to avoid exiting the JVM and aborting the test, then
           // throw the original oom to ensure control flow terminates.
           BugReport.handleCrash(Crash.from(oom), CrashContext.keepAlive());
@@ -750,8 +752,13 @@ public final class BazelBuildEventServiceModuleTest extends BuildIntegrationTest
         .getEvaluator()
         .injectGraphTransformerForTesting(
             NotifyingHelper.makeNotifyingTransformer(
+                // To get the right configuration, some analysis has to already been done.
+                // We're only throwing OOM here for non shareable ActionLookupData to exclude
+                // workspace status actions, which in Skymeld mode can run without any analysis.
                 (key, type, order, context) -> {
-                  if (key instanceof ActionLookupData && !threwOom.getAndSet(true)) {
+                  if (key instanceof ActionLookupData
+                      && key.valueIsShareable()
+                      && !threwOom.getAndSet(true)) {
                     throwOom.run();
                   }
                 }));

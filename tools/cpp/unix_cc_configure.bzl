@@ -1,6 +1,6 @@
 # pylint: disable=g-bad-file-header
 # Copyright 2016 The Bazel Authors. All rights reserved.
-#
+
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
@@ -417,12 +417,39 @@ def configure_unix_toolchain(repository_ctx, cpu_value, overriden_tools):
     cxx_opts = split_escaped(get_env_var(
         repository_ctx,
         "BAZEL_CXXOPTS",
-        "-std=c++0x",
+        "-std=c++14",
         False,
     ), ":")
 
     use_libcpp = darwin or bsd
-    bazel_linklibs = "-lc++:-lm" if use_libcpp else "-lstdc++:-lm"
+    is_as_needed_supported = _is_linker_option_supported(
+        repository_ctx,
+        cc,
+        "-Wl,-no-as-needed",
+        "-no-as-needed",
+    )
+    is_push_state_supported = _is_linker_option_supported(
+        repository_ctx,
+        cc,
+        "-Wl,--push-state",
+        "--push-state",
+    )
+    if use_libcpp:
+        bazel_default_libs = ["-lc++", "-lm"]
+    else:
+        bazel_default_libs = ["-lstdc++", "-lm"]
+    if is_as_needed_supported and is_push_state_supported:
+        # Do not link against C++ standard libraries unless they are actually
+        # used.
+        # We assume that --push-state support implies --pop-state support.
+        bazel_linklibs_elements = [
+            arg
+            for lib in bazel_default_libs
+            for arg in ["-Wl,--push-state,-as-needed", lib, "-Wl,--pop-state"]
+        ]
+    else:
+        bazel_linklibs_elements = bazel_default_libs
+    bazel_linklibs = ":".join(bazel_linklibs_elements)
     bazel_linkopts = ""
 
     link_opts = split_escaped(get_env_var(
@@ -495,7 +522,8 @@ def configure_unix_toolchain(repository_ctx, cpu_value, overriden_tools):
         ["/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk"],
     )
 
-    if is_clang:
+    generate_modulemap = is_clang and not darwin
+    if generate_modulemap:
         repository_ctx.file("module.modulemap", _generate_system_module_map(
             repository_ctx,
             builtin_include_directories,
@@ -520,7 +548,7 @@ def configure_unix_toolchain(repository_ctx, cpu_value, overriden_tools):
         {
             "%{cc_toolchain_identifier}": cc_toolchain_identifier,
             "%{name}": cpu_value,
-            "%{modulemap}": ("\":module.modulemap\"" if is_clang else "None"),
+            "%{modulemap}": ("\":module.modulemap\"" if generate_modulemap else "None"),
             "%{cc_compiler_deps}": get_starlark_list([":builtin_include_directory_paths"] + (
                 [":cc_wrapper"] if darwin else []
             ) + (
@@ -598,11 +626,8 @@ def configure_unix_toolchain(repository_ctx, cpu_value, overriden_tools):
             "%{conly_flags}": get_starlark_list(conly_opts),
             "%{link_flags}": get_starlark_list((
                 ["-fuse-ld=" + gold_or_lld_linker_path] if gold_or_lld_linker_path else []
-            ) + _add_linker_option_if_supported(
-                repository_ctx,
-                cc,
-                "-Wl,-no-as-needed",
-                "-no-as-needed",
+            ) + (
+                ["-Wl,-no-as-needed"] if is_as_needed_supported else []
             ) + _add_linker_option_if_supported(
                 repository_ctx,
                 cc,

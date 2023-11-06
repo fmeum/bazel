@@ -28,6 +28,7 @@ import com.google.devtools.build.lib.analysis.actions.CustomCommandLine.VectorAr
 import com.google.devtools.build.lib.analysis.actions.SpawnAction;
 import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.collect.nestedset.NestedSet;
+import com.google.devtools.build.lib.packages.RuleClass.ConfiguredTargetFactory.RuleErrorException;
 import com.google.devtools.build.lib.rules.java.JavaConfiguration.OneVersionEnforcementLevel;
 import com.google.devtools.build.lib.skyframe.serialization.autocodec.AutoCodec;
 import com.google.devtools.build.lib.skyframe.serialization.autocodec.SerializationConstant;
@@ -71,13 +72,18 @@ public final class OneVersionCheckActionBuilder {
   }
 
   @Nullable
-  public Artifact build(RuleContext ruleContext) throws InterruptedException {
+  public Artifact build(RuleContext ruleContext) throws InterruptedException, RuleErrorException {
     Preconditions.checkNotNull(enforcementLevel);
     Preconditions.checkNotNull(javaToolchain);
     Preconditions.checkNotNull(jarsToCheck);
 
     FilesToRunProvider oneVersionTool = javaToolchain.getOneVersionBinary();
-    Artifact oneVersionAllowlist = javaToolchain.getOneVersionAllowlist();
+    Artifact oneVersionAllowlist;
+    if (ruleContext.isTestTarget()) {
+      oneVersionAllowlist = javaToolchain.oneVersionAllowlistForTests();
+    } else {
+      oneVersionAllowlist = javaToolchain.getOneVersionAllowlist();
+    }
     if (oneVersionTool == null || oneVersionAllowlist == null) {
       return null;
     }

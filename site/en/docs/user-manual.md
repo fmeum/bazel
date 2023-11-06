@@ -348,7 +348,7 @@ Default value is `local_jdk`.
 Possible values are: `local_jdk`, `local_jdk_{{ "<var>" }}version{{ "</var>" }}`,
 `remotejdk_11`, and `remotejdk_17`.
 You can extend the values by registering custom JVM using either
-`local_java_repository` or `remote_java_repostory` repository rules.
+`local_java_repository` or `remote_java_repository` repository rules.
 
 #### `--tool_java_runtime_version={{ "<var>" }}version{{ "</var>" }}` {:#tool-java-runtime-version}
 
@@ -926,7 +926,6 @@ possible in the edit/build/test cycle. This argument affects the way all
 non-flag arguments are interpreted: each argument must be a
 file target label or a plain filename relative to the current working
 directory, and one rule that depends on each source filename is built. For
-
 C++ and Java
 sources, rules in the same language space are preferentially chosen. For
 multiple rules with the same preference, the one that appears first in the
@@ -1266,6 +1265,8 @@ The contract is:
     Bazel always outputs the following volatile keys:
       *   `BUILD_TIMESTAMP`: time of the build in seconds since the Unix Epoch (the value
         of `System.currentTimeMillis()` divided by a thousand)
+      *   `FORMATTED_DATE`: time of the build Formatted as
+        `yyyy MMM d HH mm ss EEE`(for example 2023 Jun 2 01 44 29 Fri) in UTC.
 
 On Linux/macOS you can pass `--workspace_status_command=/bin/true` to
 disable retrieving workspace status, because `true` does nothing, successfully (exits

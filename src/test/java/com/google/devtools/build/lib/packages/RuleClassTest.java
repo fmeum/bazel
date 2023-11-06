@@ -33,8 +33,6 @@ import static com.google.devtools.build.lib.packages.Type.STRING_LIST;
 import static org.junit.Assert.assertThrows;
 import static org.junit.Assert.fail;
 
-import com.google.common.base.Predicate;
-import com.google.common.base.Predicates;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
@@ -100,8 +98,6 @@ public final class RuleClassTest extends PackageLoadingTestCase {
 
   private static final class DummyFragment extends Fragment {}
 
-  private static final Predicate<String> PREFERRED_DEPENDENCY_PREDICATE = Predicates.alwaysFalse();
-
   private static RuleClass createRuleClassA() throws LabelSyntaxException {
     return newRuleClass(
         "ruleA",
@@ -115,7 +111,6 @@ public final class RuleClassTest extends PackageLoadingTestCase {
         null,
         DUMMY_CONFIGURED_TARGET_FACTORY,
         PredicatesWithMessage.alwaysTrue(),
-        PREFERRED_DEPENDENCY_PREDICATE,
         AdvertisedProviderSet.EMPTY,
         null,
         ImmutableSet.of(),
@@ -149,7 +144,6 @@ public final class RuleClassTest extends PackageLoadingTestCase {
         null,
         DUMMY_CONFIGURED_TARGET_FACTORY,
         PredicatesWithMessage.alwaysTrue(),
-        PREFERRED_DEPENDENCY_PREDICATE,
         AdvertisedProviderSet.EMPTY,
         null,
         ImmutableSet.of(),
@@ -190,16 +184,16 @@ public final class RuleClassTest extends PackageLoadingTestCase {
         .isEqualTo(ruleClassA.getAttribute(7));
 
     // default based on type
-    assertThat(ruleClassA.getAttribute(0).getDefaultValue()).isEqualTo("");
-    assertThat(ruleClassA.getAttribute(1).getDefaultValue()).isEqualTo("");
-    assertThat(ruleClassA.getAttribute(2).getDefaultValue())
+    assertThat(ruleClassA.getAttribute(0).getDefaultValue(null)).isEqualTo("");
+    assertThat(ruleClassA.getAttribute(1).getDefaultValue(null)).isEqualTo("");
+    assertThat(ruleClassA.getAttribute(2).getDefaultValue(null))
         .isEqualTo(Label.parseCanonical("//default:label"));
-    assertThat(ruleClassA.getAttribute(3).getDefaultValue()).isEqualTo(ImmutableList.of());
-    assertThat(ruleClassA.getAttribute(4).getDefaultValue()).isEqualTo(StarlarkInt.of(42));
+    assertThat(ruleClassA.getAttribute(3).getDefaultValue(null)).isEqualTo(ImmutableList.of());
+    assertThat(ruleClassA.getAttribute(4).getDefaultValue(null)).isEqualTo(StarlarkInt.of(42));
     // default explicitly specified
-    assertThat(ruleClassA.getAttribute(5).getDefaultValue()).isNull();
-    assertThat(ruleClassA.getAttribute(6).getDefaultValue()).isEqualTo(ImmutableList.of());
-    assertThat(ruleClassA.getAttribute(7).getDefaultValue()).isEqualTo(ImmutableList.of());
+    assertThat(ruleClassA.getAttribute(5).getDefaultValue(null)).isNull();
+    assertThat(ruleClassA.getAttribute(6).getDefaultValue(null)).isEqualTo(ImmutableList.of());
+    assertThat(ruleClassA.getAttribute(7).getDefaultValue(null)).isEqualTo(ImmutableList.of());
   }
 
   @Test
@@ -266,7 +260,8 @@ public final class RuleClassTest extends PackageLoadingTestCase {
             Optional.empty(),
             StarlarkSemantics.DEFAULT,
             RepositoryMapping.ALWAYS_FALLBACK,
-            RepositoryMapping.ALWAYS_FALLBACK)
+            RepositoryMapping.ALWAYS_FALLBACK,
+            /* cpuBoundSemaphore= */ null)
         .setFilename(RootedPath.toRootedPath(root, testBuildfilePath));
   }
 
@@ -285,7 +280,6 @@ public final class RuleClassTest extends PackageLoadingTestCase {
             null,
             DUMMY_CONFIGURED_TARGET_FACTORY,
             PredicatesWithMessage.alwaysTrue(),
-            PREFERRED_DEPENDENCY_PREDICATE,
             AdvertisedProviderSet.EMPTY,
             null,
             ImmutableSet.of(),
@@ -329,7 +323,6 @@ public final class RuleClassTest extends PackageLoadingTestCase {
             null,
             DUMMY_CONFIGURED_TARGET_FACTORY,
             PredicatesWithMessage.alwaysTrue(),
-            PREFERRED_DEPENDENCY_PREDICATE,
             AdvertisedProviderSet.EMPTY,
             null,
             ImmutableSet.of(),
@@ -367,7 +360,6 @@ public final class RuleClassTest extends PackageLoadingTestCase {
             null,
             DUMMY_CONFIGURED_TARGET_FACTORY,
             PredicatesWithMessage.alwaysTrue(),
-            PREFERRED_DEPENDENCY_PREDICATE,
             AdvertisedProviderSet.EMPTY,
             null,
             ImmutableSet.of(),
@@ -417,7 +409,6 @@ public final class RuleClassTest extends PackageLoadingTestCase {
             null,
             DUMMY_CONFIGURED_TARGET_FACTORY,
             PredicatesWithMessage.alwaysTrue(),
-            PREFERRED_DEPENDENCY_PREDICATE,
             AdvertisedProviderSet.EMPTY,
             null,
             ImmutableSet.of(),
@@ -461,7 +452,6 @@ public final class RuleClassTest extends PackageLoadingTestCase {
             null,
             DUMMY_CONFIGURED_TARGET_FACTORY,
             PredicatesWithMessage.alwaysTrue(),
-            PREFERRED_DEPENDENCY_PREDICATE,
             AdvertisedProviderSet.EMPTY,
             null,
             ImmutableSet.of(),
@@ -505,7 +495,6 @@ public final class RuleClassTest extends PackageLoadingTestCase {
             null,
             DUMMY_CONFIGURED_TARGET_FACTORY,
             PredicatesWithMessage.alwaysTrue(),
-            PREFERRED_DEPENDENCY_PREDICATE,
             AdvertisedProviderSet.EMPTY,
             null,
             ImmutableSet.of(),
@@ -604,7 +593,6 @@ public final class RuleClassTest extends PackageLoadingTestCase {
             null,
             DUMMY_CONFIGURED_TARGET_FACTORY,
             PredicatesWithMessage.alwaysTrue(),
-            PREFERRED_DEPENDENCY_PREDICATE,
             AdvertisedProviderSet.EMPTY,
             null,
             ImmutableSet.of(),
@@ -641,7 +629,6 @@ public final class RuleClassTest extends PackageLoadingTestCase {
             null,
             DUMMY_CONFIGURED_TARGET_FACTORY,
             PredicatesWithMessage.alwaysTrue(),
-            PREFERRED_DEPENDENCY_PREDICATE,
             AdvertisedProviderSet.EMPTY,
             null,
             ImmutableSet.of(),
@@ -673,7 +660,6 @@ public final class RuleClassTest extends PackageLoadingTestCase {
         null,
         DUMMY_CONFIGURED_TARGET_FACTORY,
         PredicatesWithMessage.alwaysTrue(),
-        PREFERRED_DEPENDENCY_PREDICATE,
         AdvertisedProviderSet.EMPTY,
         null,
         ImmutableSet.of(),
@@ -843,7 +829,6 @@ public final class RuleClassTest extends PackageLoadingTestCase {
             null,
             DUMMY_CONFIGURED_TARGET_FACTORY,
             PredicatesWithMessage.alwaysTrue(),
-            PREFERRED_DEPENDENCY_PREDICATE,
             AdvertisedProviderSet.EMPTY,
             null,
             ImmutableSet.of(),
@@ -882,7 +867,6 @@ public final class RuleClassTest extends PackageLoadingTestCase {
             null,
             DUMMY_CONFIGURED_TARGET_FACTORY,
             PredicatesWithMessage.alwaysTrue(),
-            PREFERRED_DEPENDENCY_PREDICATE,
             AdvertisedProviderSet.EMPTY,
             null,
             ImmutableSet.of(),
@@ -950,6 +934,7 @@ public final class RuleClassTest extends PackageLoadingTestCase {
         pkgBuilder,
         ruleLabel,
         new BuildLangTypedAttributeValuesMap(attributeValues),
+        true,
         reporter,
         ImmutableList.of(
             StarlarkThread.callStackEntry(StarlarkThread.TOP_LEVEL, testRuleLocation)));
@@ -1029,7 +1014,6 @@ public final class RuleClassTest extends PackageLoadingTestCase {
       TransitionFactory<RuleTransitionData> transitionFactory,
       ConfiguredTargetFactory<?, ?, ?> configuredTargetFactory,
       PredicateWithMessage<Rule> validityPredicate,
-      Predicate<String> preferredDependencyPredicate,
       AdvertisedProviderSet advertisedProviders,
       @Nullable StarlarkFunction configuredTargetFunction,
       Set<Class<? extends Fragment>> allowedConfigurationFragments,
@@ -1040,7 +1024,10 @@ public final class RuleClassTest extends PackageLoadingTestCase {
         DUMMY_STACK,
         /* key= */ name,
         RuleClassType.NORMAL,
+        /* starlarkParent= */ null,
         /* isStarlark= */ starlarkExecutable,
+        /* extendable= */ false,
+        /* extendableAllowlist= */ null,
         /* starlarkTestable= */ false,
         documented,
         binaryOutput,
@@ -1054,7 +1041,6 @@ public final class RuleClassTest extends PackageLoadingTestCase {
         transitionFactory,
         configuredTargetFactory,
         validityPredicate,
-        preferredDependencyPredicate,
         advertisedProviders,
         configuredTargetFunction,
         NO_EXTERNAL_BINDINGS,
@@ -1077,7 +1063,8 @@ public final class RuleClassTest extends PackageLoadingTestCase {
                 .add(RuleClass.NAME_ATTRIBUTE)
                 .add(attributes)
                 .build(),
-        /* buildSetting= */ null);
+        /* buildSetting= */ null,
+        /* subrules= */ ImmutableList.of());
   }
 
   private static RuleClass createParentRuleClass() {
@@ -1093,7 +1080,6 @@ public final class RuleClassTest extends PackageLoadingTestCase {
         null,
         DUMMY_CONFIGURED_TARGET_FACTORY,
         PredicatesWithMessage.alwaysTrue(),
-        PREFERRED_DEPENDENCY_PREDICATE,
         AdvertisedProviderSet.EMPTY,
         null,
         ImmutableSet.of(DummyFragment.class),
@@ -1134,7 +1120,7 @@ public final class RuleClassTest extends PackageLoadingTestCase {
     ValidityPredicate checker =
         new ValidityPredicate() {
           @Override
-          public String checkValid(Rule from, String toRuleClass, Set<String> toRuleTags) {
+          public String checkValid(Rule from, String toRuleClass) {
             assertThat(from.getName()).isEqualTo("top");
             switch (toRuleClass) {
               case "dep1class":
@@ -1161,45 +1147,14 @@ public final class RuleClassTest extends PackageLoadingTestCase {
             topClass
                 .getAttributeByName("deps")
                 .getValidityPredicate()
-                .checkValid(topRule, dep1.getRuleClass(), dep1.getRuleTags()))
+                .checkValid(topRule, dep1.getRuleClass()))
         .isEqualTo("pear");
     assertThat(
             topClass
                 .getAttributeByName("deps")
                 .getValidityPredicate()
-                .checkValid(topRule, dep2.getRuleClass(), dep2.getRuleTags()))
+                .checkValid(topRule, dep2.getRuleClass()))
         .isNull();
-  }
-
-  /**
-   * Tests structure for making certain rules "preferential choices" for certain files under
-   * --compile_one_dependency.
-   */
-  @Test
-  public void testPreferredDependencyChecker() throws Exception {
-    final String cppFile = "file.cc";
-    final String textFile = "file.txt";
-
-    // Default: not preferred for anything.
-    RuleClass defaultClass =
-        new RuleClass.Builder("defaultClass", RuleClassType.NORMAL, false)
-            .factory(DUMMY_CONFIGURED_TARGET_FACTORY)
-            .add(attr("tags", STRING_LIST))
-            .build();
-    Rule defaultRule = createRule(defaultClass, "defaultRule", ImmutableMap.of());
-    assertThat(defaultRule.getRuleClassObject().isPreferredDependency(cppFile)).isFalse();
-    assertThat(defaultRule.getRuleClassObject().isPreferredDependency(textFile)).isFalse();
-
-    // Make a rule that's preferred for C++ sources.
-    RuleClass cppClass =
-        new RuleClass.Builder("cppClass", RuleClassType.NORMAL, false)
-            .factory(DUMMY_CONFIGURED_TARGET_FACTORY)
-            .add(attr("tags", STRING_LIST))
-            .setPreferredDependencyPredicate(filename -> filename.endsWith(".cc"))
-            .build();
-    Rule cppRule = createRule(cppClass, "cppRule", ImmutableMap.of());
-    assertThat(cppRule.getRuleClassObject().isPreferredDependency(cppFile)).isTrue();
-    assertThat(cppRule.getRuleClassObject().isPreferredDependency(textFile)).isFalse();
   }
 
   @Test

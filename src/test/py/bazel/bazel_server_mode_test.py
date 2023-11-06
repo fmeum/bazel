@@ -12,8 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import unittest
-
+from absl.testing import absltest
 from src.test.py.bazel import test_base
 
 
@@ -22,16 +21,12 @@ class BazelServerModeTest(test_base.TestBase):
   def testBazelServerMode(self):
     self.ScratchFile('WORKSPACE')
 
-    exit_code, stdout, stderr = self.RunBazel(['info', 'server_pid'])
-    self.AssertExitCode(exit_code, 0, stderr)
+    _, stdout, _ = self.RunBazel(['info', 'server_pid'])
     pid1 = stdout[0]
-
-    exit_code, stdout, stderr = self.RunBazel(['info', 'server_pid'])
-    self.AssertExitCode(exit_code, 0, stderr)
+    _, stdout, _ = self.RunBazel(['info', 'server_pid'])
     pid2 = stdout[0]
-
     self.assertEqual(pid1, pid2)
 
 
 if __name__ == '__main__':
-  unittest.main()
+  absltest.main()

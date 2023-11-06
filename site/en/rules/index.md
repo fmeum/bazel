@@ -18,14 +18,14 @@ Here is a selection of recommended rules:
 
 * [Android](/docs/bazel-and-android)
 * [C / C++](/docs/bazel-and-cpp)
-* [Docker](https://github.com/bazelbuild/rules_docker){: .external}
+* [Docker/OCI](https://github.com/bazel-contrib/rules_oci){: .external}
 * [Go](https://github.com/bazelbuild/rules_go){: .external}
 * [Haskell](https://github.com/tweag/rules_haskell){: .external}
 * [Java](/docs/bazel-and-java)
 * [JavaScript / NodeJS](https://github.com/bazelbuild/rules_nodejs){: .external}
 * [Kubernetes](https://github.com/bazelbuild/rules_k8s){: .external}
 * [Maven dependency management](https://github.com/bazelbuild/rules_jvm_external){: .external}
-* [Objective C](/docs/bazel-and-apple)
+* [Objective-C](/docs/bazel-and-apple)
 * [Package building](https://github.com/bazelbuild/rules_pkg){: .external}
 * [Protocol Buffers](https://github.com/bazelbuild/rules_proto#protobuf-rules-for-bazel){: .external}
 * [Python](https://github.com/bazelbuild/rules_python){: .external}
@@ -62,11 +62,11 @@ BUILD files without a `load` statement.
   - [`config_setting`](/reference/be/general#config_setting)
   - [`genrule`](/reference/be/general#genrule)
 * Platform
-  - [`constraint_setting`](/reference/be/platform#constraint_setting)
-  - [`constraint_value`](/reference/be/platform#constraint_value)
-  - [`platform`](/reference/be/platform#platform)
-  - [`toolchain`](/reference/be/platform#toolchain)
-  - [`toolchain_type`](/reference/be/platform#toolchain_type)
+  - [`constraint_setting`](/reference/be/platforms-and-toolchains#constraint_setting)
+  - [`constraint_value`](/reference/be/platforms-and-toolchains#constraint_value)
+  - [`platform`](/reference/be/platforms-and-toolchains#platform)
+  - [`toolchain`](/reference/be/platforms-and-toolchains#toolchain)
+  - [`toolchain_type`](/reference/be/platforms-and-toolchains#toolchain_type)
 * Workspace
   - [`bind`](/reference/be/workspace#bind)
   - [`local_repository`](/reference/be/workspace#local_repository)

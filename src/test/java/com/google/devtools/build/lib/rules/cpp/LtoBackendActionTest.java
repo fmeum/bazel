@@ -32,6 +32,7 @@ import com.google.devtools.build.lib.actions.util.ActionsTestUtil;
 import com.google.devtools.build.lib.analysis.Runfiles;
 import com.google.devtools.build.lib.analysis.SingleRunfilesSupplier;
 import com.google.devtools.build.lib.analysis.actions.SpawnAction;
+import com.google.devtools.build.lib.analysis.config.BuildConfigurationValue.RunfileSymlinksMode;
 import com.google.devtools.build.lib.analysis.util.ActionTester;
 import com.google.devtools.build.lib.analysis.util.ActionTester.ActionCombinationFactory;
 import com.google.devtools.build.lib.analysis.util.AnalysisTestUtil;
@@ -45,7 +46,6 @@ import com.google.devtools.build.lib.util.io.FileOutErr;
 import com.google.devtools.build.lib.vfs.FileSystemUtils;
 import com.google.devtools.build.lib.vfs.PathFragment;
 import com.google.devtools.build.lib.vfs.SyscallCache;
-import java.util.Arrays;
 import java.util.HashMap;
 import java.util.Map;
 import org.junit.Before;
@@ -175,8 +175,7 @@ public class LtoBackendActionTest extends BuildViewTestCase {
     MNEMONIC,
     RUNFILES_SUPPLIER,
     INPUT,
-    FIXED_ENVIRONMENT,
-    VARIABLE_ENVIRONMENT
+    FIXED_ENVIRONMENT
   }
 
   @Test
@@ -219,8 +218,8 @@ public class LtoBackendActionTest extends BuildViewTestCase {
                       Runfiles.EMPTY,
                       artifactA,
                       /* repoMappingManifest= */ null,
-                      /* buildRunfileLinks= */ false,
-                      /* runfileLinksEnabled= */ false));
+                      RunfileSymlinksMode.SKIP,
+                      /* buildRunfileLinks= */ false));
             } else {
               builder.addRunfilesSupplier(
                   new SingleRunfilesSupplier(
@@ -228,8 +227,8 @@ public class LtoBackendActionTest extends BuildViewTestCase {
                       Runfiles.EMPTY,
                       artifactB,
                       /* repoMappingManifest= */ null,
-                      /* buildRunfileLinks= */ false,
-                      /* runfileLinksEnabled= */ false));
+                      RunfileSymlinksMode.SKIP,
+                      /* buildRunfileLinks= */ false));
             }
 
             if (attributesToFlip.contains(KeyAttributes.INPUT)) {
@@ -243,9 +242,6 @@ public class LtoBackendActionTest extends BuildViewTestCase {
               env.put("foo", "bar");
             }
             builder.setEnvironment(env);
-            if (attributesToFlip.contains(KeyAttributes.VARIABLE_ENVIRONMENT)) {
-              builder.setInheritedEnvironment(Arrays.asList("baz"));
-            }
 
             SpawnAction action = builder.build(ActionsTestUtil.NULL_ACTION_OWNER, targetConfig);
             collectingAnalysisEnvironment.registerAction(action);

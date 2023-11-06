@@ -47,7 +47,8 @@ import net.starlark.java.eval.StarlarkThread;
 
 /** Structure of CcLinkingContext. */
 public class CcLinkingContext implements CcLinkingContextApi<Artifact> {
-  public static final CcLinkingContext EMPTY = builder().build();
+  public static final CcLinkingContext EMPTY =
+      builder().setExtraLinkTimeLibraries(ExtraLinkTimeLibraries.EMPTY).build();
 
   /** A list of link options contributed by a single configured target/aspect. */
   @Immutable
@@ -304,12 +305,6 @@ public class CcLinkingContext implements CcLinkingContextApi<Artifact> {
       private final ImmutableList.Builder<Linkstamp> linkstamps = ImmutableList.builder();
 
       @CanIgnoreReturnValue
-      public Builder addLibrary(LibraryToLink library) {
-        this.libraries.add(library);
-        return this;
-      }
-
-      @CanIgnoreReturnValue
       public Builder addLibraries(List<LibraryToLink> libraries) {
         this.libraries.addAll(libraries);
         return this;
@@ -406,6 +401,9 @@ public class CcLinkingContext implements CcLinkingContextApi<Artifact> {
   }
 
   public static CcLinkingContext merge(List<CcLinkingContext> ccLinkingContexts) {
+    if (ccLinkingContexts.isEmpty()) {
+      return EMPTY;
+    }
     Builder mergedCcLinkingContext = CcLinkingContext.builder();
     ExtraLinkTimeLibraries.Builder mergedExtraLinkTimeLibraries = ExtraLinkTimeLibraries.builder();
     for (CcLinkingContext ccLinkingContext : ccLinkingContexts) {
@@ -554,13 +552,6 @@ public class CcLinkingContext implements CcLinkingContextApi<Artifact> {
     @CanIgnoreReturnValue
     public Builder setOwner(Label owner) {
       linkerInputBuilder.setOwner(owner);
-      return this;
-    }
-
-    @CanIgnoreReturnValue
-    public Builder addLibrary(LibraryToLink library) {
-      hasDirectLinkerInput = true;
-      linkerInputBuilder.addLibrary(library);
       return this;
     }
 

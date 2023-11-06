@@ -14,8 +14,6 @@
 
 package com.google.devtools.build.lib.analysis;
 
-import static com.google.common.collect.ImmutableSet.toImmutableSet;
-
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Preconditions;
 import com.google.common.collect.ImmutableList;
@@ -25,27 +23,22 @@ import com.google.devtools.build.lib.actions.ActionEnvironment;
 import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.actions.CommandLine;
 import com.google.devtools.build.lib.actions.RunfilesSupplier;
-import com.google.devtools.build.lib.analysis.RepoMappingManifestAction.Entry;
 import com.google.devtools.build.lib.analysis.SourceManifestAction.ManifestType;
 import com.google.devtools.build.lib.analysis.actions.ActionConstructionContext;
 import com.google.devtools.build.lib.analysis.actions.SymlinkTreeAction;
 import com.google.devtools.build.lib.analysis.config.BuildConfigurationValue;
+import com.google.devtools.build.lib.analysis.config.BuildConfigurationValue.RunfileSymlinksMode;
 import com.google.devtools.build.lib.analysis.config.RunUnder;
-import com.google.devtools.build.lib.cmdline.RepositoryName;
 import com.google.devtools.build.lib.collect.nestedset.NestedSet;
 import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
 import com.google.devtools.build.lib.concurrent.ThreadSafety.Immutable;
-import com.google.devtools.build.lib.packages.Package;
 import com.google.devtools.build.lib.packages.TargetUtils;
 import com.google.devtools.build.lib.packages.Type;
-import com.google.devtools.build.lib.packages.semantics.BuildLanguageOptions;
 import com.google.devtools.build.lib.vfs.FileSystemUtils;
 import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.build.lib.vfs.PathFragment;
 import java.util.Collection;
-import java.util.HashSet;
 import java.util.LinkedHashSet;
-import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.TreeMap;
@@ -95,8 +88,8 @@ public final class RunfilesSupport implements RunfilesSupplier {
   private final Artifact repoMappingManifest;
   private final Artifact runfilesMiddleman;
   private final Artifact owningExecutable;
+  private final RunfileSymlinksMode runfileSymlinksMode;
   private final boolean buildRunfileLinks;
-  private final boolean runfilesEnabled;
   private final CommandLine args;
   private final ActionEnvironment actionEnvironment;
 
@@ -114,7 +107,9 @@ public final class RunfilesSupport implements RunfilesSupplier {
       CommandLine args,
       ActionEnvironment actionEnvironment) {
     Artifact owningExecutable = Preconditions.checkNotNull(executable);
-    boolean createManifest = ruleContext.getConfiguration().buildRunfilesManifests();
+    RunfileSymlinksMode runfileSymlinksMode =
+        ruleContext.getConfiguration().getRunfileSymlinksMode();
+    boolean buildRunfileManifests = ruleContext.getConfiguration().buildRunfileManifests();
     boolean buildRunfileLinks = ruleContext.getConfiguration().buildRunfileLinks();
 
     // Adding run_under target to the runfiles manifest so it would become part
@@ -139,7 +134,7 @@ public final class RunfilesSupport implements RunfilesSupplier {
 
     Artifact runfilesInputManifest;
     Artifact runfilesManifest;
-    if (createManifest) {
+    if (buildRunfileManifests) {
       runfilesInputManifest = createRunfilesInputManifestArtifact(ruleContext, owningExecutable);
       runfilesManifest =
           createRunfilesAction(
@@ -152,8 +147,6 @@ public final class RunfilesSupport implements RunfilesSupplier {
         createRunfilesMiddleman(
             ruleContext, owningExecutable, runfiles, runfilesManifest, repoMappingManifest);
 
-    boolean runfilesEnabled = ruleContext.getConfiguration().runfilesEnabled();
-
     return new RunfilesSupport(
         runfiles,
         runfilesInputManifest,
@@ -161,8 +154,8 @@ public final class RunfilesSupport implements RunfilesSupplier {
         repoMappingManifest,
         runfilesMiddleman,
         owningExecutable,
+        runfileSymlinksMode,
         buildRunfileLinks,
-        runfilesEnabled,
         args,
         actionEnvironment);
   }
@@ -174,8 +167,8 @@ public final class RunfilesSupport implements RunfilesSupplier {
       Artifact repoMappingManifest,
       Artifact runfilesMiddleman,
       Artifact owningExecutable,
+      RunfileSymlinksMode runfileSymlinksMode,
       boolean buildRunfileLinks,
-      boolean runfilesEnabled,
       CommandLine args,
       ActionEnvironment actionEnvironment) {
     this.runfiles = runfiles;
@@ -184,8 +177,8 @@ public final class RunfilesSupport implements RunfilesSupplier {
     this.repoMappingManifest = repoMappingManifest;
     this.runfilesMiddleman = runfilesMiddleman;
     this.owningExecutable = owningExecutable;
+    this.runfileSymlinksMode = runfileSymlinksMode;
     this.buildRunfileLinks = buildRunfileLinks;
-    this.runfilesEnabled = runfilesEnabled;
     this.args = args;
     this.actionEnvironment = actionEnvironment;
   }
@@ -202,9 +195,25 @@ public final class RunfilesSupport implements RunfilesSupplier {
   }
 
   /**
-   * Returns {@code true} if runfile symlinks should be materialized when building an executable.
-   *
-   * <p>Also see {@link #isRunfilesEnabled()}.
+   * Same as {@link #getRunfileSymlinksMode(PathFragment)} with {@link
+   * #getRunfilesDirectoryExecPath} as the implied argument.
+   */
+  public RunfileSymlinksMode getRunfileSymlinksMode() {
+    return runfileSymlinksMode;
+  }
+
+  @Override
+  @Nullable
+  public RunfileSymlinksMode getRunfileSymlinksMode(PathFragment runfilesDir) {
+    if (runfilesDir.equals(getRunfilesDirectoryExecPath())) {
+      return runfileSymlinksMode;
+    }
+    return null;
+  }
+
+  /**
+   * Same as {@link #isBuildRunfileLinks(PathFragment)} with {@link #getRunfilesDirectoryExecPath}
+   * as the implied argument.
    */
   public boolean isBuildRunfileLinks() {
     return buildRunfileLinks;
@@ -213,16 +222,6 @@ public final class RunfilesSupport implements RunfilesSupplier {
   @Override
   public boolean isBuildRunfileLinks(PathFragment runfilesDir) {
     return buildRunfileLinks && runfilesDir.equals(getRunfilesDirectoryExecPath());
-  }
-
-  /**
-   * Returns {@code true} if runfile symlinks are enabled.
-   *
-   * <p>This option differs from {@link #isBuildRunfileLinks()} in that if {@code false} it also
-   * disables runfile symlinks creation during run/test.
-   */
-  public boolean isRunfilesEnabled() {
-    return runfilesEnabled;
   }
 
   public Runfiles getRunfiles() {
@@ -447,54 +446,27 @@ public final class RunfilesSupport implements RunfilesSupplier {
    * that this method calls back into the passed in rule to obtain the runfiles.
    */
   public static RunfilesSupport withExecutable(
-      RuleContext ruleContext, Runfiles runfiles, Artifact executable) {
+      RuleContext ruleContext, Runfiles runfiles, Artifact executable) throws InterruptedException {
     return RunfilesSupport.create(
         ruleContext,
         executable,
         runfiles,
-        computeArgs(ruleContext, CommandLine.EMPTY),
+        computeArgs(ruleContext),
         computeActionEnvironment(ruleContext));
   }
 
-  /**
-   * Creates and returns a {@link RunfilesSupport} object for the given rule and executable. Note
-   * that this method calls back into the passed in rule to obtain the runfiles.
-   */
-  public static RunfilesSupport withExecutable(
-      RuleContext ruleContext, Runfiles runfiles, Artifact executable, List<String> appendingArgs) {
-    return RunfilesSupport.create(
-        ruleContext,
-        executable,
-        runfiles,
-        computeArgs(ruleContext, CommandLine.of(appendingArgs)),
-        computeActionEnvironment(ruleContext));
-  }
-
-  /**
-   * Creates and returns a {@link RunfilesSupport} object for the given rule, executable, runfiles
-   * and args.
-   */
-  public static RunfilesSupport withExecutable(
-      RuleContext ruleContext, Runfiles runfiles, Artifact executable, CommandLine appendingArgs) {
-    return RunfilesSupport.create(
-        ruleContext,
-        executable,
-        runfiles,
-        computeArgs(ruleContext, appendingArgs),
-        computeActionEnvironment(ruleContext));
-  }
-
-  private static CommandLine computeArgs(RuleContext ruleContext, CommandLine additionalArgs) {
+  private static CommandLine computeArgs(RuleContext ruleContext) throws InterruptedException {
     if (!ruleContext.getRule().isAttrDefined("args", Type.STRING_LIST)) {
       // Some non-_binary rules create RunfilesSupport instances; it is fine to not have an args
       // attribute here.
-      return additionalArgs;
+      return CommandLine.EMPTY;
     }
-    return CommandLine.concat(
-        ruleContext.getExpander().withDataLocations().tokenized("args"), additionalArgs);
+    ImmutableList<String> args = ruleContext.getExpander().withDataLocations().tokenized("args");
+    return args.isEmpty() ? CommandLine.EMPTY : CommandLine.of(args);
   }
 
-  private static ActionEnvironment computeActionEnvironment(RuleContext ruleContext) {
+  private static ActionEnvironment computeActionEnvironment(RuleContext ruleContext)
+      throws InterruptedException {
     // Executable Starlark rules can use RunEnvironmentInfo to specify environment variables.
     boolean isNativeRule =
         ruleContext.getRule().getRuleClassObject().getRuleDefinitionEnvironmentLabel() == null;
@@ -519,7 +491,8 @@ public final class RunfilesSupport implements RunfilesSupplier {
         }
       }
     }
-    return ActionEnvironment.create(fixedEnv, ImmutableSet.copyOf(inheritedEnv));
+    return ActionEnvironment.create(
+        ImmutableMap.copyOf(fixedEnv), ImmutableSet.copyOf(inheritedEnv));
   }
 
   /** Returns the path of the input manifest of {@code runfilesDir}. */
@@ -535,11 +508,8 @@ public final class RunfilesSupport implements RunfilesSupplier {
   @Nullable
   private static Artifact createRepoMappingManifestAction(
       RuleContext ruleContext, Runfiles runfiles, Artifact owningExecutable) {
-    if (!ruleContext
-        .getAnalysisEnvironment()
-        .getStarlarkSemantics()
-        .getBool(BuildLanguageOptions.ENABLE_BZLMOD)) {
-      // If Bzlmod is not enabled, we don't need a repo mapping manifest.
+    if (ruleContext.getTransitivePackagesForRunfileRepoMappingManifest() == null) {
+      // If transitive packages are not tracked for repo mapping manifest, we don't need the action.
       return null;
     }
 
@@ -558,46 +528,12 @@ public final class RunfilesSupport implements RunfilesSupplier {
             new RepoMappingManifestAction(
                 ruleContext.getActionOwner(),
                 repoMappingManifest,
-                collectRepoMappings(
-                    Preconditions.checkNotNull(
-                        ruleContext.getTransitivePackagesForRunfileRepoMappingManifest()),
-                    runfiles),
+                ruleContext.getTransitivePackagesForRunfileRepoMappingManifest(),
+                runfiles.getArtifacts(),
+                runfiles.getSymlinks(),
+                runfiles.getRootSymlinks(),
                 ruleContext.getWorkspaceName()));
     return repoMappingManifest;
-  }
-
-  /** Returns the list of entries (unsorted) that should appear in the repo mapping manifest. */
-  private static ImmutableList<Entry> collectRepoMappings(
-      NestedSet<Package> transitivePackages, Runfiles runfiles) {
-    // NOTE: It might appear that the flattening of `transitivePackages` is better suited to the
-    // execution phase rather than here in the analysis phase, but we can't do that since it would
-    // necessitate storing `transitivePackages` in an action, which breaks skyframe serialization
-    // since packages cannot be serialized here.
-
-    ImmutableSet<RepositoryName> reposContributingRunfiles =
-        runfiles.getAllArtifacts().toList().stream()
-            .filter(a -> a.getOwner() != null)
-            .map(a -> a.getOwner().getRepository())
-            .collect(toImmutableSet());
-    Set<RepositoryName> seenRepos = new HashSet<>();
-    ImmutableList.Builder<Entry> entries = ImmutableList.builder();
-    for (Package pkg : transitivePackages.toList()) {
-      if (!seenRepos.add(pkg.getPackageIdentifier().getRepository())) {
-        // Any package from the same repo would have the same repo mapping.
-        continue;
-      }
-      for (Map.Entry<String, RepositoryName> repoMappingEntry :
-          pkg.getRepositoryMapping().entries().entrySet()) {
-        if (reposContributingRunfiles.contains(repoMappingEntry.getValue())) {
-          entries.add(
-              Entry.of(
-                  pkg.getPackageIdentifier().getRepository(),
-                  repoMappingEntry.getKey(),
-                  repoMappingEntry.getValue()));
-        }
-      }
-    }
-    return entries.build();
   }
 
   @Override
@@ -624,11 +560,6 @@ public final class RunfilesSupport implements RunfilesSupplier {
   }
 
   @Override
-  public boolean isRunfileLinksEnabled(PathFragment runfilesDir) {
-    return runfilesEnabled && runfilesDir.equals(getRunfilesDirectoryExecPath());
-  }
-
-  @Override
   public RunfilesSupplier withOverriddenRunfilesDir(PathFragment newRunfilesDir) {
     return newRunfilesDir.equals(getRunfilesDirectoryExecPath())
         ? this
@@ -637,7 +568,7 @@ public final class RunfilesSupport implements RunfilesSupplier {
             runfiles,
             /* manifest= */ null,
             repoMappingManifest,
-            buildRunfileLinks,
-            runfilesEnabled);
+            runfileSymlinksMode,
+            buildRunfileLinks);
   }
 }

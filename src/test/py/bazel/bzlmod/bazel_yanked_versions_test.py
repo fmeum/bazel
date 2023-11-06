@@ -16,8 +16,7 @@
 
 import os
 import tempfile
-import unittest
-
+from absl.testing import absltest
 from src.test.py.bazel import test_base
 from src.test.py.bazel.bzlmod.test_utils import BazelRegistry
 
@@ -107,7 +106,7 @@ class BazelYankedVersionsTest(test_base.TestBase):
             ')',
         ],
     )
-    self.RunBazel(['build', '--nobuild', '//:main'], allow_failure=False)
+    self.RunBazel(['build', '--nobuild', '//:main'])
 
   def testContainingYankedDepFails(self):
     self.writeBazelrcFile(allow_yanked_versions=False)
@@ -164,7 +163,6 @@ class BazelYankedVersionsTest(test_base.TestBase):
             '--allow_yanked_versions=yanked1@1.0,yanked2@1.0',
             '//:main',
         ],
-        allow_failure=False,
     )
 
   def testAllowedYankedDepsByEnvVar(self):
@@ -189,7 +187,6 @@ class BazelYankedVersionsTest(test_base.TestBase):
     self.RunBazel(
         ['build', '--nobuild', '//:main'],
         env_add={'BZLMOD_ALLOW_YANKED_VERSIONS': 'yanked1@1.0,yanked2@1.0'},
-        allow_failure=False,
     )
 
     # Test changing the env var, the build should fail again.
@@ -232,9 +229,8 @@ class BazelYankedVersionsTest(test_base.TestBase):
             '//:main',
         ],
         env_add={'BZLMOD_ALLOW_YANKED_VERSIONS': 'yanked2@1.0'},
-        allow_failure=False,
     )
 
 
 if __name__ == '__main__':
-  unittest.main()
+  absltest.main()

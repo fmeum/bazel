@@ -34,6 +34,7 @@ import com.google.devtools.build.lib.actions.Artifact.DerivedArtifact;
 import com.google.devtools.build.lib.actions.CommandLine;
 import com.google.devtools.build.lib.actions.CommandLineExpansionException;
 import com.google.devtools.build.lib.actions.CompositeRunfilesSupplier;
+import com.google.devtools.build.lib.actions.PathMapper;
 import com.google.devtools.build.lib.actions.RunfilesSupplier;
 import com.google.devtools.build.lib.actions.util.ActionsTestUtil;
 import com.google.devtools.build.lib.analysis.CommandHelper;
@@ -300,7 +301,9 @@ public final class StarlarkRuleImplementationFunctionsTest extends BuildViewTest
         "  inputs = ruleContext.files.srcs,",
         "  outputs = ruleContext.files.srcs,",
         "  arguments = ['--a','--b'],",
-        "  executable = ruleContext.files.tools[0])");
+        "  executable = ruleContext.files.tools[0],",
+        "  toolchain = None",
+        ")");
     SpawnAction action =
         (SpawnAction)
             Iterables.getOnlyElement(
@@ -319,6 +322,7 @@ public final class StarlarkRuleImplementationFunctionsTest extends BuildViewTest
         "  inputs = ruleContext.files.srcs,",
         "  outputs = ruleContext.files.srcs[1:],",
         "  executable = ruleContext.files.tools[0],",
+        "  toolchain = None,",
         "  mnemonic = 'DummyMnemonic',",
         "  progress_message = 'message %{label} %{input} %{output}')");
 
@@ -340,7 +344,9 @@ public final class StarlarkRuleImplementationFunctionsTest extends BuildViewTest
         "  inputs = depset(ruleContext.files.srcs),",
         "  outputs = ruleContext.files.srcs,",
         "  arguments = ['--a','--b'],",
-        "  executable = ruleContext.files.tools[0])");
+        "  executable = ruleContext.files.tools[0],",
+        "  toolchain = None",
+        ")");
     SpawnAction action =
         (SpawnAction)
             Iterables.getOnlyElement(
@@ -510,6 +516,7 @@ public final class StarlarkRuleImplementationFunctionsTest extends BuildViewTest
         "  tools = ctx.attr.exe.files,",
         "  outputs = [output],",
         "  command = 'boo bar baz',",
+        "  toolchain = None",
         ")");
     RuleConfiguredTarget target = (RuleConfiguredTarget) getConfiguredTarget("//bar:my_rule");
     SpawnAction action = (SpawnAction) Iterables.getOnlyElement(target.getActions());
@@ -525,6 +532,7 @@ public final class StarlarkRuleImplementationFunctionsTest extends BuildViewTest
         "  tools = ctx.attr.exe.files,",
         "  outputs = [output],",
         "  command = 'boo bar baz',",
+        "  toolchain = None",
         ")");
     RuleConfiguredTarget target = (RuleConfiguredTarget) getConfiguredTarget("//bar:my_rule");
     SpawnAction action = (SpawnAction) Iterables.getOnlyElement(target.getActions());
@@ -643,9 +651,7 @@ public final class StarlarkRuleImplementationFunctionsTest extends BuildViewTest
     AssertionError error =
         assertThrows(AssertionError.class, () -> getConfiguredTarget("//abc:foo"));
 
-    assertThat(error)
-        .hasMessageThat()
-        .contains("Error in expand_location: Rule in 'abc' cannot use private API");
+    assertThat(error).hasMessageThat().contains("file '//abc:rule.bzl' cannot use private API");
   }
 
   @Test
@@ -714,12 +720,7 @@ public final class StarlarkRuleImplementationFunctionsTest extends BuildViewTest
         "   tools=ruleContext.attr.tools)");
     @SuppressWarnings("unchecked")
     List<Artifact> inputs = (List<Artifact>) (List<?>) (StarlarkList) ev.lookup("inputs");
-    assertArtifactFilenames(
-        inputs,
-        "mytool.sh",
-        "mytool",
-        "foo_Smytool" + OsUtils.executableExtension() + "-runfiles",
-        "t.exe");
+    assertArtifactFilenames(inputs, "mytool.sh", "mytool", "foo_Smytool-runfiles", "t.exe");
     @SuppressWarnings("unchecked")
     RunfilesSupplier runfilesSupplier =
         CompositeRunfilesSupplier.fromSuppliers(
@@ -844,7 +845,7 @@ public final class StarlarkRuleImplementationFunctionsTest extends BuildViewTest
         ((Depset) ev.lookup("inputs")).getSet(Artifact.class).toList(),
         "mytool.sh",
         "mytool",
-        "foo_Smytool" + OsUtils.executableExtension() + "-runfiles",
+        "foo_Smytool-runfiles",
         "t.exe");
     @SuppressWarnings("unchecked")
     RunfilesSupplier runfilesSupplier =
@@ -857,11 +858,7 @@ public final class StarlarkRuleImplementationFunctionsTest extends BuildViewTest
             Iterables.getOnlyElement(
                 ruleContext.getRuleContext().getAnalysisEnvironment().getRegisteredActions());
     assertThat(ActionsTestUtil.baseArtifactNames(action.getInputs()))
-        .containsAtLeast(
-            "mytool.sh",
-            "mytool",
-            "foo_Smytool" + OsUtils.executableExtension() + "-runfiles",
-            "t.exe");
+        .containsAtLeast("mytool.sh", "mytool", "foo_Smytool-runfiles", "t.exe");
   }
 
   @Test
@@ -1054,13 +1051,6 @@ public final class StarlarkRuleImplementationFunctionsTest extends BuildViewTest
     setRuleContext(createRuleContext("//foo:foo"));
     ev.checkEvalErrorContains(
         "depset elements must not be mutable values", "depset([[ruleContext.files.srcs]])");
-  }
-
-  @Test
-  public void testCmdJoinPaths() throws Exception {
-    setRuleContext(createRuleContext("//foo:foo"));
-    Object result = ev.eval("cmd_helper.join_paths(':', depset(ruleContext.files.srcs))");
-    assertThat(result).isEqualTo("foo/a.txt:foo/b.img");
   }
 
   @Test
@@ -2091,6 +2081,7 @@ public final class StarlarkRuleImplementationFunctionsTest extends BuildViewTest
         "  outputs = ruleContext.files.srcs,",
         "  arguments = [args],",
         "  executable = ruleContext.files.tools[0],",
+        "  toolchain = None",
         ")");
     SpawnAction action =
         (SpawnAction)
@@ -2113,6 +2104,7 @@ public final class StarlarkRuleImplementationFunctionsTest extends BuildViewTest
         "  outputs = ruleContext.files.srcs,",
         "  arguments = [args],",
         "  executable = ruleContext.files.tools[0],",
+        "  toolchain = None",
         ")");
   }
 
@@ -2140,6 +2132,7 @@ public final class StarlarkRuleImplementationFunctionsTest extends BuildViewTest
         "  outputs = ruleContext.files.srcs,",
         "  arguments = [args],",
         "  executable = ruleContext.files.tools[0],",
+        "  toolchain = None",
         ")");
     SpawnAction action =
         (SpawnAction)
@@ -2191,6 +2184,7 @@ public final class StarlarkRuleImplementationFunctionsTest extends BuildViewTest
         "  outputs = ruleContext.files.srcs,",
         "  arguments = [args],",
         "  executable = ruleContext.files.tools[0],",
+        "  toolchain = None",
         ")");
     SpawnAction action =
         (SpawnAction)
@@ -2223,6 +2217,7 @@ public final class StarlarkRuleImplementationFunctionsTest extends BuildViewTest
         "  outputs = ruleContext.files.srcs,",
         "  arguments = [args],",
         "  executable = ruleContext.files.tools[0],",
+        "  toolchain = None",
         ")");
     SpawnAction action =
         (SpawnAction)
@@ -2259,6 +2254,7 @@ public final class StarlarkRuleImplementationFunctionsTest extends BuildViewTest
         "  outputs = ruleContext.files.srcs,",
         "  arguments = [args],",
         "  executable = ruleContext.files.tools[0],",
+        "  toolchain = None",
         ")");
     SpawnAction action =
         (SpawnAction)
@@ -2292,6 +2288,7 @@ public final class StarlarkRuleImplementationFunctionsTest extends BuildViewTest
         "  outputs = ruleContext.files.srcs,",
         "  arguments = [args],",
         "  executable = ruleContext.files.tools[0],",
+        "  toolchain = None",
         ")");
     SpawnAction action =
         (SpawnAction)
@@ -2328,6 +2325,7 @@ public final class StarlarkRuleImplementationFunctionsTest extends BuildViewTest
         "  outputs = ruleContext.files.srcs,",
         "  arguments = ['hello', foo_args, 'world', bar_args, 'works'],",
         "  executable = ruleContext.files.tools[0],",
+        "  toolchain = None",
         ")");
     SpawnAction action =
         (SpawnAction)
@@ -2438,6 +2436,7 @@ public final class StarlarkRuleImplementationFunctionsTest extends BuildViewTest
         "  outputs = ruleContext.files.srcs,",
         "  arguments = [args],",
         "  executable = ruleContext.files.tools[0],",
+        "  toolchain = None",
         ")");
   }
 
@@ -2462,6 +2461,7 @@ public final class StarlarkRuleImplementationFunctionsTest extends BuildViewTest
         "  outputs = ruleContext.files.srcs,",
         "  arguments = [args],",
         "  executable = ruleContext.files.tools[0],",
+        "  toolchain = None",
         ")");
     SpawnAction action =
         (SpawnAction)
@@ -2485,6 +2485,7 @@ public final class StarlarkRuleImplementationFunctionsTest extends BuildViewTest
         "  outputs = ruleContext.files.srcs,",
         "  arguments = [args],",
         "  executable = ruleContext.files.tools[0],",
+        "  toolchain = None",
         ")");
     SpawnAction action =
         (SpawnAction)
@@ -2506,6 +2507,7 @@ public final class StarlarkRuleImplementationFunctionsTest extends BuildViewTest
         "  outputs = ruleContext.files.srcs,",
         "  arguments = [args],",
         "  executable = ruleContext.files.tools[0],",
+        "  toolchain = None",
         ")");
     SpawnAction action =
         (SpawnAction)
@@ -2619,7 +2621,7 @@ public final class StarlarkRuleImplementationFunctionsTest extends BuildViewTest
         "  implementation = _foo_impl,",
         "  attrs = {",
         "    '_attr': attr.label(",
-        "        cfg = apple_common.multi_arch_split,",
+        "        cfg = android_common.multi_cpu_configuration,",
         "        default = configuration_field(fragment='cpp', name = 'cc_toolchain'))})");
 
     scratch.file("test/BUILD", "load('//test:rule.bzl', 'foo')", "foo(name='foo')");
@@ -2760,7 +2762,9 @@ public final class StarlarkRuleImplementationFunctionsTest extends BuildViewTest
         "    ctx.actions.run(",
         "        inputs = [],",
         "        outputs = [f],",
-        "        executable = ctx.attr._tool[DefaultInfo].files_to_run)",
+        "        executable = ctx.attr._tool[DefaultInfo].files_to_run,",
+        "        toolchain = None",
+        "    )",
         "    return [DefaultInfo(files=depset([f]))]",
         "r = rule(implementation=_impl, attrs = {'_tool': attr.label(default='//a:tool')})");
 
@@ -2787,7 +2791,9 @@ public final class StarlarkRuleImplementationFunctionsTest extends BuildViewTest
         "        inputs = [],",
         "        outputs = [f],",
         "        tools = [ctx.attr._tool[DefaultInfo].files_to_run],",
-        "        executable = 'a/tool')",
+        "        executable = 'a/tool',",
+        "        toolchain = None",
+        "    )",
         "    return [DefaultInfo(files=depset([f]))]",
         "r = rule(implementation=_impl, attrs = {'_tool': attr.label(default='//a:tool')})");
 
@@ -2924,7 +2930,7 @@ public final class StarlarkRuleImplementationFunctionsTest extends BuildViewTest
         CommandLineExpansionException.class,
         () ->
             commandLine.addToFingerprint(
-                actionKeyContext, /*artifactExpander=*/ null, new Fingerprint()));
+                actionKeyContext, /* artifactExpander= */ null, new Fingerprint()));
   }
 
   @Test
@@ -3224,7 +3230,7 @@ public final class StarlarkRuleImplementationFunctionsTest extends BuildViewTest
     Artifact file2 = getBinArtifactWithNoOwner("foo/dir/file2");
     ArtifactExpander artifactExpander =
         createArtifactExpander(directory, ImmutableList.of(file1, file2));
-    assertThat(commandLine.arguments(artifactExpander))
+    assertThat(commandLine.arguments(artifactExpander, PathMapper.NOOP))
         .containsExactly("foo/dir/file1", "foo/dir/file2");
   }
 
@@ -3247,7 +3253,7 @@ public final class StarlarkRuleImplementationFunctionsTest extends BuildViewTest
     ArtifactExpander artifactExpander =
         createArtifactExpander(directory, ImmutableList.of(file1, file2));
     // First expanded, then not expanded (two separate calls)
-    assertThat(commandLine.arguments(artifactExpander))
+    assertThat(commandLine.arguments(artifactExpander, PathMapper.NOOP))
         .containsExactly("foo/dir/file1", "foo/dir/file2", "foo/dir");
   }
 
@@ -3297,7 +3303,7 @@ public final class StarlarkRuleImplementationFunctionsTest extends BuildViewTest
     Artifact file2 = getBinArtifactWithNoOwner("foo/dir/file2");
     ArtifactExpander artifactExpander =
         createArtifactExpander(directory, ImmutableList.of(file1, file2));
-    assertThat(commandLine.arguments(artifactExpander))
+    assertThat(commandLine.arguments(artifactExpander, PathMapper.NOOP))
         .containsExactly("foo/dir/file1", "foo/dir/file2", "foo/file3");
   }
 
@@ -3329,9 +3335,7 @@ public final class StarlarkRuleImplementationFunctionsTest extends BuildViewTest
     AssertionError error =
         assertThrows(AssertionError.class, () -> getConfiguredTarget("//abc:foo"));
 
-    assertThat(error)
-        .hasMessageThat()
-        .contains("Error in declare_shareable_artifact: Rule in 'abc' cannot use private API");
+    assertThat(error).hasMessageThat().contains("file '//abc:rule.bzl' cannot use private API");
   }
 
   @Test
@@ -3348,9 +3352,7 @@ public final class StarlarkRuleImplementationFunctionsTest extends BuildViewTest
     AssertionError error =
         assertThrows(AssertionError.class, () -> getConfiguredTarget("//abc:foo"));
 
-    assertThat(error)
-        .hasMessageThat()
-        .contains("Error in runfiles: Rule in 'abc' cannot use private API");
+    assertThat(error).hasMessageThat().contains("file '//abc:rule.bzl' cannot use private API");
   }
 
   @Test

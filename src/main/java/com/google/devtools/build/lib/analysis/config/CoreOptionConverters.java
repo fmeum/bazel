@@ -26,6 +26,7 @@ import com.google.common.base.Preconditions;
 import com.google.common.base.Splitter;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
+import com.google.common.collect.Maps;
 import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.cmdline.LabelSyntaxException;
 import com.google.devtools.build.lib.cmdline.RepositoryMapping;
@@ -157,26 +158,6 @@ public class CoreOptionConverters {
     }
   }
 
-  /** A label converter that returns a default value if the input string is empty. */
-  public static class DefaultLabelConverter implements Converter<Label> {
-    private final Label defaultValue;
-
-    protected DefaultLabelConverter(String defaultValue) {
-      this.defaultValue =
-          defaultValue.equals("null") ? null : Label.parseCanonicalUnchecked(defaultValue);
-    }
-
-    @Override
-    public Label convert(String input, Object conversionContext) throws OptionsParsingException {
-      return input.isEmpty() ? defaultValue : convertOptionsLabel(input, conversionContext);
-    }
-
-    @Override
-    public String getTypeDescription() {
-      return "a build target label";
-    }
-  }
-
   /** Flag converter for a map of unique keys with optional labels as values. */
   public static class LabelMapConverter implements Converter<Map<String, Label>> {
     @Override
@@ -207,6 +188,30 @@ public class CoreOptionConverters {
     @Override
     public String getTypeDescription() {
       return "a comma-separated list of keys optionally followed by '=' and a label";
+    }
+  }
+
+  /** Flag converter for assigning a Label to a String. */
+  public static class LabelToStringEntryConverter implements Converter<Map.Entry<Label, String>> {
+    @Override
+    public Map.Entry<Label, String> convert(String input, Object conversionContext)
+        throws OptionsParsingException {
+      // TODO(twigg): This doesn't work well if the labels can themselves have an '='
+      long equalsCount = input.chars().filter(c -> c == '=').count();
+      if (equalsCount != 1 || input.charAt(0) == '=' || input.charAt(input.length() - 1) == '=') {
+        throw new OptionsParsingException(
+            "Variable definitions must be in the form of a 'name=value' assignment. 'name' and"
+                + " 'value' must be non-empty and may not include '='.");
+      }
+      int pos = input.indexOf("=");
+      Label name = convertOptionsLabel(input.substring(0, pos), conversionContext);
+      String value = input.substring(pos + 1);
+      return Maps.immutableEntry(name, value);
+    }
+
+    @Override
+    public String getTypeDescription() {
+      return "a 'label=value' assignment";
     }
   }
 

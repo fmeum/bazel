@@ -32,18 +32,15 @@ import com.google.devtools.build.lib.analysis.RuleDefinitionEnvironment;
 import com.google.devtools.build.lib.analysis.Runfiles;
 import com.google.devtools.build.lib.analysis.RunfilesProvider;
 import com.google.devtools.build.lib.analysis.actions.SpawnAction;
-import com.google.devtools.build.lib.analysis.config.ExecutionTransitionFactory;
 import com.google.devtools.build.lib.collect.nestedset.NestedSet;
 import com.google.devtools.build.lib.packages.RuleClass;
 import com.google.devtools.build.lib.packages.RuleClass.Builder.RuleClassType;
 import com.google.devtools.build.lib.packages.Type;
 import com.google.devtools.build.lib.rules.apple.AppleConfiguration;
 import com.google.devtools.build.lib.rules.apple.ApplePlatform;
-import com.google.devtools.build.lib.rules.apple.AppleToolchain.RequiresXcodeConfigRule;
-import com.google.devtools.build.lib.rules.apple.XcodeConfigInfo;
 import com.google.devtools.build.lib.rules.cpp.CcInfo;
-import com.google.devtools.build.lib.rules.cpp.CcToolchain;
 import com.google.devtools.build.lib.rules.cpp.CcToolchainProvider;
+import com.google.devtools.build.lib.rules.cpp.CcToolchainRule;
 import com.google.devtools.build.lib.rules.cpp.CppRuleClasses;
 import com.google.devtools.build.lib.util.FileType;
 import com.google.devtools.build.lib.util.FileTypeSet;
@@ -55,6 +52,12 @@ public class ObjcRuleClasses {
   private ObjcRuleClasses() {
     throw new UnsupportedOperationException("static-only");
   }
+
+  /** A string constant for feature to link a bundle. */
+  static final String LINK_BUNDLE_FEATURE = "link_bundle";
+
+  /** A string constant for feature to link a dylib. */
+  static final String LINK_DYLIB_FEATURE = "link_dylib";
 
   /** Attribute name for a dummy target in a child configuration. */
   static final String CHILD_CONFIG_ATTR = "$child_configuration_dummy";
@@ -167,8 +170,8 @@ public class ObjcRuleClasses {
       return builder
           /* <!-- #BLAZE_RULE($objc_sdk_frameworks_depender_rule).ATTRIBUTE(sdk_frameworks) -->
           Names of SDK frameworks to link with (e.g. "AddressBook", "QuartzCore"). "UIKit" and
-          "Foundation" are always included when building for the iOS, tvOS and watchOS platforms.
-          For macOS, only "Foundation" is always included.
+          "Foundation" are always included when building for the iOS, tvOS, visionOS,
+          and watchOS platforms. For macOS, only "Foundation" is always included.
 
           <p> When linking a top level Apple binary, all SDK frameworks listed in that binary's
           transitive dependency graph are linked.
@@ -253,11 +256,11 @@ public class ObjcRuleClasses {
     public RuleClass build(RuleClass.Builder builder, RuleDefinitionEnvironment env) {
       return builder
           .add(
-              attr(CcToolchain.CC_TOOLCHAIN_DEFAULT_ATTRIBUTE_NAME, LABEL)
+              attr(CcToolchainRule.CC_TOOLCHAIN_DEFAULT_ATTRIBUTE_NAME, LABEL)
                   .mandatoryProviders(CcToolchainProvider.PROVIDER.id())
                   .value(CppRuleClasses.ccToolchainAttribute(env)))
           .add(
-              attr(CcToolchain.CC_TOOLCHAIN_TYPE_ATTRIBUTE_NAME, NODEP_LABEL)
+              attr(CcToolchainRule.CC_TOOLCHAIN_TYPE_ATTRIBUTE_NAME, NODEP_LABEL)
                   .value(CppRuleClasses.ccToolchainTypeAttribute(env)))
           .addToolchainTypes(CppRuleClasses.ccToolchainTypeRequirement(env))
           .build();
@@ -380,8 +383,16 @@ public class ObjcRuleClasses {
           The list of targets that are linked together to form the final bundle.
           <!-- #END_BLAZE_RULE.ATTRIBUTE -->*/
           .override(
-              attr("deps", LABEL_LIST)
-                  .direct_compile_time_input()
+              attr("deps", LABEL_LIST).mandatoryProviders(CcInfo.PROVIDER.id()).allowedFileTypes())
+          /* <!-- #BLAZE_RULE($objc_compiling_rule).ATTRIBUTE(implementation_deps) -->
+          The list of other libraries that the library target depends on. Unlike with
+          <code>deps</code>, the headers and include paths of these libraries (and all their
+          transitive deps) are only used for compilation of this library, and not libraries that
+          depend on it. Libraries specified with <code>implementation_deps</code> are still linked
+          in binary targets that depend on this library.
+          <!-- #END_BLAZE_RULE.ATTRIBUTE -->*/
+          .add(
+              attr("implementation_deps", LABEL_LIST)
                   .mandatoryProviders(CcInfo.PROVIDER.id())
                   .allowedFileTypes())
           /* <!-- #BLAZE_RULE($objc_compiling_rule).ATTRIBUTE(defines) -->
@@ -427,7 +438,6 @@ public class ObjcRuleClasses {
               BaseRuleClasses.NativeActionCreatingRule.class,
               CompileDependencyRule.class,
               CoptsRule.class,
-              XcrunRule.class,
               CrosstoolRule.class)
           .build();
     }
@@ -467,26 +477,4 @@ public class ObjcRuleClasses {
 
   /** Attribute name for the minimum OS version (e.g. "7.3"). */
   static final String MINIMUM_OS_VERSION = "minimum_os_version";
-
-  /** Common attributes for {@code objc_*} rules that need to call xcrun. */
-  public static class XcrunRule implements RuleDefinition {
-    @Override
-    public RuleClass build(RuleClass.Builder builder, RuleDefinitionEnvironment env) {
-      return builder
-          .add(
-              attr("$xcrunwrapper", LABEL)
-                  .cfg(ExecutionTransitionFactory.createFactory())
-                  .exec()
-                  .value(env.getToolsLabel("//tools/objc:xcrunwrapper")))
-          .build();
-    }
-    @Override
-    public Metadata getMetadata() {
-      return RuleDefinition.Metadata.builder()
-          .name("$objc_xcrun_rule")
-          .type(RuleClassType.ABSTRACT)
-          .ancestors(RequiresXcodeConfigRule.class)
-          .build();
-    }
-  }
 }

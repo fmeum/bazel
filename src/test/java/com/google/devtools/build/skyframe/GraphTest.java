@@ -110,7 +110,7 @@ public abstract class GraphTest {
   }
 
   protected static SkyKey key(String name) {
-    return GraphTester.toSkyKey(name);
+    return GraphTester.skyKey(name);
   }
 
   @Test
@@ -260,7 +260,9 @@ public abstract class GraphTest {
               waitForAddedRdep.countDown();
               waitForSetValue.await(TestUtils.WAIT_TIMEOUT_SECONDS, SECONDS);
               for (int k = chunkSize; k <= numIterations; k++) {
-                entry.removeReverseDep(key("rdep" + j));
+                if (shouldTestIncrementality()) {
+                  entry.removeReverseDep(key("rdep" + j));
+                }
                 entry.addReverseDepAndCheckIfDone(key("rdep" + j));
                 if (shouldTestIncrementality()) {
                   entry.getReverseDepsForDoneEntry();

@@ -19,7 +19,6 @@ import com.google.devtools.build.lib.actions.Artifact.ArtifactExpander;
 import com.google.devtools.build.lib.analysis.platform.PlatformInfo;
 import com.google.devtools.build.lib.collect.nestedset.NestedSet;
 import java.util.Collection;
-import java.util.LinkedHashMap;
 import javax.annotation.Nullable;
 
 /**
@@ -108,15 +107,22 @@ public interface ActionAnalysisMetadata {
   String describe();
 
   /**
-   * Returns the tool Artifacts that this Action depends upon. May be empty. This is a subset of
-   * getInputs().
+   * Returns the (possibly empty) set of tool artifacts that this action depends upon.
    *
-   * <p>This may be used by spawn strategies to determine whether an external tool has not changed
-   * since the last time it was used and could thus be reused, or whether it has to be restarted.
+   * <p>Tools are a subset of {@link #getInputs} and used by the workers to determine whether a
+   * compiler has changed since the last time it was used. This should include all artifacts that
+   * the tool does not dynamically reload / check on each unit of work - e.g. its own binary, the
+   * JDK for Java binaries, shared libraries, ... but not a configuration file, if it reloads that
+   * when it has changed.
    *
-   * <p>See {@link AbstractAction#getTools()} for an explanation of why it's important that this set
-   * contains exactly the right set of artifacts in order for the build to stay correct and the
-   * worker strategy to work.
+   * <p>If this method does not return exactly the right set of artifacts, the following can happen:
+   * If an artifact that should be included is missing, the tool might not be restarted when it
+   * should, and builds can become incorrect (example: The compiler binary is not part of this set,
+   * then the compiler gets upgraded, but the worker strategy still reuses the old version). If an
+   * artifact that should <em>not</em> be included is accidentally part of this set, the worker
+   * process will be restarted more often that is necessary - e.g. if a file that is unique to each
+   * unit of work, e.g. the source code that a compiler should compile for a compile action, is part
+   * of this set, then the worker will never be reused and will be restarted for each unit of work.
    */
   NestedSet<Artifact> getTools();
 
@@ -217,13 +223,6 @@ public interface ActionAnalysisMetadata {
    */
   NestedSet<Artifact> getMandatoryInputs();
 
-  /**
-   * Returns true iff path prefix conflict (conflict where two actions generate two output artifacts
-   * with one of the artifact's path being the prefix for another) between this action and another
-   * action should be reported.
-   */
-  boolean shouldReportPathPrefixConflict(ActionAnalysisMetadata action);
-
   /** Returns the action type. Must not be {@code null}. */
   MiddlemanType getActionType();
 
@@ -247,12 +246,9 @@ public interface ActionAnalysisMetadata {
 
   static ImmutableMap<String, String> mergeMaps(
       ImmutableMap<String, String> first, ImmutableMap<String, String> second) {
-    // Use a different type to allow overriding keys.
-    // TODO(jcater): When ImmutableMap.Builder.buildKeepingLast is in released guava, upgrade and
-    // use that.
-    LinkedHashMap<String, String> result = new LinkedHashMap<>();
-    result.putAll(first);
-    result.putAll(second);
-    return ImmutableMap.copyOf(result);
+    return ImmutableMap.<String, String>builderWithExpectedSize(first.size() + second.size())
+        .putAll(first)
+        .putAll(second)
+        .buildKeepingLast();
   }
 }

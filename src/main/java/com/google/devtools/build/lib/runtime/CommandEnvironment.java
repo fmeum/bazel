@@ -20,12 +20,17 @@ import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Preconditions;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
+import com.google.common.collect.ImmutableSortedMap;
 import com.google.common.eventbus.EventBus;
+import com.google.common.eventbus.Subscribe;
+import com.google.devtools.build.lib.actions.ActionOutputDirectoryHelper;
 import com.google.devtools.build.lib.actions.InputMetadataProvider;
 import com.google.devtools.build.lib.actions.ResourceManager;
 import com.google.devtools.build.lib.analysis.AnalysisOptions;
 import com.google.devtools.build.lib.analysis.BlazeDirectories;
+import com.google.devtools.build.lib.analysis.BuildInfoEvent;
 import com.google.devtools.build.lib.analysis.config.CoreOptions;
+import com.google.devtools.build.lib.buildtool.BuildRequestOptions;
 import com.google.devtools.build.lib.clock.Clock;
 import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.concurrent.QuiescingExecutors;
@@ -116,6 +121,7 @@ public class CommandEnvironment {
   private OutputService outputService;
   private String workspaceName;
   private boolean hasSyncedPackageLoading = false;
+  private boolean buildInfoPosted = false;
   @Nullable private WorkspaceInfoFromDiff workspaceInfoFromDiff;
 
   // This AtomicReference is set to:
@@ -130,6 +136,11 @@ public class CommandEnvironment {
 
   @GuardedBy("fileCacheLock")
   private InputMetadataProvider fileCache;
+
+  private final Object outputDirectoryHelperLock = new Object();
+
+  @GuardedBy("outputDirectoryHelperLock")
+  private ActionOutputDirectoryHelper outputDirectoryHelper;
 
   private class BlazeModuleEnvironment implements BlazeModule.ModuleEnvironment {
     @Nullable
@@ -233,6 +244,7 @@ public class CommandEnvironment {
       this.packageLocator = null;
     }
     workspace.getSkyframeExecutor().setEventBus(eventBus);
+    eventBus.register(this);
 
     ClientOptions clientOptions =
         Preconditions.checkNotNull(
@@ -543,9 +555,11 @@ public class CommandEnvironment {
   /**
    * Returns the working directory of the server.
    *
-   * <p>This is often the first entry on the {@code --package_path}, but not always.
-   * Callers should certainly not make this assumption. The Path returned may be null.
+   * <p>This is often the first entry on the {@code --package_path}, but not always. Callers should
+   * certainly not make this assumption. The Path returned may be null; for example, when the
+   * command is invoked outside a workspace.
    */
+  @Nullable
   public Path getWorkspace() {
     return getDirectories().getWorkingDirectory();
   }
@@ -826,6 +840,17 @@ public class CommandEnvironment {
     }
   }
 
+  public ActionOutputDirectoryHelper getOutputDirectoryHelper() {
+    synchronized (outputDirectoryHelperLock) {
+      if (outputDirectoryHelper == null) {
+        var buildRequestOptions = options.getOptions(BuildRequestOptions.class);
+        outputDirectoryHelper =
+            new ActionOutputDirectoryHelper(buildRequestOptions.directoryCreationCacheSpec);
+      }
+      return outputDirectoryHelper;
+    }
+  }
+
   /** Use {@link #getXattrProvider} when possible: see documentation of {@link SyscallCache}. */
   public SyscallCache getSyscallCache() {
     return syscallCache;
@@ -871,5 +896,22 @@ public class CommandEnvironment {
 
   public CommandLinePathFactory getCommandLinePathFactory() {
     return commandLinePathFactory;
+  }
+
+  public void ensureBuildInfoPosted() {
+    if (buildInfoPosted) {
+      return;
+    }
+    ImmutableSortedMap<String, String> workspaceStatus =
+        workspace
+            .getWorkspaceStatusActionFactory()
+            .createDummyWorkspaceStatus(workspaceInfoFromDiff);
+    eventBus.post(new BuildInfoEvent(workspaceStatus));
+  }
+
+  @Subscribe
+  @SuppressWarnings("unused")
+  void gotBuildInfo(BuildInfoEvent event) {
+    buildInfoPosted = true;
   }
 }

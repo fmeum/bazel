@@ -15,18 +15,28 @@
 
 package com.google.devtools.build.lib.bazel;
 
+import com.google.common.annotations.VisibleForTesting;
+import com.google.common.base.Preconditions;
 import com.google.common.base.Strings;
 import com.google.common.base.Supplier;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
-import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Maps;
+import com.google.common.util.concurrent.ThreadFactoryBuilder;
 import com.google.devtools.build.lib.analysis.BlazeDirectories;
 import com.google.devtools.build.lib.analysis.ConfiguredRuleClassProvider;
 import com.google.devtools.build.lib.analysis.RuleDefinition;
 import com.google.devtools.build.lib.analysis.config.BuildConfigurationValue;
+import com.google.devtools.build.lib.authandtls.AuthAndTLSOptions;
+import com.google.devtools.build.lib.authandtls.GoogleAuthUtils;
+import com.google.devtools.build.lib.authandtls.StaticCredentials;
+import com.google.devtools.build.lib.authandtls.credentialhelper.CredentialHelperCredentials;
+import com.google.devtools.build.lib.authandtls.credentialhelper.CredentialHelperEnvironment;
+import com.google.devtools.build.lib.authandtls.credentialhelper.CredentialHelperProvider;
+import com.google.devtools.build.lib.authandtls.credentialhelper.CredentialModule;
 import com.google.devtools.build.lib.bazel.bzlmod.AttributeValues;
 import com.google.devtools.build.lib.bazel.bzlmod.BazelDepGraphFunction;
+import com.google.devtools.build.lib.bazel.bzlmod.BazelFetchAllFunction;
 import com.google.devtools.build.lib.bazel.bzlmod.BazelLockFileFunction;
 import com.google.devtools.build.lib.bazel.bzlmod.BazelModuleInspectorFunction;
 import com.google.devtools.build.lib.bazel.bzlmod.BazelModuleInspectorValue.AugmentedModule.ResolutionReason;
@@ -38,10 +48,12 @@ import com.google.devtools.build.lib.bazel.bzlmod.NonRegistryOverride;
 import com.google.devtools.build.lib.bazel.bzlmod.RegistryFactory;
 import com.google.devtools.build.lib.bazel.bzlmod.RegistryFactoryImpl;
 import com.google.devtools.build.lib.bazel.bzlmod.RepoSpec;
+import com.google.devtools.build.lib.bazel.bzlmod.RepoSpecFunction;
 import com.google.devtools.build.lib.bazel.bzlmod.SingleExtensionEvalFunction;
 import com.google.devtools.build.lib.bazel.bzlmod.SingleExtensionUsagesFunction;
+import com.google.devtools.build.lib.bazel.bzlmod.YankedVersionsUtil;
 import com.google.devtools.build.lib.bazel.commands.FetchCommand;
-import com.google.devtools.build.lib.bazel.commands.ModqueryCommand;
+import com.google.devtools.build.lib.bazel.commands.ModCommand;
 import com.google.devtools.build.lib.bazel.commands.SyncCommand;
 import com.google.devtools.build.lib.bazel.repository.LocalConfigPlatformFunction;
 import com.google.devtools.build.lib.bazel.repository.LocalConfigPlatformRule;
@@ -107,9 +119,11 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-import java.util.Set;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.Collectors;
+import javax.annotation.Nullable;
 
 /** Adds support for fetching external code. */
 public class BazelRepositoryModule extends BlazeModule {
@@ -134,21 +148,32 @@ public class BazelRepositoryModule extends BlazeModule {
       new MutableSupplier<>();
   private ImmutableMap<RepositoryName, PathFragment> overrides = ImmutableMap.of();
   private ImmutableMap<String, ModuleOverride> moduleOverrides = ImmutableMap.of();
-  private Optional<RootedPath> resolvedFile = Optional.empty();
   private Optional<RootedPath> resolvedFileReplacingWorkspace = Optional.empty();
-  private Set<String> outputVerificationRules = ImmutableSet.of();
   private FileSystem filesystem;
   private List<String> registries;
   private final AtomicBoolean ignoreDevDeps = new AtomicBoolean(false);
   private CheckDirectDepsMode checkDirectDepsMode = CheckDirectDepsMode.WARNING;
   private BazelCompatibilityMode bazelCompatibilityMode = BazelCompatibilityMode.ERROR;
-  private LockfileMode bazelLockfileMode = LockfileMode.OFF;
+  private LockfileMode bazelLockfileMode = LockfileMode.UPDATE;
   private List<String> allowedYankedVersions = ImmutableList.of();
   private SingleExtensionEvalFunction singleExtensionEvalFunction;
+  private final ExecutorService repoFetchingWorkerThreadPool =
+      Executors.newFixedThreadPool(
+          100, new ThreadFactoryBuilder().setNameFormat("repo-fetching-worker-%d").build());
+
+  @Nullable private CredentialModule credentialModule;
+
+  private ImmutableMap<String, NonRegistryOverride> builtinModules = null;
 
   public BazelRepositoryModule() {
     this.starlarkRepositoryFunction = new StarlarkRepositoryFunction(downloadManager);
     this.repositoryHandlers = repositoryRules();
+  }
+
+  @VisibleForTesting
+  public BazelRepositoryModule(ImmutableMap<String, NonRegistryOverride> builtinModules) {
+    this();
+    this.builtinModules = builtinModules;
   }
 
   private static DetailedExitCode detailedExitCode(String message, ExternalRepository.Code code) {
@@ -188,7 +213,7 @@ public class BazelRepositoryModule extends BlazeModule {
   @Override
   public void serverInit(OptionsParsingResult startupOptions, ServerBuilder builder) {
     builder.addCommands(new FetchCommand());
-    builder.addCommands(new ModqueryCommand());
+    builder.addCommands(new ModCommand());
     builder.addCommands(new SyncCommand());
     builder.addInfoItems(new RepositoryCacheInfoItem(repositoryCache));
   }
@@ -213,56 +238,62 @@ public class BazelRepositoryModule extends BlazeModule {
             directories,
             BazelSkyframeExecutorConstants.EXTERNAL_PACKAGE_HELPER);
     RegistryFactory registryFactory =
-        new RegistryFactoryImpl(downloadManager, clientEnvironmentSupplier);
+        new RegistryFactoryImpl(
+            directories.getWorkspace(), downloadManager, clientEnvironmentSupplier);
     singleExtensionEvalFunction =
         new SingleExtensionEvalFunction(directories, clientEnvironmentSupplier, downloadManager);
 
-    ImmutableMap<String, NonRegistryOverride> builtinModules =
-        ImmutableMap.of(
-            // @bazel_tools is a special repo that we pull from the extracted install dir.
-            "bazel_tools",
-            LocalPathOverride.create(
-                directories.getEmbeddedBinariesRoot().getChild("embedded_tools").getPathString()),
-            // @local_config_platform is currently generated by the native repo rule
-            // local_config_platform
-            // It has to be a special repo for now because:
-            //   - It's embedded in local_config_platform.WORKSPACE and depended on by many
-            // toolchains.
-            //   - The canonical name "local_config_platform" is hardcoded in Bazel code.
-            //     See {@link PlatformOptions}
-            "local_config_platform",
-            new NonRegistryOverride() {
-              @Override
-              public RepoSpec getRepoSpec(RepositoryName repoName) {
-                return RepoSpec.builder()
-                    .setRuleClassName("local_config_platform")
-                    .setAttributes(
-                        AttributeValues.create(ImmutableMap.of("name", repoName.getName())))
-                    .build();
-              }
+    if (builtinModules == null) {
+      builtinModules =
+          ImmutableMap.of(
+              // @bazel_tools is a special repo that we pull from the extracted install dir.
+              "bazel_tools",
+              LocalPathOverride.create(
+                  directories.getEmbeddedBinariesRoot().getChild("embedded_tools").getPathString()),
+              // @local_config_platform is currently generated by the native repo rule
+              // local_config_platform
+              // It has to be a special repo for now because:
+              //   - It's embedded in local_config_platform.WORKSPACE and depended on by many
+              // toolchains.
+              //   - The canonical name "local_config_platform" is hardcoded in Bazel code.
+              //     See {@link PlatformOptions}
+              "local_config_platform",
+              new NonRegistryOverride() {
+                @Override
+                public RepoSpec getRepoSpec(RepositoryName repoName) {
+                  return RepoSpec.builder()
+                      .setRuleClassName("local_config_platform")
+                      .setAttributes(
+                          AttributeValues.create(ImmutableMap.of("name", repoName.getName())))
+                      .build();
+                }
 
-              @Override
-              public ResolutionReason getResolutionReason() {
-                // NOTE: It is not exactly a LOCAL_PATH_OVERRIDE, but there is no inspection
-                // ResolutionReason for builtin modules
-                return ResolutionReason.LOCAL_PATH_OVERRIDE;
-              }
-            });
+                @Override
+                public ResolutionReason getResolutionReason() {
+                  // NOTE: It is not exactly a LOCAL_PATH_OVERRIDE, but there is no inspection
+                  // ResolutionReason for builtin modules
+                  return ResolutionReason.LOCAL_PATH_OVERRIDE;
+                }
+              });
+    }
 
     builder
         .addSkyFunction(SkyFunctions.REPOSITORY_DIRECTORY, repositoryDelegatorFunction)
         .addSkyFunction(
             SkyFunctions.MODULE_FILE,
             new ModuleFileFunction(registryFactory, directories.getWorkspace(), builtinModules))
-        .addSkyFunction(
-            SkyFunctions.BAZEL_DEP_GRAPH, new BazelDepGraphFunction(directories.getWorkspace()))
+        .addSkyFunction(SkyFunctions.BAZEL_DEP_GRAPH, new BazelDepGraphFunction())
         .addSkyFunction(
             SkyFunctions.BAZEL_LOCK_FILE, new BazelLockFileFunction(directories.getWorkspace()))
+        .addSkyFunction(SkyFunctions.BAZEL_FETCH_ALL, new BazelFetchAllFunction())
         .addSkyFunction(SkyFunctions.BAZEL_MODULE_INSPECTION, new BazelModuleInspectorFunction())
         .addSkyFunction(SkyFunctions.BAZEL_MODULE_RESOLUTION, new BazelModuleResolutionFunction())
         .addSkyFunction(SkyFunctions.SINGLE_EXTENSION_EVAL, singleExtensionEvalFunction)
-        .addSkyFunction(SkyFunctions.SINGLE_EXTENSION_USAGES, new SingleExtensionUsagesFunction());
+        .addSkyFunction(SkyFunctions.SINGLE_EXTENSION_USAGES, new SingleExtensionUsagesFunction())
+        .addSkyFunction(SkyFunctions.REPO_SPEC, new RepoSpecFunction(registryFactory));
     filesystem = runtime.getFileSystem();
+
+    credentialModule = Preconditions.checkNotNull(runtime.getBlazeModule(CredentialModule.class));
   }
 
   @Override
@@ -288,9 +319,7 @@ public class BazelRepositoryModule extends BlazeModule {
     clientEnvironmentSupplier.set(env.getRepoEnv());
     PackageOptions pkgOptions = env.getOptions().getOptions(PackageOptions.class);
     isFetch.set(pkgOptions != null && pkgOptions.fetch);
-    resolvedFile = Optional.empty();
     resolvedFileReplacingWorkspace = Optional.empty();
-    outputVerificationRules = ImmutableSet.of();
 
     ProcessWrapper processWrapper = ProcessWrapper.fromCommandEnvironment(env);
     starlarkRepositoryFunction.setProcessWrapper(processWrapper);
@@ -299,6 +328,19 @@ public class BazelRepositoryModule extends BlazeModule {
 
     RepositoryOptions repoOptions = env.getOptions().getOptions(RepositoryOptions.class);
     if (repoOptions != null) {
+      switch (repoOptions.workerForRepoFetching) {
+        case OFF:
+          starlarkRepositoryFunction.setWorkerExecutorService(null);
+          break;
+        case PLATFORM:
+          starlarkRepositoryFunction.setWorkerExecutorService(repoFetchingWorkerThreadPool);
+          break;
+        case VIRTUAL:
+          throw new AbruptExitException(
+              detailedExitCode(
+                  "using a virtual worker thread for repo fetching is not yet supported",
+                  Code.BAD_DOWNLOADER_CONFIG));
+      }
       downloadManager.setDisableDownload(repoOptions.disableDownload);
       if (repoOptions.repositoryDownloaderRetries >= 0) {
         downloadManager.setRetries(repoOptions.repositoryDownloaderRetries);
@@ -373,6 +415,41 @@ public class BazelRepositoryModule extends BlazeModule {
                 Code.BAD_DOWNLOADER_CONFIG));
       }
 
+      try {
+        AuthAndTLSOptions authAndTlsOptions = env.getOptions().getOptions(AuthAndTLSOptions.class);
+        var credentialHelperEnvironment =
+            CredentialHelperEnvironment.newBuilder()
+                .setEventReporter(env.getReporter())
+                .setWorkspacePath(env.getWorkspace())
+                .setClientEnvironment(env.getClientEnv())
+                .setHelperExecutionTimeout(authAndTlsOptions.credentialHelperTimeout)
+                .build();
+        CredentialHelperProvider credentialHelperProvider =
+            GoogleAuthUtils.newCredentialHelperProvider(
+                credentialHelperEnvironment,
+                env.getCommandLinePathFactory(),
+                authAndTlsOptions.credentialHelpers);
+
+        downloadManager.setCredentialFactory(
+            headers -> {
+              Preconditions.checkNotNull(headers);
+
+              return new CredentialHelperCredentials(
+                  credentialHelperProvider,
+                  credentialHelperEnvironment,
+                  credentialModule.getCredentialCache(),
+                  Optional.of(new StaticCredentials(headers)));
+            });
+      } catch (IOException e) {
+        env.getReporter().handle(Event.error(e.getMessage()));
+        env.getBlazeModuleEnvironment()
+            .exit(
+                new AbruptExitException(
+                    detailedExitCode(
+                        "Error initializing credential helper", Code.CREDENTIALS_INIT_FAILURE)));
+        return;
+      }
+
       if (repoOptions.experimentalDistdir != null) {
         downloadManager.setDistdir(
             repoOptions.experimentalDistdir.stream()
@@ -440,17 +517,6 @@ public class BazelRepositoryModule extends BlazeModule {
         registries = DEFAULT_REGISTRIES;
       }
 
-      if (!Strings.isNullOrEmpty(repoOptions.repositoryHashFile)) {
-        Path hashFile;
-        if (env.getWorkspace() != null) {
-          hashFile = env.getWorkspace().getRelative(repoOptions.repositoryHashFile);
-        } else {
-          hashFile = filesystem.getPath(repoOptions.repositoryHashFile);
-        }
-        resolvedFile =
-            Optional.of(RootedPath.toRootedPath(Root.absoluteRoot(filesystem), hashFile));
-      }
-
       if (!Strings.isNullOrEmpty(repoOptions.experimentalResolvedFileInsteadOfWorkspace)) {
         Path resolvedFile;
         if (env.getWorkspace() != null) {
@@ -462,11 +528,6 @@ public class BazelRepositoryModule extends BlazeModule {
         }
         resolvedFileReplacingWorkspace =
             Optional.of(RootedPath.toRootedPath(Root.absoluteRoot(filesystem), resolvedFile));
-      }
-
-      if (repoOptions.experimentalVerifyRepositoryRules != null) {
-        outputVerificationRules =
-            ImmutableSet.copyOf(repoOptions.experimentalVerifyRepositoryRules);
       }
 
       RepositoryRemoteExecutorFactory remoteExecutorFactory =
@@ -489,7 +550,9 @@ public class BazelRepositoryModule extends BlazeModule {
    * @return Absolute Path
    */
   private String getAbsolutePath(String path, CommandEnvironment env) {
-    path = path.replace("%workspace%", env.getWorkspace().getPathString());
+    if (env.getWorkspace() != null) {
+      path = path.replace("%workspace%", env.getWorkspace().getPathString());
+    }
     if (!PathFragment.isAbsolute(path)) {
       path = env.getWorkingDirectory().getRelative(path).getPathString();
     }
@@ -502,21 +565,16 @@ public class BazelRepositoryModule extends BlazeModule {
         PrecomputedValue.injected(RepositoryDelegatorFunction.REPOSITORY_OVERRIDES, overrides),
         PrecomputedValue.injected(ModuleFileFunction.MODULE_OVERRIDES, moduleOverrides),
         PrecomputedValue.injected(
-            RepositoryDelegatorFunction.RESOLVED_FILE_FOR_VERIFICATION, resolvedFile),
-        PrecomputedValue.injected(
-            RepositoryDelegatorFunction.OUTPUT_VERIFICATION_REPOSITORY_RULES,
-            outputVerificationRules),
-        PrecomputedValue.injected(
             RepositoryDelegatorFunction.RESOLVED_FILE_INSTEAD_OF_WORKSPACE,
             resolvedFileReplacingWorkspace),
         // That key will be reinjected by the sync command with a universally unique identifier.
         // Nevertheless, we need to provide a default value for other commands.
         PrecomputedValue.injected(
-            RepositoryDelegatorFunction.DEPENDENCY_FOR_UNCONDITIONAL_FETCHING,
-            RepositoryDelegatorFunction.DONT_FETCH_UNCONDITIONALLY),
+            RepositoryDelegatorFunction.FORCE_FETCH,
+            RepositoryDelegatorFunction.FORCE_FETCH_DISABLED),
         PrecomputedValue.injected(
-            RepositoryDelegatorFunction.DEPENDENCY_FOR_UNCONDITIONAL_CONFIGURING,
-            RepositoryDelegatorFunction.DONT_FETCH_UNCONDITIONALLY),
+            RepositoryDelegatorFunction.FORCE_FETCH_CONFIGURE,
+            RepositoryDelegatorFunction.FORCE_FETCH_DISABLED),
         PrecomputedValue.injected(ModuleFileFunction.REGISTRIES, registries),
         PrecomputedValue.injected(ModuleFileFunction.IGNORE_DEV_DEPS, ignoreDevDeps.get()),
         PrecomputedValue.injected(
@@ -525,7 +583,7 @@ public class BazelRepositoryModule extends BlazeModule {
             BazelModuleResolutionFunction.BAZEL_COMPATIBILITY_MODE, bazelCompatibilityMode),
         PrecomputedValue.injected(BazelLockFileFunction.LOCKFILE_MODE, bazelLockfileMode),
         PrecomputedValue.injected(
-            BazelModuleResolutionFunction.ALLOWED_YANKED_VERSIONS, allowedYankedVersions));
+            YankedVersionsUtil.ALLOWED_YANKED_VERSIONS, allowedYankedVersions));
   }
 
   @Override

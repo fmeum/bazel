@@ -13,32 +13,25 @@
 // limitations under the License.
 package com.google.devtools.build.lib.analysis;
 
+import static com.google.common.collect.Iterables.getOnlyElement;
 import static com.google.common.truth.Truth.assertThat;
 import static com.google.devtools.build.lib.bazel.bzlmod.BzlmodTestUtil.createModuleKey;
 
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
+import com.google.common.eventbus.Subscribe;
 import com.google.devtools.build.lib.analysis.config.BuildConfigurationValue;
 import com.google.devtools.build.lib.analysis.config.transitions.ConfigurationTransition;
 import com.google.devtools.build.lib.analysis.test.TestConfiguration.TestOptions;
 import com.google.devtools.build.lib.analysis.util.BuildViewTestCase;
 import com.google.devtools.build.lib.analysis.util.DummyTestFragment;
 import com.google.devtools.build.lib.analysis.util.DummyTestFragment.DummyTestOptions;
-import com.google.devtools.build.lib.bazel.bzlmod.BazelLockFileFunction;
-import com.google.devtools.build.lib.bazel.bzlmod.BazelModuleResolutionFunction;
-import com.google.devtools.build.lib.bazel.bzlmod.FakeRegistry;
-import com.google.devtools.build.lib.bazel.bzlmod.ModuleFileFunction;
-import com.google.devtools.build.lib.bazel.repository.RepositoryOptions.BazelCompatibilityMode;
-import com.google.devtools.build.lib.bazel.repository.RepositoryOptions.CheckDirectDepsMode;
-import com.google.devtools.build.lib.bazel.repository.RepositoryOptions.LockfileMode;
 import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.packages.Rule;
 import com.google.devtools.build.lib.packages.RuleTransitionData;
 import com.google.devtools.build.lib.rules.cpp.CppOptions;
 import com.google.devtools.build.lib.skyframe.ConfiguredTargetAndData;
-import com.google.devtools.build.lib.skyframe.PrecomputedValue;
-import com.google.devtools.build.lib.skyframe.PrecomputedValue.Injected;
 import com.google.devtools.build.lib.testutil.TestConstants;
 import com.google.devtools.build.lib.testutil.TestRuleClassProvider;
 import com.google.devtools.build.lib.vfs.ModifiedFileSet;
@@ -46,7 +39,7 @@ import com.google.devtools.build.lib.vfs.PathFragment;
 import com.google.devtools.build.lib.vfs.Root;
 import com.google.testing.junit.testparameterinjector.TestParameterInjector;
 import com.google.testing.junit.testparameterinjector.TestParameters;
-import java.io.IOException;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.regex.Pattern;
@@ -56,29 +49,6 @@ import org.junit.runner.RunWith;
 /** Tests for StarlarkRuleTransitionProvider. */
 @RunWith(TestParameterInjector.class)
 public final class StarlarkRuleTransitionProviderTest extends BuildViewTestCase {
-  private FakeRegistry registry;
-
-  @Override
-  protected ImmutableList<Injected> extraPrecomputedValues() {
-    try {
-      registry =
-          FakeRegistry.DEFAULT_FACTORY.newFakeRegistry(scratch.dir("modules").getPathString());
-    } catch (IOException e) {
-      throw new IllegalStateException(e);
-    }
-    return ImmutableList.of(
-        PrecomputedValue.injected(
-            ModuleFileFunction.REGISTRIES, ImmutableList.of(registry.getUrl())),
-        PrecomputedValue.injected(ModuleFileFunction.IGNORE_DEV_DEPS, false),
-        PrecomputedValue.injected(ModuleFileFunction.MODULE_OVERRIDES, ImmutableMap.of()),
-        PrecomputedValue.injected(
-            BazelModuleResolutionFunction.ALLOWED_YANKED_VERSIONS, ImmutableList.of()),
-        PrecomputedValue.injected(
-            BazelModuleResolutionFunction.CHECK_DIRECT_DEPENDENCIES, CheckDirectDepsMode.WARNING),
-        PrecomputedValue.injected(
-            BazelModuleResolutionFunction.BAZEL_COMPATIBILITY_MODE, BazelCompatibilityMode.ERROR),
-        PrecomputedValue.injected(BazelLockFileFunction.LOCKFILE_MODE, LockfileMode.OFF));
-  }
 
   @Override
   protected ConfiguredRuleClassProvider createRuleClassProvider() {
@@ -123,9 +93,16 @@ public final class StarlarkRuleTransitionProviderTest extends BuildViewTestCase 
         "  })");
     scratch.file("test/BUILD", "load('//test:rules.bzl', 'my_rule')", "my_rule(name = 'test')");
 
+    var collector = new AnalysisRootCauseCollector();
+    eventBus.register(collector);
     reporter.removeHandler(failFastHandler);
     getConfiguredTarget("//test");
     assertContainsEvent("transition function returned string, want dict or list of dicts");
+
+    // Verifies that the AnalysisRootCauseEvent has a no associated configuration. In this case,
+    // the error occurs during a transition, so no configuration has been determined.
+    AnalysisRootCauseEvent rootCause = getOnlyElement(collector.rootCauses);
+    assertThat(rootCause.getConfigurations()).isEmpty();
   }
 
   @Test
@@ -166,7 +143,7 @@ public final class StarlarkRuleTransitionProviderTest extends BuildViewTestCase 
         "test/transitions.bzl",
         "def _impl(settings, attr):",
         "  return {'//command_line_option:foo': ",
-        "    settings['//command_line_option:foo']+'->post-transition'}",
+        "    settings['//command_line_option:foo'].replace('pre', 'post')}",
         "my_transition = transition(",
         "  implementation = _impl,",
         "  inputs = ['//command_line_option:foo'],",
@@ -193,7 +170,7 @@ public final class StarlarkRuleTransitionProviderTest extends BuildViewTestCase 
 
     BuildConfigurationValue configuration = getConfiguration(getConfiguredTarget("//test"));
     assertThat(configuration.getOptions().get(DummyTestOptions.class).foo)
-        .isEqualTo("pre-transition->post-transition");
+        .isEqualTo("post-transition");
   }
 
   @Test
@@ -282,7 +259,6 @@ public final class StarlarkRuleTransitionProviderTest extends BuildViewTestCase 
     assertContainsEvent(
         "Rule transition only allowed to return a single transitioned configuration.");
   }
-
   @Test
   public void testCanDoBadStuffWithParameterizedTransitionsAndSelects() throws Exception {
     writeAllowlistFile();
@@ -329,8 +305,9 @@ public final class StarlarkRuleTransitionProviderTest extends BuildViewTestCase 
     getConfiguredTarget("//test");
     assertContainsEvent(
         "No attribute 'my_configurable_attr'. "
-            + "Either this attribute does not exist for this rule or is set by a select. "
-            + "Starlark rule transitions currently cannot read attributes behind selects.");
+            + "Either this attribute does not exist for this rule or the attribute "
+            + "was not resolved because it is set by a select that reads flags the transition "
+            + "may set.");
   }
 
   @Test
@@ -634,7 +611,8 @@ public final class StarlarkRuleTransitionProviderTest extends BuildViewTestCase 
     scratch.file(
         "test/transitions.bzl",
         "def _transition_impl(settings, attr):",
-        "  return {'//test:cute-animal-fact': settings['//test:cute-animal-fact']+' <- TRUE'}",
+        "  new_value = settings['//test:cute-animal-fact'].replace('cows', 'platypuses')",
+        "  return {'//test:cute-animal-fact': new_value}",
         "my_transition = transition(",
         "  implementation = _transition_impl,",
         "  inputs = ['//test:cute-animal-fact'],",
@@ -648,7 +626,7 @@ public final class StarlarkRuleTransitionProviderTest extends BuildViewTestCase 
                 .getOptions()
                 .getStarlarkOptions()
                 .get(Label.parseCanonicalUnchecked("//test:cute-animal-fact")))
-        .isEqualTo("cows produce more milk when they listen to soothing music <- TRUE");
+        .isEqualTo("platypuses produce more milk when they listen to soothing music");
   }
 
   @Test
@@ -656,7 +634,8 @@ public final class StarlarkRuleTransitionProviderTest extends BuildViewTestCase 
     scratch.file(
         "test/transitions.bzl",
         "def _transition_impl(settings, attr):",
-        "  return {'//test:cute-animal-fact': settings['//test:cute-animal-fact']+' <- TRUE'}",
+        "  now_true = settings['//test:cute-animal-fact'].replace('FALSE', 'TRUE')",
+        "  return {'//test:cute-animal-fact': now_true}",
         "my_transition = transition(",
         "  implementation = _transition_impl,",
         "  inputs = ['//test:cute-animal-fact'],",
@@ -664,7 +643,7 @@ public final class StarlarkRuleTransitionProviderTest extends BuildViewTestCase 
         ")");
     writeRulesBuildSettingsAndBUILDforBuildSettingTransitionTests();
 
-    useConfiguration(ImmutableMap.of("//test:cute-animal-fact", "rats are ticklish"));
+    useConfiguration(ImmutableMap.of("//test:cute-animal-fact", "rats are ticklish <- FALSE"));
 
     BuildConfigurationValue configuration = getConfiguration(getConfiguredTarget("//test"));
     assertThat(
@@ -1006,9 +985,10 @@ public final class StarlarkRuleTransitionProviderTest extends BuildViewTestCase 
   }
 
   @Test
-  public void testCannotTransitionWithoutAllowlist() throws Exception {
+  public void testTransitionIsCheckedAgainstDefaultAllowlist() throws Exception {
     scratch.overwriteFile(
-        "tools/allowlists/function_transition_allowlist/BUILD",
+        TestConstants.TOOLS_REPOSITORY_SCRATCH
+            + "tools/allowlists/function_transition_allowlist/BUILD",
         "package_group(",
         "    name = 'function_transition_allowlist',",
         "    packages = [],",
@@ -1034,7 +1014,7 @@ public final class StarlarkRuleTransitionProviderTest extends BuildViewTestCase 
 
     reporter.removeHandler(failFastHandler);
     getConfiguredTarget("//test");
-    assertContainsEvent("Use of Starlark transition without allowlist");
+    assertContainsEvent("Non-allowlisted use of Starlark transition");
   }
 
   @Test
@@ -1241,9 +1221,8 @@ public final class StarlarkRuleTransitionProviderTest extends BuildViewTestCase 
     assertContainsEvent(
         "transition outputs [//test:attr_transition_output_flag2] were not defined by transition "
             + "function");
-    assertContainsEvent(
-        "transition outputs [//test:self_transition_output_flag2] were not defined by transition "
-            + "function");
+    // While _self_impl is in error as it does not define //test:self_transition_output_flag2,
+    // evaluation stops at the faulty _attr_impl definition so it does not cause an error.
   }
 
   @Test
@@ -1309,7 +1288,7 @@ public final class StarlarkRuleTransitionProviderTest extends BuildViewTestCase 
 
   @Test
   public void successfulTypeConversionOfNativeListOption_unambiguousLabels() throws Exception {
-    setBuildLanguageOptions("--enable_bzlmod", "--incompatible_unambiguous_label_stringification");
+    setBuildLanguageOptions("--incompatible_unambiguous_label_stringification");
 
     scratch.overwriteFile("MODULE.bazel", "bazel_dep(name='rules_x',version='1.0')");
     registry.addModule(createModuleKey("rules_x", "1.0"), "module(name='rules_x', version='1.0')");
@@ -1346,6 +1325,8 @@ public final class StarlarkRuleTransitionProviderTest extends BuildViewTestCase 
         "load('@rules_x//:defs.bzl', 'my_rule')",
         "platform(name = 'my_platform')",
         "my_rule(name = 'test')");
+
+    invalidatePackages();
 
     getConfiguredTarget("//test");
     assertNoEvents();
@@ -1546,7 +1527,7 @@ public final class StarlarkRuleTransitionProviderTest extends BuildViewTestCase 
         testTarget
             .getRuleClassObject()
             .getTransitionFactory()
-            .create(RuleTransitionData.create(testTarget));
+            .create(RuleTransitionData.create(testTarget, null, ""));
     RequiredConfigFragmentsProvider.Builder requiredFragments =
         RequiredConfigFragmentsProvider.builder();
     ruleTransition.addRequiredFragments(
@@ -1589,7 +1570,7 @@ public final class StarlarkRuleTransitionProviderTest extends BuildViewTestCase 
         "genrule(name = 'test', srcs = [':bottom'], outs = ['out'], cmd = 'touch $@')");
     reporter.removeHandler(failFastHandler);
     assertThat(getConfiguredTarget("//test:test")).isNull();
-    assertContainsEvent("CPU name '//bad:cpu' is invalid as part of a path: must not contain /");
+    assertContainsEvent("'//bad:cpu' is invalid as part of a path: must not contain /");
   }
 
   @Test
@@ -1943,5 +1924,14 @@ public final class StarlarkRuleTransitionProviderTest extends BuildViewTestCase 
                 .get(DummyTestOptions.class)
                 .foo)
         .isEqualTo("second build");
+  }
+
+  private static class AnalysisRootCauseCollector {
+    private final ArrayList<AnalysisRootCauseEvent> rootCauses = new ArrayList<>();
+
+    @Subscribe
+    public void rootCause(AnalysisRootCauseEvent event) {
+      rootCauses.add(event);
+    }
   }
 }

@@ -19,12 +19,22 @@ the generating actions, so that the runfiles symlink tree is staged for the depl
 """
 
 load(":common/cc/cc_helper.bzl", "cc_helper")
+load(":common/java/java_common.bzl", "java_common")
+load(":common/java/java_helper.bzl", "helper")
 load(":common/java/java_semantics.bzl", "semantics")
-load(":common/cc/semantics.bzl", cc_semantics = "semantics")
-load(":common/java/java_helper.bzl", "util")
 
 InstrumentedFilesInfo = _builtins.toplevel.InstrumentedFilesInfo
-java_common = _builtins.toplevel.java_common
+
+def _stamping_enabled(ctx, stamp):
+    if ctx.configuration.is_tool_configuration():
+        stamp = 0
+    return (stamp == 1) or (stamp == -1 and ctx.configuration.stamp_binaries())
+
+def get_build_info(ctx, stamp):
+    if _stamping_enabled(ctx, stamp):
+        return ctx.attr._build_info_translator[OutputGroupInfo].non_redacted_build_info_files.to_list()
+    else:
+        return ctx.attr._build_info_translator[OutputGroupInfo].redacted_build_info_files.to_list()
 
 def create_deploy_archives(
         ctx,
@@ -34,7 +44,7 @@ def create_deploy_archives(
         main_class,
         coverage_main_class,
         strip_as_default,
-        stamp,
+        build_info_files,
         build_target,
         hermetic = False,
         add_exports = depset(),
@@ -55,7 +65,7 @@ def create_deploy_archives(
         coverage_main_class: (String) FQN of the entry point for coverage collection
         build_target: (String) Name of the build target for stamping
         strip_as_default: (bool) Whether to create unstripped deploy jar
-        stamp: (bool) Value of stamping attribute on the rule
+        build_info_files: ([File]) the artifacts containing workspace status for the current build
         hermetic: (bool)
         add_exports: (depset)
         add_opens: (depset)
@@ -77,9 +87,7 @@ def create_deploy_archives(
     )
     multi_release = ctx.fragments.java.multi_release_deploy_jars
 
-    build_info_files = semantics.get_build_info(ctx, stamp)
-
-    _create_deploy_archive(
+    create_deploy_archive(
         ctx,
         launcher_info.launcher,
         runfiles,
@@ -103,7 +111,7 @@ def create_deploy_archives(
     )
 
     if strip_as_default:
-        _create_deploy_archive(
+        create_deploy_archive(
             ctx,
             launcher_info.unstripped_launcher,
             runfiles,
@@ -123,7 +131,7 @@ def create_deploy_archives(
     else:
         ctx.actions.write(ctx.outputs.unstrippeddeployjar, "")
 
-def _create_deploy_archive(
+def create_deploy_archive(
         ctx,
         launcher,
         runfiles,
@@ -144,10 +152,42 @@ def _create_deploy_archive(
         add_exports = [],
         add_opens = [],
         extra_args = []):
-    runtime = semantics.find_java_runtime_toolchain(ctx)
+    """ Creates a deploy jar
 
+    Requires a Java runtime toolchain if and only if hermetic is True.
+
+    Args:
+        ctx: (RuleContext) The rule context
+        launcher: (File) the launcher artifact
+        runfiles: (Depset) the runfiles for the deploy jar
+        main_class: (String) FQN of the entry point for execution
+        coverage_main_class: (String) FQN of the entry point for coverage collection
+        resources: (Depset) resource inputs
+        classpath_resources: (Depset) classpath resource inputs
+        runtime_classpath: (Depset) source files to add to the jar
+        build_target: (String) Name of the build target for stamping
+        manifest_lines: (list[String]) Optional lines added to the jar manifest
+        build_info_files: (list[File]) build info files for stamping
+        build_target: (String) the owner build target label name string
+        output: (File) the output jar artifact
+        shared_archive: (File) Optional .jsa artifact
+        one_version_level: (String) Optional one version check level, default OFF
+        one_version_allowlist: (File) Optional allowlist for one version check
+        multi_release: (bool)
+        hermetic: (bool)
+        add_exports: (depset)
+        add_opens: (depset)
+        extra_args: (list[Args]) Optional arguments for the deploy jar action
+    """
     input_files = []
     input_files.extend(build_info_files)
+
+    transitive_input_files = [
+        resources,
+        classpath_resources,
+        runtime_classpath,
+        runfiles,
+    ]
 
     single_jar = semantics.find_java_toolchain(ctx).single_jar
 
@@ -173,7 +213,7 @@ def _create_deploy_archive(
     args.add_all(
         "--sources",
         runtime_classpath,
-        map_each = util.jar_and_target_arg_mapper,
+        map_each = helper.jar_and_target_arg_mapper,
     )
 
     if one_version_level != "OFF" and one_version_allowlist:
@@ -186,17 +226,22 @@ def _create_deploy_archive(
     if multi_release:
         args.add("--multi_release")
 
-    hermetic_files = runtime.hermetic_files
-    if hermetic and runtime.lib_modules != None and hermetic_files != None:
-        java_home = runtime.java_home
-        lib_modules = runtime.lib_modules
-        args.add("--hermetic_java_home", java_home)
-        args.add("--jdk_lib_modules", lib_modules)
-        args.add_all("--resources", hermetic_files)
-        input_files.append(lib_modules)
+    if hermetic:
+        runtime = semantics.find_java_runtime_toolchain(ctx)
+        if not runtime.lib_modules:
+            runtime = ctx.toolchains["@//tools/jdk:fallback_hermetic_runtime_toolchain_type"].java_runtime
+        if runtime.lib_modules != None:
+            java_home = runtime.java_home
+            lib_modules = runtime.lib_modules
+            hermetic_files = runtime.hermetic_files
+            args.add("--hermetic_java_home", java_home)
+            args.add("--jdk_lib_modules", lib_modules)
+            args.add_all("--resources", hermetic_files)
+            input_files.append(lib_modules)
+            transitive_input_files.append(hermetic_files)
 
-        if shared_archive == None:
-            shared_archive = runtime.default_cds
+            if shared_archive == None:
+                shared_archive = runtime.default_cds
 
     if shared_archive:
         input_files.append(shared_archive)
@@ -205,13 +250,7 @@ def _create_deploy_archive(
     args.add_all("--add_exports", add_exports)
     args.add_all("--add_opens", add_opens)
 
-    inputs = depset(input_files, transitive = [
-        resources,
-        classpath_resources,
-        runtime_classpath,
-        runfiles,
-        hermetic_files,
-    ])
+    inputs = depset(input_files, transitive = transitive_input_files)
 
     ctx.actions.run(
         mnemonic = "JavaDeployJar",
@@ -222,8 +261,8 @@ def _create_deploy_archive(
         outputs = [output],
         arguments = [args] + extra_args,
         use_default_shell_env = True,
+        toolchain = semantics.JAVA_TOOLCHAIN_TYPE,
     )
-    return output
 
 def _implicit_outputs(binary):
     binary_name = binary.name
@@ -232,15 +271,26 @@ def _implicit_outputs(binary):
         "unstrippeddeployjar": "%s_deploy.jar.unstripped" % binary_name,
     }
 
-def make_deploy_jars_rule(implementation):
+def make_deploy_jars_rule(
+        implementation,
+        *,
+        create_executable = True,
+        extra_attrs = {},
+        extra_toolchains = []):
     """Creates the deploy jar auxiliary rule for java_binary
 
     Args:
         implementation: (Function) The rule implementation function
+        create_executable: (bool) The value of the create_executable attribute of java_binary
+        extra_toolchains: (list[String]) Additional toolchains
 
     Returns:
         The deploy jar rule class
     """
+    toolchains = [semantics.JAVA_TOOLCHAIN] + cc_helper.use_cpp_toolchain()
+    if create_executable:
+        toolchains.append(semantics.JAVA_RUNTIME_TOOLCHAIN)
+    toolchains.extend(extra_toolchains)
     return rule(
         implementation = implementation,
         attrs = {
@@ -250,14 +300,12 @@ def make_deploy_jars_rule(implementation):
                 default = semantics.JAVA_TOOLCHAIN_LABEL,
                 providers = [java_common.JavaToolchainInfo],
             ),
-            "_cc_toolchain": attr.label(default = "@" + cc_semantics.get_repo() + "//tools/cpp:current_cc_toolchain"),
             "_java_toolchain_type": attr.label(default = semantics.JAVA_TOOLCHAIN_TYPE),
-            "_java_runtime_toolchain_type": attr.label(default = semantics.JAVA_RUNTIME_TOOLCHAIN_TYPE),
             "_build_info_translator": attr.label(
                 default = semantics.BUILD_INFO_TRANSLATOR_LABEL,
             ),
-        },
+        } | extra_attrs,
         outputs = _implicit_outputs,
         fragments = ["java"],
-        toolchains = [semantics.JAVA_TOOLCHAIN, semantics.JAVA_RUNTIME_TOOLCHAIN] + cc_helper.use_cpp_toolchain(),
+        toolchains = toolchains,
     )

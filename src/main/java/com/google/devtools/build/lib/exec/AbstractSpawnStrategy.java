@@ -14,6 +14,8 @@
 
 package com.google.devtools.build.lib.exec;
 
+import static com.google.common.base.Preconditions.checkArgument;
+import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.util.concurrent.Futures.immediateVoidFuture;
 import static com.google.common.util.concurrent.MoreExecutors.directExecutor;
 
@@ -42,9 +44,9 @@ import com.google.devtools.build.lib.actions.SpawnResult;
 import com.google.devtools.build.lib.actions.SpawnResult.Status;
 import com.google.devtools.build.lib.actions.Spawns;
 import com.google.devtools.build.lib.actions.UserExecException;
-import com.google.devtools.build.lib.actions.cache.OutputMetadataStore;
 import com.google.devtools.build.lib.events.Event;
 import com.google.devtools.build.lib.events.ExtendedEventHandler;
+import com.google.devtools.build.lib.exec.Protos.Digest;
 import com.google.devtools.build.lib.exec.SpawnCache.CacheHandle;
 import com.google.devtools.build.lib.exec.SpawnRunner.ProgressStatus;
 import com.google.devtools.build.lib.exec.SpawnRunner.SpawnExecutionContext;
@@ -90,7 +92,7 @@ public abstract class AbstractSpawnStrategy implements SandboxedSpawnStrategy {
   }
 
   /**
-   * Get's the {@link SpawnRunner} that this {@link AbstractSpawnStrategy} uses to actually run
+   * Gets the {@link SpawnRunner} that this {@link AbstractSpawnStrategy} uses to actually run
    * spawns.
    *
    * <p>This is considered a stop-gap until we refactor the entire SpawnStrategy / SpawnRunner
@@ -147,7 +149,8 @@ public abstract class AbstractSpawnStrategy implements SandboxedSpawnStrategy {
     }
     SpawnResult spawnResult;
     ExecException ex = null;
-    try (CacheHandle cacheHandle = cache.lookup(spawn, context)) {
+    try {
+      CacheHandle cacheHandle = cache.lookup(spawn, context);
       if (cacheHandle.hasResult()) {
         spawnResult = Preconditions.checkNotNull(cacheHandle.getResult());
       } else {
@@ -229,6 +232,8 @@ public abstract class AbstractSpawnStrategy implements SandboxedSpawnStrategy {
     private SortedMap<PathFragment, ActionInput> lazyInputMapping;
     private PathFragment inputMappingBaseDirectory;
 
+    @Nullable private Digest digest;
+
     SpawnExecutionContextImpl(
         Spawn spawn,
         ActionExecutionContext actionExecutionContext,
@@ -246,6 +251,24 @@ public abstract class AbstractSpawnStrategy implements SandboxedSpawnStrategy {
     }
 
     @Override
+    public void setDigest(Digest digest) {
+      if (this.digest != null) {
+        checkArgument(
+            this.digest.equals(digest),
+            "setDigest was called more than once with different digests: %s vs %s",
+            this.digest,
+            digest);
+      }
+      this.digest = checkNotNull(digest);
+    }
+
+    @Override
+    @Nullable
+    public Digest getDigest() {
+      return digest;
+    }
+
+    @Override
     public ListenableFuture<Void> prefetchInputs()
         throws IOException, ForbiddenActionInputException {
       if (Spawns.shouldPrefetchInputsForLocalExecution(spawn)) {
@@ -253,6 +276,7 @@ public abstract class AbstractSpawnStrategy implements SandboxedSpawnStrategy {
             actionExecutionContext
                 .getActionInputPrefetcher()
                 .prefetchFiles(
+                    spawn.getResourceOwner(),
                     getInputMapping(PathFragment.EMPTY_FRAGMENT, /* willAccessRepeatedly= */ true)
                         .values(),
                     getInputMetadataProvider()::getInputMetadata,
@@ -285,12 +309,6 @@ public abstract class AbstractSpawnStrategy implements SandboxedSpawnStrategy {
     public InputMetadataProvider getInputMetadataProvider() {
       return actionExecutionContext.getInputMetadataProvider();
     }
-
-    @Override
-    public OutputMetadataStore getMetadataInjector() {
-      return actionExecutionContext.getOutputMetadataStore();
-    }
-
     @Override
     public <T extends ActionContext> T getContext(Class<T> identifyingType) {
       return actionExecutionContext.getContext(identifyingType);

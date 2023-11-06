@@ -17,7 +17,7 @@ package com.google.devtools.build.lib.rules.proto;
 /** Constants used in Proto rules. */
 public final class ProtoConstants {
   /** Default label for proto compiler. */
-  static final String DEFAULT_PROTOC_LABEL =  "@bazel_tools//tools/proto:protoc";
+  public static final String DEFAULT_PROTOC_LABEL =  "@bazel_tools//tools/proto:protoc";
 
   /** Default label for java proto toolchains. */
   static final String DEFAULT_JAVA_PROTO_LABEL = "@bazel_tools//tools/proto:java_toolchain";
@@ -28,6 +28,10 @@ public final class ProtoConstants {
 
   /** Default label for cc proto toolchains. */
   static final String DEFAULT_CC_PROTO_LABEL = "@bazel_tools//tools/proto:cc_toolchain";
+
+  /** Default label for j2objc proto toolchains. */
+  static final String DEFAULT_J2OBJC_PROTO_LABEL =
+      "@bazel_tools//tools/j2objc:j2objc_proto_toolchain";
 
   /**
    * This constant is used in ProtoCompileActionBuilder to generate an error message that's

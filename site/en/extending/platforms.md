@@ -47,12 +47,16 @@ Tip: for detailed instructions on migrating your project to platforms, see
 ## Defining constraints and platforms {:#constraints-platforms}
 
 The space of possible choices for platforms is defined by using the
- [`constraint_setting`](/reference/be/platform#constraint_setting) and
- [`constraint_value`](/reference/be/platform#constraint_value) rules within `BUILD` files. `constraint_setting` creates a new dimension, while
+[`constraint_setting`][constraint_setting] and
+[`constraint_value`][constraint_value] rules within `BUILD` files.
+`constraint_setting` creates a new dimension, while
 `constraint_value` creates a new value for a given dimension; together they
 effectively define an enum and its possible values. For example, the following
 snippet of a `BUILD` file introduces a constraint for the system's glibc version
 with two possible values.
+
+[constraint_setting]: /reference/be/platforms-and-toolchains#constraint_setting
+[constraint_value]: /reference/be/platforms-and-toolchains#constraint_value
 
 ```python
 constraint_setting(name = "glibc_version")
@@ -73,7 +77,7 @@ workspace. They are referenced by label and subject to the usual visibility
 controls. If visibility allows, you can extend an existing constraint setting by
 defining your own value for it.
 
-The [`platform`](/reference/be/platform#platform) rule introduces a new platform with
+The [`platform`](/reference/be/platforms-and-toolchains#platform) rule introduces a new platform with
 certain choices of constraint values. The
 following creates a platform named `linux_x86`, and says that it describes any
 environment that runs a Linux operating system on an x86_64 architecture with a
@@ -110,8 +114,17 @@ represents autodetected platform for the system Bazel is running on.
 You can specify the host and target platforms for a build using the following
 command-line flags:
 
-*  `--host_platform` - defaults to `@bazel_tools//platforms:host_platform`
-*  `--platforms` - defaults to `@bazel_tools//platforms:target_platform`
+*  `--host_platform` - defaults to `@local_config_platform//:host`
+   *  `@local_config_platform` is a repository rule that detects the host OS and
+      CPU and writes the platform target.
+   *  It also creates `@local_config_platform//:constraintz.bzl`, which exposes
+      an array called `HOST_CONSTRAINTS`, which can be used in other BUILD and
+      Starlark files.
+*  `--platforms` - defaults to the host platform
+   *  This means that when no other flags are set,
+      `@local_config_platform//:host` is the target platform.
+   *  If `--host_platform` is set and not `--platforms`, the value of
+      `--host_platform` is both the host and target platform.
 
 ## Skipping incompatible targets {:#skipping-incompatible-targets}
 
@@ -182,8 +195,8 @@ Incompatible explicit targets are silently skipped if
 
 For more flexibility in expressing constraints, use the
 `@platforms//:incompatible`
-[`constraint_value`](/reference/be/platform#constraint_value) that no platform
-satisfies.
+[`constraint_value`](/reference/be/platforms-and-toolchains#constraint_value)
+that no platform satisfies.
 
 Use [`select()`](/reference/be/functions#select) in combination with
 `@platforms//:incompatible` to express more complicated restrictions. For
@@ -226,7 +239,7 @@ cc_library(
     target_compatible_with = select({
         "@platforms//cpu:arm": ["@platforms//:incompatible"],
         "//conditions:default": [],
-    ],
+    }),
 )
 ```
 

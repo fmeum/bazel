@@ -30,15 +30,15 @@ sh_library(
 
 android_sh_test(
     name = "android_integration_test",
-    size = "large",
+    size = "enormous",
     srcs = ["android_integration_test.sh"],
     data = [
         ":android_helper",
         "//external:android_sdk_for_testing",
         "//src/test/shell/bazel:test-deps",
     ],
-    # See https://github.com/bazelbuild/bazel/issues/8235
     tags = [
+        # See https://github.com/bazelbuild/bazel/issues/18431.
         "no-remote",
         "no_windows",
         # bzlmod test requires network
@@ -55,9 +55,7 @@ android_sh_test(
         "//external:android_sdk_for_testing",
         "//src/test/shell/bazel:test-deps",
     ],
-    # See https://github.com/bazelbuild/bazel/issues/8235
     tags = [
-        "no-remote",
         "no_windows",
     ],
 )
@@ -71,8 +69,6 @@ android_sh_test(
         "//external:android_sdk_for_testing",
         "//src/test/shell/bazel:test-deps",
     ],
-    # See https://github.com/bazelbuild/bazel/issues/8235
-    tags = ["no-remote"],
 )
 
 android_sh_test(
@@ -85,8 +81,8 @@ android_sh_test(
         "//external:android_sdk_for_testing",
         "//src/test/shell/bazel:test-deps",
     ],
-    # See https://github.com/bazelbuild/bazel/issues/8235
     tags = [
+        # See https://github.com/bazelbuild/bazel/issues/17784.
         "no-remote",
         "no_windows",
     ],
@@ -101,13 +97,11 @@ android_sh_test(
         "//external:android_sdk_for_testing",
         "//src/test/shell/bazel:test-deps",
     ],
-    # See https://github.com/bazelbuild/bazel/issues/8235
-    tags = ["no-remote"],
 )
 
 android_sh_test(
     name = "android_sdk_integration_test",
-    size = "medium",
+    size = "large",
     srcs = ["android_sdk_integration_test.sh"],
     data = [
         ":android_helper",
@@ -115,9 +109,7 @@ android_sh_test(
         "//src/test/shell/bazel:test-deps",
     ],
     shard_count = 3,
-    # See https://github.com/bazelbuild/bazel/issues/8235
     tags = [
-        "no-remote",
         "no_windows",
     ],
 )
@@ -134,8 +126,8 @@ android_sh_test(
         "//src/test/shell/bazel:test-deps",
     ],
     shard_count = 6,
-    # See https://github.com/bazelbuild/bazel/issues/8235
     tags = [
+        # See https://github.com/bazelbuild/bazel/issues/17784.
         "no-remote",
         "no_windows",
     ],
@@ -150,22 +142,33 @@ android_sh_test(
         "//external:android_sdk_for_testing",
         "//src/test/shell/bazel:test-deps",
     ],
-    # See https://github.com/bazelbuild/bazel/issues/8235
-    tags = ["no-remote"],
 )
 
 android_sh_test(
     name = "desugarer_integration_test",
-    size = "medium",
+    size = "large",
     srcs = ["desugarer_integration_test.sh"],
     data = [
         ":android_helper",
         "//external:android_sdk_for_testing",
         "//src/test/shell/bazel:test-deps",
     ],
-    # See https://github.com/bazelbuild/bazel/issues/8235
     tags = [
-        "no-remote",
+        "no_windows",
+    ],
+)
+
+android_sh_test(
+    name = "library_desugarer_integration_test",
+    size = "small",
+    srcs = ["library_desugarer_integration_test.sh"],
+    data = [
+        ":android_helper",
+        "//external:android_sdk_for_testing",
+        "//src/test/shell/bazel:test-deps",
+    ],
+    tags = [
+        "manual",  # TODO(b/299338002): D8 library desugaring is broken.
         "no_windows",
     ],
 )
@@ -180,9 +183,7 @@ android_sh_test(
         "//src/test/shell/bazel:test-deps",
     ],
     shard_count = 4,
-    # See https://github.com/bazelbuild/bazel/issues/8235
     tags = [
-        "no-remote",
         "no_windows",
     ],
 )
@@ -197,6 +198,21 @@ android_sh_test(
         "//external:android_sdk_for_testing",
         "//src/test/shell/bazel:test-deps",
     ],
-    # See https://github.com/bazelbuild/bazel/issues/8235
-    tags = ["no-remote"],
+)
+
+android_sh_test(
+    name = "DexFileSplitter_synthetic_classes_test",
+    size = "large",
+    srcs = ["DexFileSplitter_synthetic_classes_test.sh"],
+    # Fixes to DexMapper are not released yet.
+    create_test_with_released_tools = False,
+    data = [
+        ":android_helper",
+        "//external:android_sdk_for_testing",
+        "//src/test/shell/bazel:test-deps",
+    ],
+    shard_count = 2,
+    tags = [
+        "no_windows",
+    ],
 )

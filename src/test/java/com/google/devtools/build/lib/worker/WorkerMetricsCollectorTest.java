@@ -24,7 +24,7 @@ import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.devtools.build.lib.clock.Clock;
-import com.google.devtools.build.lib.util.PsInfoCollector;
+import com.google.devtools.build.lib.metrics.PsInfoCollector;
 import java.time.Instant;
 import org.junit.Before;
 import org.junit.Test;
@@ -45,48 +45,6 @@ public class WorkerMetricsCollectorTest {
   }
 
   @Test
-  public void testCollectStats_mutipleSubprocesses() throws Exception {
-    // pstree of these processes
-    // 0-+-1---3-+-7
-    //   |       `-8
-    //   |-2-+-4
-    //   |   `-9
-    //   |-5
-    //   `-10
-
-    // ps command results:
-    // PID PPID RSS
-    // 1   0    3216
-    // 2   0    4232
-    // 3   1    1234
-    // 4   2    1001
-    // 5   0    40000
-    // 7   3    2345
-    // 8   3    3456
-    // 9   2    1032
-    // 10  0    1024
-    ImmutableMap<Long, PsInfoCollector.PsInfo> psInfos =
-        ImmutableMap.of(
-            1L, PsInfoCollector.PsInfo.create(1, 0, 3216),
-            2L, PsInfoCollector.PsInfo.create(2, 0, 4232),
-            3L, PsInfoCollector.PsInfo.create(3, 1, 1234),
-            4L, PsInfoCollector.PsInfo.create(4, 2, 1001),
-            5L, PsInfoCollector.PsInfo.create(5, 0, 40000),
-            7L, PsInfoCollector.PsInfo.create(7, 3, 2345),
-            8L, PsInfoCollector.PsInfo.create(8, 3, 3456),
-            9L, PsInfoCollector.PsInfo.create(9, 2, 1032),
-            10L, PsInfoCollector.PsInfo.create(10, 0, 1024));
-
-    ImmutableSet<Long> pids = ImmutableSet.of(1L, 2L, 5L, 6L);
-    ImmutableMap<Long, Integer> expectedMemoryUsageByPid =
-        ImmutableMap.of(1L, 3216 + 1234 + 2345 + 3456, 2L, 4232 + 1001 + 1032, 5L, 40000);
-
-    ImmutableMap<Long, Integer> memoryUsageByPid =
-        spyCollector.summarizeDescendantsMemory(psInfos, pids);
-    assertThat(memoryUsageByPid).isEqualTo(expectedMemoryUsageByPid);
-  }
-
-  @Test
   public void testRegisterWorker_insertDifferent() throws Exception {
     WorkerMetric.WorkerProperties props1 =
         WorkerMetric.WorkerProperties.create(
@@ -94,14 +52,16 @@ public class WorkerMetricsCollectorTest {
             /* processId= */ 100,
             /* mnemonic= */ "Javac",
             /* isMultiplex= */ true,
-            /* isSandboxed= */ false);
+            /* isSandboxed= */ false,
+            /* workerKeyHash= */ 1);
     WorkerMetric.WorkerProperties props2 =
         WorkerMetric.WorkerProperties.create(
             /* workerIds= */ ImmutableList.of(2),
             /* processId= */ 200,
             /* mnemonic= */ "CppCompile",
             /* isMultiplex= */ false,
-            /* isSandboxed= */ true);
+            /* isSandboxed= */ true,
+            /* workerKeyHash= */ 2);
     ImmutableMap<Long, WorkerMetric.WorkerProperties> map =
         ImmutableMap.of(100L, props1, 200L, props2);
 
@@ -110,14 +70,16 @@ public class WorkerMetricsCollectorTest {
         props1.getProcessId(),
         props1.getMnemonic(),
         props1.isMultiplex(),
-        props1.isSandboxed());
+        props1.isSandboxed(),
+        props1.getWorkerKeyHash());
     assertThat(spyCollector.getProcessIdToWorkerProperties()).hasSize(1);
     spyCollector.registerWorker(
         props2.getWorkerIds().get(0),
         props2.getProcessId(),
         props2.getMnemonic(),
         props2.isMultiplex(),
-        props2.isSandboxed());
+        props2.isSandboxed(),
+        props2.getWorkerKeyHash());
     assertThat(spyCollector.getProcessIdToWorkerProperties()).hasSize(2);
     assertThat(spyCollector.getProcessIdToWorkerProperties()).isEqualTo(map);
   }
@@ -130,14 +92,16 @@ public class WorkerMetricsCollectorTest {
             /* processId= */ 100L,
             /* mnemonic= */ "Javac",
             /* isMultiplex= */ true,
-            /* isSandboxed= */ true);
+            /* isSandboxed= */ true,
+            /* workerKeyHash= */ 1);
     WorkerMetric.WorkerProperties props2 =
         WorkerMetric.WorkerProperties.create(
             /* workerIds= */ ImmutableList.of(2),
             /* processId= */ 100L,
             /* mnemonic= */ "Javac",
             /* isMultiplex= */ true,
-            /* isSandboxed= */ true);
+            /* isSandboxed= */ true,
+            /* workerKeyHash= */ 1);
     Instant registrationTime1 = Instant.ofEpochSecond(1000);
     Instant registrationTime2 = registrationTime1.plusSeconds(10);
     ImmutableMap<Long, WorkerMetric.WorkerProperties> map =
@@ -148,7 +112,8 @@ public class WorkerMetricsCollectorTest {
                 /* processId= */ 100L,
                 /* mnemonic= */ "Javac",
                 /* isMultiplex= */ true,
-                /* isSandboxed= */ true));
+                /* isSandboxed= */ true,
+                /* workerKeyHash= */ 1));
     ImmutableMap<Long, Instant> lastCallMap1 = ImmutableMap.of(100L, registrationTime1);
     ImmutableMap<Long, Instant> lastCallMap2 = ImmutableMap.of(100L, registrationTime2);
 
@@ -174,14 +139,16 @@ public class WorkerMetricsCollectorTest {
             /* processId= */ 100,
             /* mnemonic= */ "Javac",
             /* isMultiplex= */ true,
-            /* isSandboxed= */ false);
+            /* isSandboxed= */ false,
+            /* workerKeyHash= */ 1);
     WorkerMetric.WorkerProperties props2 =
         WorkerMetric.WorkerProperties.create(
             /* workerIds= */ ImmutableList.of(1),
             /* processId= */ 100,
             /* mnemonic= */ "Javac",
             /* isMultiplex= */ true,
-            /* isSandboxed= */ false);
+            /* isSandboxed= */ false,
+            /* workerKeyHash= */ 2);
     Instant registrationTime1 = Instant.ofEpochSecond(1000);
     Instant registrationTime2 = registrationTime1.plusSeconds(10);
     ImmutableMap<Long, WorkerMetric.WorkerProperties> propertiesMap = ImmutableMap.of(100L, props1);
@@ -207,21 +174,24 @@ public class WorkerMetricsCollectorTest {
             /* processId= */ 100,
             /* mnemonic= */ "Javac",
             /* isMultiplex= */ true,
-            /* isSandboxed= */ false);
+            /* isSandboxed= */ false,
+            /* workerKeyHash= */ 1);
     WorkerMetric.WorkerProperties props2 =
         WorkerMetric.WorkerProperties.create(
             /* workerIds= */ ImmutableList.of(2),
             /* processId= */ 200,
             /* mnemonic= */ "CppCompile",
             /* isMultiplex= */ false,
-            /* isSandboxed= */ true);
+            /* isSandboxed= */ true,
+            /* workerKeyHash= */ 2);
     WorkerMetric.WorkerProperties props3 =
         WorkerMetric.WorkerProperties.create(
             /* workerIds= */ ImmutableList.of(3),
             /* processId= */ 300,
             /* mnemonic= */ "Proto",
             /* isMultiplex= */ true,
-            /* isSandboxed= */ true);
+            /* isSandboxed= */ true,
+            /* workerKeyHash= */ 3);
     Instant registrationTime = Instant.ofEpochSecond(1000);
     Instant collectionTime = registrationTime.plusSeconds(10);
     WorkerMetric.WorkerStat stat1 =
@@ -242,14 +212,13 @@ public class WorkerMetricsCollectorTest {
         ImmutableMap.of(
             100L, stat1.getUsedMemoryInKB(),
             200L, stat2.getUsedMemoryInKB());
-    WorkerMetricsCollector.MemoryCollectionResult memoryCollectionResult =
-        new WorkerMetricsCollector.MemoryCollectionResult(memoryUsageMap, collectionTime);
+
+    PsInfoCollector.ResourceSnapshot resourceSnapshot =
+        PsInfoCollector.ResourceSnapshot.create(memoryUsageMap, collectionTime);
     ImmutableList<WorkerMetric> expectedMetrics =
         ImmutableList.of(workerMetric1, workerMetric2, workerMetric3);
 
-    doReturn(memoryCollectionResult)
-        .when(spyCollector)
-        .collectMemoryUsageByPid(any(), eq(expectedPids));
+    doReturn(resourceSnapshot).when(spyCollector).collectMemoryUsageByPid(any(), eq(expectedPids));
 
     clock.setTime(registrationTime.toEpochMilli());
 
@@ -270,7 +239,8 @@ public class WorkerMetricsCollectorTest {
         props.getProcessId(),
         props.getMnemonic(),
         props.isMultiplex(),
-        props.isSandboxed());
+        props.isSandboxed(),
+        props.getWorkerKeyHash());
   }
 
   private static class ManualClock implements Clock {

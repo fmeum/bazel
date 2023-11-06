@@ -86,12 +86,15 @@ public class RepositoryOptions extends OptionsBase {
   public boolean useHardlinks;
 
   @Option(
-      name = "experimental_repository_disable_download",
+      name = "repository_disable_download",
+      oldName = "experimental_repository_disable_download",
       defaultValue = "false",
       documentationCategory = OptionDocumentationCategory.BAZEL_CLIENT_OPTIONS,
-      effectTags = {OptionEffectTag.UNKNOWN},
-      metadataTags = {OptionMetadataTag.EXPERIMENTAL},
-      help = "If set, downloading external repositories is not allowed.")
+      effectTags = {OptionEffectTag.BAZEL_INTERNAL_CONFIGURATION},
+      help =
+          "If set, downloading using ctx.download{,_and_extract} is not allowed during repository"
+              + " fetching. Note that network access is not completely disabled; ctx.execute could"
+              + " still run an arbitrary executable that accesses the Internet.")
   public boolean disableDownload;
 
   @Option(
@@ -188,30 +191,6 @@ public class RepositoryOptions extends OptionsBase {
   public double experimentalScaleTimeouts;
 
   @Option(
-      name = "experimental_repository_hash_file",
-      defaultValue = "",
-      documentationCategory = OptionDocumentationCategory.INPUT_STRICTNESS,
-      effectTags = {OptionEffectTag.AFFECTS_OUTPUTS},
-      metadataTags = {OptionMetadataTag.EXPERIMENTAL},
-      help =
-          "If non-empty, specifies a file containing a resolved value, against which"
-              + " the repository directory hashes should be verified")
-  public String repositoryHashFile;
-
-  @Option(
-      name = "experimental_verify_repository_rules",
-      allowMultiple = true,
-      defaultValue = "null",
-      documentationCategory = OptionDocumentationCategory.INPUT_STRICTNESS,
-      effectTags = {OptionEffectTag.AFFECTS_OUTPUTS},
-      metadataTags = {OptionMetadataTag.EXPERIMENTAL},
-      help =
-          "If list of repository rules for which the hash of the output directory should be"
-              + " verified, provided a file is specified by"
-              + " --experimental_repository_hash_file.")
-  public List<String> experimentalVerifyRepositoryRules;
-
-  @Option(
       name = "experimental_resolved_file_instead_of_workspace",
       defaultValue = "",
       documentationCategory = OptionDocumentationCategory.GENERIC_INPUTS,
@@ -232,6 +211,31 @@ public class RepositoryOptions extends OptionsBase {
               + "`$1`. It is possible for multiple `rewrite` directives for the same URL to be "
               + "give, and in this case multiple URLs will be returned.")
   public String downloaderConfig;
+
+  /** See {@link #workerForRepoFetching}. */
+  public enum WorkerForRepoFetching {
+    OFF,
+    PLATFORM,
+    VIRTUAL;
+
+    static class Converter extends EnumConverter<WorkerForRepoFetching> {
+      public Converter() {
+        super(WorkerForRepoFetching.class, "worker for repo fetching");
+      }
+    }
+  }
+
+  @Option(
+      name = "experimental_worker_for_repo_fetching",
+      defaultValue = "off",
+      converter = WorkerForRepoFetching.Converter.class,
+      documentationCategory = OptionDocumentationCategory.REMOTE,
+      effectTags = {OptionEffectTag.UNKNOWN},
+      help =
+          "The threading mode to use for repo fetching. If set to 'off', no worker thread is used,"
+              + " and the repo fetching is subject to restarts. Otherwise, uses a platform thread"
+              + " (i.e. OS thread) if set to 'platform' or a virtual thread if set to 'virtual'.")
+  public WorkerForRepoFetching workerForRepoFetching;
 
   @Option(
       name = "ignore_dev_dependency",
@@ -297,8 +301,8 @@ public class RepositoryOptions extends OptionsBase {
 
   @Option(
       name = "lockfile_mode",
-      defaultValue = "off", // TODO(salmasamy) later will be changed to 'update'
       converter = LockfileMode.Converter.class,
+      defaultValue = "update",
       documentationCategory = OptionDocumentationCategory.BZLMOD,
       effectTags = {OptionEffectTag.LOADING_AND_ANALYSIS},
       help =

@@ -22,41 +22,29 @@ import com.google.devtools.build.lib.cmdline.LabelSyntaxException;
 import com.google.devtools.build.lib.events.EventHandler;
 import com.google.devtools.build.lib.packages.Attribute.StarlarkComputedDefaultTemplate.CannotPrecomputeDefaultsException;
 import com.google.devtools.build.lib.packages.Package.NameConflictException;
+import com.google.devtools.build.lib.packages.PackageFactory.PackageContext;
+import com.google.devtools.build.lib.packages.RuleClass.Builder.RuleClassType;
+import com.google.devtools.build.lib.packages.semantics.BuildLanguageOptions;
 import com.google.errorprone.annotations.CanIgnoreReturnValue;
 import java.util.Map;
 import java.util.Set;
+import net.starlark.java.eval.Dict;
+import net.starlark.java.eval.EvalException;
+import net.starlark.java.eval.NoneType;
+import net.starlark.java.eval.Printer;
+import net.starlark.java.eval.Starlark;
 import net.starlark.java.eval.StarlarkThread;
 import net.starlark.java.eval.StarlarkThread.CallStackEntry;
+import net.starlark.java.eval.Tuple;
 
 /**
- * Given a {@link RuleClass} and a set of attribute values, returns a {@link Rule} instance. Also
- * performs a number of checks and associates the {@link Rule} and the owning {@link Package} with
- * each other.
- *
- * <p>This class is immutable, once created the set of managed {@link RuleClass}es will not change.
- *
- * <p>Note: the code that actually populates the RuleClass map has been moved to {@link
- * RuleClassProvider}.
+ * Static utility class for defining Starlark callables for builtin rules (i.e., {@link
+ * RuleFunction} objects for builtin rules' {@link RuleClass} objects), and instantiating those
+ * rules to produce targets (i.e., {@link Rule} objects).
  */
 public class RuleFactory {
 
-  /** Maps rule class name to the metaclass instance for that rule. */
-  private final ImmutableMap<String, RuleClass> ruleClassMap;
-
-  /** Constructs a RuleFactory instance. */
-  public RuleFactory(RuleClassProvider provider) {
-    this.ruleClassMap = ImmutableMap.copyOf(provider.getRuleClassMap());
-  }
-
-  /** Returns the (immutable, unordered) set of names of all the known rule classes. */
-  public Set<String> getRuleClassNames() {
-    return ruleClassMap.keySet();
-  }
-
-  /** Returns the RuleClass for the specified rule class name. */
-  public RuleClass getRuleClass(String ruleClassName) {
-    return ruleClassMap.get(ruleClassName);
-  }
+  private RuleFactory() {} // uninstantiable
 
   /**
    * Creates and returns a rule instance.
@@ -68,6 +56,7 @@ public class RuleFactory {
       Package.Builder pkgBuilder,
       RuleClass ruleClass,
       BuildLangTypedAttributeValuesMap attributeValues,
+      boolean failOnUnknownAttributes,
       EventHandler eventHandler,
       ImmutableList<StarlarkThread.CallStackEntry> callstack)
       throws InvalidRuleException, InterruptedException {
@@ -105,7 +94,8 @@ public class RuleFactory {
     callstack = callstack.subList(0, callstack.size() - 1); // pop
 
     try {
-      return ruleClass.createRule(pkgBuilder, label, attributes, eventHandler, callstack);
+      return ruleClass.createRule(
+          pkgBuilder, label, attributes, failOnUnknownAttributes, eventHandler, callstack);
     } catch (LabelSyntaxException | CannotPrecomputeDefaultsException e) {
       throw new RuleFactory.InvalidRuleException(ruleClass + " " + e.getMessage());
     }
@@ -135,10 +125,18 @@ public class RuleFactory {
       Package.Builder pkgBuilder,
       RuleClass ruleClass,
       BuildLangTypedAttributeValuesMap attributeValues,
+      boolean failOnUnknownAttributes,
       EventHandler eventHandler,
       ImmutableList<StarlarkThread.CallStackEntry> callstack)
       throws InvalidRuleException, NameConflictException, InterruptedException {
-    Rule rule = createRule(pkgBuilder, ruleClass, attributeValues, eventHandler, callstack);
+    Rule rule =
+        createRule(
+            pkgBuilder,
+            ruleClass,
+            attributeValues,
+            failOnUnknownAttributes,
+            eventHandler,
+            callstack);
     pkgBuilder.addRule(rule);
     return rule;
   }
@@ -234,7 +232,10 @@ public class RuleFactory {
     // optionally followed by other Starlark or built-in functions, and finally the rule
     // instantiation function.
     if (stack.size() < 2 || !stack.get(1).location.file().endsWith(".bzl")) {
-      return args; // Not instantiated by a Starlark macro.
+      // Not instantiated by a Starlark macro.
+      // (Edge case not handled: BUILD file calls helper(cc_library) defined in an .scl file, and
+      // helper instantiates the rule that's passed as an argument.)
+      return args;
     }
 
     if (args.containsAttributeNamed("generator_name")) {
@@ -254,5 +255,81 @@ public class RuleFactory {
     builder.put("generator_name", generatorName);
 
     return new BuildLangTypedAttributeValuesMap(builder.buildOrThrow());
+  }
+
+  /**
+   * Builds a map from rule names to (newly constructed)) Starlark callables that instantiate them.
+   */
+  public static ImmutableMap<String, BuiltinRuleFunction> buildRuleFunctions(
+      Map<String, RuleClass> ruleClassMap) {
+    ImmutableMap.Builder<String, BuiltinRuleFunction> result = ImmutableMap.builder();
+    for (String ruleClassName : ruleClassMap.keySet()) {
+      RuleClass cl = ruleClassMap.get(ruleClassName);
+      if (cl.getRuleClassType() == RuleClassType.NORMAL
+          || cl.getRuleClassType() == RuleClassType.TEST) {
+        result.put(ruleClassName, new BuiltinRuleFunction(cl));
+      }
+    }
+    return result.buildOrThrow();
+  }
+
+  /** A callable Starlark value that creates Rules for native RuleClasses. */
+  // TODO(adonovan): why is this distinct from RuleClass itself?
+  // Make RuleClass implement StarlarkCallable directly.
+  private static class BuiltinRuleFunction implements RuleFunction {
+    private final RuleClass ruleClass;
+
+    BuiltinRuleFunction(RuleClass ruleClass) {
+      this.ruleClass = Preconditions.checkNotNull(ruleClass);
+    }
+
+    @Override
+    public NoneType call(StarlarkThread thread, Tuple args, Dict<String, Object> kwargs)
+        throws EvalException, InterruptedException {
+      if (!args.isEmpty()) {
+        throw Starlark.errorf("unexpected positional arguments");
+      }
+      BazelStarlarkContext.from(thread).checkLoadingOrWorkspacePhase(ruleClass.getName());
+      try {
+        PackageContext context = PackageFactory.getContext(thread);
+        RuleFactory.createAndAddRule(
+            context.pkgBuilder,
+            ruleClass,
+            new BuildLangTypedAttributeValuesMap(kwargs),
+            thread
+                .getSemantics()
+                .getBool(BuildLanguageOptions.INCOMPATIBLE_FAIL_ON_UNKNOWN_ATTRIBUTES),
+            context.eventHandler,
+            thread.getCallStack());
+      } catch (RuleFactory.InvalidRuleException | Package.NameConflictException e) {
+        throw new EvalException(e);
+      }
+      return Starlark.NONE;
+    }
+
+    @Override
+    public RuleClass getRuleClass() {
+      return ruleClass;
+    }
+
+    @Override
+    public String getName() {
+      return ruleClass.getName();
+    }
+
+    @Override
+    public void repr(Printer printer) {
+      printer.append("<built-in rule " + getName() + ">");
+    }
+
+    @Override
+    public String toString() {
+      return getName() + "(...)";
+    }
+
+    @Override
+    public boolean isImmutable() {
+      return true;
+    }
   }
 }

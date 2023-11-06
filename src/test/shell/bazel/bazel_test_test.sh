@@ -139,9 +139,9 @@ sh_test(
 EOF
 
   bazel test --test_output=all //foo &> $TEST_log || fail "Test failed"
-  expect_log "pwd: .*/foo.runfiles/bar$"
+  expect_log "pwd: .*/foo.runfiles/_main$"
   expect_log "src: .*/foo.runfiles$"
-  expect_log "ws: bar$"
+  expect_log "ws: _main$"
 }
 
 function test_runfiles_java_runfiles_merges_env_vars() {
@@ -172,8 +172,8 @@ EOF
   bazel test --test_env="${overridden}"=override --test_output=all \
       //foo >& "${TEST_log}" || fail "Test failed"
 
-  expect_log "${overridden}: /.*/execroot/bar/override"
-  expect_log "${unchanged}: /.*/execroot/bar/bazel-out/[^/]\+-fastbuild/bin/foo/foo.runfiles"
+  expect_log "${overridden}: /.*/execroot/_main/override"
+  expect_log "${unchanged}: /.*/execroot/_main/bazel-out/[^/]\+-fastbuild/bin/foo/foo.runfiles"
 }
 
 function test_run_under_external_label_with_options() {
@@ -399,8 +399,11 @@ EOF
     cat <<EOF > BUILD
 sh_test(name = "test$i", srcs = [ "test$i.sh" ])
 EOF
-    bazel test --spawn_strategy=standalone --jobs=1 \
-        --runs_per_test=5 --runs_per_test_detects_flakes \
+    bazel test --spawn_strategy=standalone \
+        --jobs=1 \
+        --experimental_use_semaphore_for_jobs \
+        --runs_per_test=5 \
+        --runs_per_test_detects_flakes \
         //:test$i &> $TEST_log || fail "should have succeeded"
     expect_log "FLAKY"
   done
@@ -540,9 +543,10 @@ EOF
 function test_xml_fallback_for_sharded_test() {
   mkdir -p dir
 
-  cat <<EOF > dir/test.sh
+  cat <<'EOF' > dir/test.sh
 #!/bin/sh
-exit \$((TEST_SHARD_INDEX == 1))
+touch "$TEST_SHARD_STATUS_FILE"
+exit $((TEST_SHARD_INDEX == 1))
 EOF
 
   chmod +x dir/test.sh
@@ -645,7 +649,7 @@ EOF
   expect_log "name=\"dir/fail\""
 }
 
-function test_detailed_test_summary() {
+function test_detailed_test_summary_for_failed_test() {
   copy_examples
   create_workspace_with_default_repos WORKSPACE
   setup_javatest_support
@@ -656,6 +660,19 @@ function test_detailed_test_summary() {
     && fail "Test $* succeed while expecting failure" \
     || true
   expect_log 'FAILED.*com\.example\.myproject\.Fail\.testFail'
+}
+
+function test_detailed_test_summary_for_passed_test() {
+  copy_examples
+  create_workspace_with_default_repos WORKSPACE
+  setup_javatest_support
+
+  local java_native_tests=//examples/java-native/src/test/java/com/example/myproject
+
+  bazel test --test_summary=detailed "${java_native_tests}:hello" >& $TEST_log \
+    || fail "expected success"
+  expect_log 'PASSED.*com\.example\.myproject\.TestHello\.testNoArgument'
+  expect_log 'PASSED.*com\.example\.myproject\.TestHello\.testWithArgument'
 }
 
 # This test uses "--ignore_all_rc_files" since outside .bazelrc files can pollute
@@ -995,6 +1012,28 @@ EOF
   cat bazel-testlogs/x/test.xml > $TEST_log
   expect_log "<testsuite name=\"x\""
   expect_log "<testcase name=\"x\""
+}
+
+function test_shard_status_file_checked() {
+  cat <<'EOF' > BUILD
+sh_test(
+    name = 'x',
+    srcs = ['x.sh'],
+    shard_count = 2,
+)
+EOF
+  touch x.sh
+  chmod +x x.sh
+
+  bazel test \
+      --incompatible_check_sharding_support \
+      //:x  &> $TEST_log && fail "expected failure"
+  expect_log "Sharding requested, but the test runner did not advertise support for it by touching TEST_SHARD_STATUS_FILE."
+
+  echo 'touch "$TEST_SHARD_STATUS_FILE"' > x.sh
+  bazel test \
+      --incompatible_check_sharding_support \
+      //:x  &> $TEST_log || fail "expected success"
 }
 
 run_suite "bazel test tests"

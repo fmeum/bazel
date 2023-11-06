@@ -11,6 +11,13 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
+# WARNING:
+# https://github.com/bazelbuild/bazel/issues/17713
+# .bzl files in this package (tools/build_defs/repo) are evaluated
+# in a Starlark environment without "@_builtins" injection, and must not refer
+# to symbols associated with build/workspace .bzl files
+
 """Rules for cloning external git repositories."""
 
 load(
@@ -173,7 +180,10 @@ def _git_repository_implementation(ctx):
     update = _clone_or_update_repo(ctx)
     workspace_and_buildfile(ctx)
     patch(ctx)
-    ctx.delete(ctx.path(".git"))
+    if ctx.attr.strip_prefix:
+        ctx.delete(ctx.path(".tmp_git_root/.git"))
+    else:
+        ctx.delete(ctx.path(".git"))
     return _update_git_attrs(ctx.attr, _common_attrs.keys(), update)
 
 git_repository = repository_rule(

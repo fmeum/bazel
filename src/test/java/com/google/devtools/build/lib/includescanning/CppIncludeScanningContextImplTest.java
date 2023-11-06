@@ -196,7 +196,7 @@ public final class CppIncludeScanningContextImplTest extends BuildViewTestCase {
         new ActionKeyContext(),
         new FileOutErr(),
         scratch.resolve("/execroot"),
-        /*metadataHandler=*/ null,
+        /* outputMetadataStore= */ null,
         environment,
         DiscoveredModulesPruner.DEFAULT);
   }
@@ -237,7 +237,7 @@ public final class CppIncludeScanningContextImplTest extends BuildViewTestCase {
       @Override
       protected ImmutableMap<SkyKey, ValueOrUntypedException> getValueOrUntypedExceptions(
           Iterable<? extends SkyKey> depKeys) {
-        return StreamSupport.stream(depKeys.spliterator(), /*parallel=*/ false)
+        return StreamSupport.stream(depKeys.spliterator(), /* parallel= */ false)
             .collect(
                 toImmutableMap(
                     Function.identity(),
@@ -267,11 +267,6 @@ public final class CppIncludeScanningContextImplTest extends BuildViewTestCase {
 
       @Override
       public boolean inErrorBubblingForSkyFunctionsThatCanFullyRecoverFromErrors() {
-        return false;
-      }
-
-      @Override
-      public boolean restartPermitted() {
         return false;
       }
 

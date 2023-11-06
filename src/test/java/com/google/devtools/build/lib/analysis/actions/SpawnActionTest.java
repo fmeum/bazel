@@ -43,6 +43,7 @@ import com.google.devtools.build.lib.actions.extra.SpawnInfo;
 import com.google.devtools.build.lib.actions.util.ActionsTestUtil;
 import com.google.devtools.build.lib.analysis.Runfiles;
 import com.google.devtools.build.lib.analysis.SingleRunfilesSupplier;
+import com.google.devtools.build.lib.analysis.config.BuildConfigurationValue.RunfileSymlinksMode;
 import com.google.devtools.build.lib.analysis.util.ActionTester;
 import com.google.devtools.build.lib.analysis.util.ActionTester.ActionCombinationFactory;
 import com.google.devtools.build.lib.analysis.util.AnalysisTestUtil;
@@ -63,24 +64,22 @@ import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
 
-/**
- * Tests {@link SpawnAction}.
- */
+/** Tests {@link SpawnAction}. */
 @RunWith(JUnit4.class)
-public class SpawnActionTest extends BuildViewTestCase {
+public final class SpawnActionTest extends BuildViewTestCase {
   private Artifact welcomeArtifact;
   private Artifact destinationArtifact;
   private Artifact jarArtifact;
   private AnalysisTestUtil.CollectingAnalysisEnvironment collectingAnalysisEnvironment;
 
-  private SpawnAction.Builder builder() {
+  private static SpawnAction.Builder builder() {
     return new SpawnAction.Builder();
   }
 
   @Before
-  public final void createArtifacts() throws Exception {
-    collectingAnalysisEnvironment = new AnalysisTestUtil.CollectingAnalysisEnvironment(
-        getTestAnalysisEnvironment());
+  public void createArtifacts() throws Exception {
+    collectingAnalysisEnvironment =
+        new AnalysisTestUtil.CollectingAnalysisEnvironment(getTestAnalysisEnvironment());
     welcomeArtifact = getSourceArtifact("pkg/welcome.txt");
     jarArtifact = getSourceArtifact("pkg/exe.jar");
     destinationArtifact = getBinArtifactWithNoOwner("dir/destination.txt");
@@ -101,7 +100,7 @@ public class SpawnActionTest extends BuildViewTestCase {
             .setMnemonic("Dummy")
             .setEnvironment(environmentVariables)
             .addCommandLine(CommandLine.of(arguments))
-            .build(ActionsTestUtil.NULL_ACTION_OWNER, targetConfig);
+            .build(nullOwnerWithTargetConfig(), targetConfig);
     collectingAnalysisEnvironment.registerAction(action);
     return action;
   }
@@ -109,15 +108,15 @@ public class SpawnActionTest extends BuildViewTestCase {
   @Test
   public void testWelcomeArtifactIsInput() {
     SpawnAction copyFromWelcomeToDestination =
-        createCopyFromWelcomeToDestination(ImmutableMap.<String, String>of());
-    Iterable<Artifact> inputs = copyFromWelcomeToDestination.getInputs().toList();
+        createCopyFromWelcomeToDestination(ImmutableMap.of());
+    ImmutableList<Artifact> inputs = copyFromWelcomeToDestination.getInputs().toList();
     assertThat(inputs).containsExactly(welcomeArtifact);
   }
 
   @Test
   public void testDestinationArtifactIsOutput() {
     SpawnAction copyFromWelcomeToDestination =
-        createCopyFromWelcomeToDestination(ImmutableMap.<String, String>of());
+        createCopyFromWelcomeToDestination(ImmutableMap.of());
     Collection<Artifact> outputs = copyFromWelcomeToDestination.getOutputs();
     assertThat(outputs).containsExactly(destinationArtifact);
   }
@@ -126,7 +125,7 @@ public class SpawnActionTest extends BuildViewTestCase {
   public void testExecutionInfoCopied() {
     SpawnAction copyFromWelcomeToDestination =
         createCopyFromWelcomeToDestination(ImmutableMap.of());
-    Map<String, String> executionInfo = copyFromWelcomeToDestination.getExecutionInfo();
+    ImmutableMap<String, String> executionInfo = copyFromWelcomeToDestination.getExecutionInfo();
     assertThat(executionInfo).containsExactly("local", "");
   }
 
@@ -137,7 +136,7 @@ public class SpawnActionTest extends BuildViewTestCase {
             Label.parseCanonicalUnchecked("//target"),
             new Location("dummy-file", 0, 0),
             /* targetKind= */ "dummy-kind",
-            /* mnemonic= */ "dummy-configuration-mnemonic",
+            /* buildConfigurationMnemonic= */ "dummy-configuration-mnemonic",
             /* configurationChecksum= */ "dummy-configuration",
             new BuildConfigurationEvent(
                 BuildEventStreamProtos.BuildEventId.getDefaultInstance(),
@@ -178,7 +177,7 @@ public class SpawnActionTest extends BuildViewTestCase {
             .addOutput(output)
             .setExecutable(scratch.file("/bin/xxx").asFragment())
             .setProgressMessage("Test")
-            .build(ActionsTestUtil.NULL_ACTION_OWNER, targetConfig);
+            .build(nullOwnerWithTargetConfig(), targetConfig);
     collectingAnalysisEnvironment.registerAction(action);
     assertThat(action.getOwner().getLabel())
         .isEqualTo(ActionsTestUtil.NULL_ACTION_OWNER.getLabel());
@@ -196,64 +195,62 @@ public class SpawnActionTest extends BuildViewTestCase {
         builder()
             .setExecutable(welcomeArtifact)
             .addOutput(destinationArtifact)
-            .build(ActionsTestUtil.NULL_ACTION_OWNER, targetConfig);
+            .build(nullOwnerWithTargetConfig(), targetConfig);
     collectingAnalysisEnvironment.registerAction(action);
     assertThat(action.getArguments())
         .containsExactly(welcomeArtifact.getExecPath().getPathString());
   }
 
   @Test
-  public void testBuilderWithExecutableInRootPcakage() throws Exception {
+  public void testBuilderWithExecutableInRootPackage() throws Exception {
     Artifact tool = getSourceArtifact("tool.bin");
     SpawnAction action =
         builder()
             .setExecutable(tool)
             .addOutput(destinationArtifact)
-            .build(ActionsTestUtil.NULL_ACTION_OWNER, targetConfig);
+            .build(nullOwnerWithTargetConfig(), targetConfig);
     collectingAnalysisEnvironment.registerAction(action);
     assertThat(action.getArguments()).hasSize(1);
     assertThat(action.getArguments().get(0)).matches("\\.[/\\\\]tool.bin");
   }
 
   @Test
-  public void testBuilderWithJavaExecutable() throws Exception {
+  public void testBuilderWithJarExecutable() throws Exception {
     SpawnAction action =
         builder()
             .addOutput(destinationArtifact)
-            .setJavaExecutable(
-                scratch.file("/bin/java").asFragment(),
+            .setJarExecutable(
+                PathFragment.create("/bin/java"),
                 jarArtifact,
-                "MyMainClass",
                 NestedSetBuilder.create(Order.STABLE_ORDER, "-jvmarg"))
-            .build(ActionsTestUtil.NULL_ACTION_OWNER, targetConfig);
+            .build(nullOwnerWithTargetConfig(), targetConfig);
     collectingAnalysisEnvironment.registerAction(action);
     assertThat(action.getArguments())
-        .containsExactly("/bin/java", "-jvmarg", "-cp", "pkg/exe.jar", "MyMainClass")
+        .containsExactly("/bin/java", "-jvmarg", "-jar", "pkg/exe.jar")
         .inOrder();
   }
 
   @Test
-  public void testBuilderWithJavaExecutableAndParameterFile2() throws Exception {
-    useConfiguration("--min_param_file_size=0", "--defer_param_files");
+  public void testBuilderWithJarExecutableAndParameterFile2() throws Exception {
+    useConfiguration("--min_param_file_size=0");
     collectingAnalysisEnvironment =
         new AnalysisTestUtil.CollectingAnalysisEnvironment(getTestAnalysisEnvironment());
     Artifact output = getBinArtifactWithNoOwner("output");
     SpawnAction action =
         builder()
             .addOutput(output)
-            .setJavaExecutable(
-                scratch.file("/bin/java").asFragment(),
+            .setJarExecutable(
+                PathFragment.create("/bin/java"),
                 jarArtifact,
-                "MyMainClass",
                 NestedSetBuilder.create(Order.STABLE_ORDER, "-jvmarg"))
             .addCommandLine(
                 CustomCommandLine.builder().add("-X").build(),
                 ParamFileInfo.builder(ParameterFileType.UNQUOTED).build())
-            .build(ActionsTestUtil.NULL_ACTION_OWNER, targetConfig);
+            .build(nullOwnerWithTargetConfig(), targetConfig);
 
     // The action reports all arguments, including those inside the param file
     assertThat(action.getArguments())
-        .containsExactly("/bin/java", "-jvmarg", "-cp", "pkg/exe.jar", "MyMainClass", "-X")
+        .containsExactly("/bin/java", "-jvmarg", "-jar", "pkg/exe.jar", "-X")
         .inOrder();
 
     Spawn spawn =
@@ -266,14 +263,7 @@ public class SpawnActionTest extends BuildViewTestCase {
     String paramFileName = output.getExecPathString() + "-0.params";
     // The spawn's primary arguments should reference the param file
     assertThat(spawn.getArguments())
-        .containsExactly(
-            "/bin/java",
-
-            "-jvmarg",
-            "-cp",
-            "pkg/exe.jar",
-            "MyMainClass",
-            "@" + paramFileName)
+        .containsExactly("/bin/java", "-jvmarg", "-jar", "pkg/exe.jar", "@" + paramFileName)
         .inOrder();
 
     // Asserts that the inputs contain the param file virtual input
@@ -291,26 +281,17 @@ public class SpawnActionTest extends BuildViewTestCase {
     SpawnAction action =
         builder()
             .addOutput(destinationArtifact)
-            .setJavaExecutable(
-                scratch.file("/bin/java").asFragment(),
+            .setJarExecutable(
+                PathFragment.create("/bin/java"),
                 jarArtifact,
-                "MyMainClass",
                 NestedSetBuilder.create(Order.STABLE_ORDER, "-jvmarg"))
             .addExecutableArguments("execArg1", "execArg2")
             .addCommandLine(CustomCommandLine.builder().add("arg1").build())
-            .build(ActionsTestUtil.NULL_ACTION_OWNER, targetConfig);
+            .build(nullOwnerWithTargetConfig(), targetConfig);
     collectingAnalysisEnvironment.registerAction(action);
     assertThat(action.getArguments())
         .containsExactly(
-            "/bin/java",
-
-            "-jvmarg",
-            "-cp",
-            "pkg/exe.jar",
-            "MyMainClass",
-            "execArg1",
-            "execArg2",
-            "arg1");
+            "/bin/java", "-jvmarg", "-jar", "pkg/exe.jar", "execArg1", "execArg2", "arg1");
   }
 
   @Test
@@ -320,7 +301,7 @@ public class SpawnActionTest extends BuildViewTestCase {
             .addOutput(getBinArtifactWithNoOwner("output"))
             .addCommandLine(CommandLine.of(ImmutableList.of("arg1", "arg2")))
             .addCommandLine(CommandLine.of(ImmutableList.of("arg3")))
-            .build(ActionsTestUtil.NULL_ACTION_OWNER, targetConfig);
+            .build(nullOwnerWithTargetConfig(), targetConfig);
 
     assertThat(action.getArguments()).containsExactly("arg1", "arg2", "arg3").inOrder();
   }
@@ -336,49 +317,27 @@ public class SpawnActionTest extends BuildViewTestCase {
             .setExecutable(scratch.file("/bin/xxx").asFragment())
             .addCommandLine(CommandLine.of(ImmutableList.of("arg1")))
             .addCommandLine(CommandLine.of(ImmutableList.of("arg2")))
-            .build(ActionsTestUtil.NULL_ACTION_OWNER, targetConfig);
-    assertThat(action.getArguments()).containsExactly("/bin/xxx", "arg1", "arg2").inOrder();
-  }
-
-  @Test
-  public void testGetArgumentsWithParameterFiles() throws Exception {
-    useConfiguration("--min_param_file_size=0", "--nodefer_param_files");
-    Artifact input = getSourceArtifact("input");
-    Artifact output = getBinArtifactWithNoOwner("output");
-    SpawnAction action =
-        builder()
-            .addInput(input)
-            .addOutput(output)
-            .setExecutable(scratch.file("/bin/xxx").asFragment())
-            .addCommandLine(
-                CommandLine.of(ImmutableList.of("arg1")),
-                ParamFileInfo.builder(ParameterFileType.UNQUOTED).build())
-            .addCommandLine(
-                CommandLine.of(ImmutableList.of("arg2")),
-                ParamFileInfo.builder(ParameterFileType.UNQUOTED).build())
-            .build(ActionsTestUtil.NULL_ACTION_OWNER, targetConfig);
-    // getArguments returns all arguments, regardless whether some go in parameter files or not
+            .build(nullOwnerWithTargetConfig(), targetConfig);
     assertThat(action.getArguments()).containsExactly("/bin/xxx", "arg1", "arg2").inOrder();
   }
 
   @Test
   public void testExtraActionInfo() throws Exception {
-    SpawnAction action = createCopyFromWelcomeToDestination(ImmutableMap.<String, String>of());
+    SpawnAction action = createCopyFromWelcomeToDestination(ImmutableMap.of());
     ExtraActionInfo info = action.getExtraActionInfo(actionKeyContext).build();
     assertThat(info.getMnemonic()).isEqualTo("Dummy");
 
     SpawnInfo spawnInfo = info.getExtension(SpawnInfo.spawnInfo);
     assertThat(info.hasExtension(SpawnInfo.spawnInfo)).isTrue();
 
-    assertThat(spawnInfo.getArgumentList())
-        .containsExactlyElementsIn(action.getArguments());
+    assertThat(spawnInfo.getArgumentList()).containsExactlyElementsIn(action.getArguments());
 
-    Iterable<String> inputPaths = Artifact.asExecPaths(action.getInputs());
-    Iterable<String> outputPaths = Artifact.asExecPaths(action.getOutputs());
+    List<String> inputPaths = Artifact.asExecPaths(action.getInputs());
+    List<String> outputPaths = Artifact.asExecPaths(action.getOutputs());
 
     assertThat(spawnInfo.getInputFileList()).containsExactlyElementsIn(inputPaths);
     assertThat(spawnInfo.getOutputFileList()).containsExactlyElementsIn(outputPaths);
-    Map<String, String> environment = action.getIncompleteEnvironmentForTesting();
+    ImmutableMap<String, String> environment = action.getIncompleteEnvironmentForTesting();
     assertThat(spawnInfo.getVariableCount()).isEqualTo(environment.size());
 
     for (EnvironmentVariable variable : spawnInfo.getVariableList()) {
@@ -386,18 +345,16 @@ public class SpawnActionTest extends BuildViewTestCase {
     }
   }
 
-  /**
-   * Test that environment variables are not escaped or quoted.
-   */
+  /** Test that environment variables are not escaped or quoted. */
   @Test
   public void testExtraActionInfoEnvironmentVariables() throws Exception {
-    Map<String, String> env = ImmutableMap.of(
-        "P1", "simple",
-        "P2", "spaces are not escaped",
-        "P3", ":",
-        "P4", "",
-        "NONSENSE VARIABLE", "value"
-    );
+    ImmutableMap<String, String> env =
+        ImmutableMap.of(
+            "P1", "simple",
+            "P2", "spaces are not escaped",
+            "P3", ":",
+            "P4", "",
+            "NONSENSE VARIABLE", "value");
 
     SpawnInfo spawnInfo =
         createCopyFromWelcomeToDestination(env)
@@ -422,14 +379,14 @@ public class SpawnActionTest extends BuildViewTestCase {
                     Runfiles.EMPTY,
                     manifest,
                     /* repoMappingManifest= */ null,
-                    /* buildRunfileLinks= */ false,
-                    /* runfileLinksEnabled= */ false))
+                    RunfileSymlinksMode.SKIP,
+                    /* buildRunfileLinks= */ false))
             .addOutput(getBinArtifactWithNoOwner("output"))
             .setExecutable(scratch.file("/bin/xxx").asFragment())
             .setProgressMessage("Test")
-            .build(ActionsTestUtil.NULL_ACTION_OWNER, targetConfig);
+            .build(nullOwnerWithTargetConfig(), targetConfig);
     collectingAnalysisEnvironment.registerAction(action);
-    List<String> inputFiles = actionInputsToPaths(action.getSpawn().getInputFiles());
+    ImmutableList<String> inputFiles = actionInputsToPaths(action.getSpawn().getInputFiles());
     assertThat(inputFiles).isEmpty();
   }
 
@@ -462,8 +419,8 @@ public class SpawnActionTest extends BuildViewTestCase {
             if (attributesToFlip.contains(KeyAttributes.EXECUTABLE)) {
               builder.setExecutable(executable);
             } else {
-              builder.setJavaExecutable(
-                  executable, jarArtifact, "Main", NestedSetBuilder.emptySet(Order.STABLE_ORDER));
+              builder.setJarExecutable(
+                  executable, jarArtifact, NestedSetBuilder.emptySet(Order.STABLE_ORDER));
             }
 
             builder.setMnemonic(attributesToFlip.contains(KeyAttributes.MNEMONIC) ? "a" : "b");
@@ -486,7 +443,7 @@ public class SpawnActionTest extends BuildViewTestCase {
             }
             builder.setEnvironment(env);
 
-            SpawnAction action = builder.build(ActionsTestUtil.NULL_ACTION_OWNER, targetConfig);
+            SpawnAction action = builder.build(nullOwnerWithTargetConfig(), targetConfig);
             collectingAnalysisEnvironment.registerAction(action);
             return action;
           }
@@ -510,7 +467,7 @@ public class SpawnActionTest extends BuildViewTestCase {
             .addOutput(getBinArtifactWithNoOwner("some/output"))
             .setExecutable(scratch.file("/bin/xxx").asFragment())
             .setProgressMessage("Progress for %{label}: %{input} -> %{output}")
-            .build(ActionsTestUtil.NULL_ACTION_OWNER, targetConfig);
+            .build(nullOwnerWithTargetConfig(), targetConfig);
     assertThat(action.getProgressMessage())
         .isEqualTo(
             "Progress for //null/action:owner: some/input -> "
@@ -571,28 +528,26 @@ public class SpawnActionTest extends BuildViewTestCase {
         .setMnemonic("ActionToolMnemonic")
         .setExecutionInfo(executionInfoVariables)
         .setExecutable(scratch.file("/bin/xxx").asFragment())
-        .build(ActionsTestUtil.NULL_ACTION_OWNER, targetConfig);
+        .build(nullOwnerWithTargetConfig(), targetConfig);
   }
 
   @Test
   public void testWorkerSupport() throws Exception {
     SpawnAction workerSupportSpawn =
-        createWorkerSupportSpawn(ImmutableMap.<String, String>of("supports-workers", "1"));
+        createWorkerSupportSpawn(ImmutableMap.of("supports-workers", "1"));
     assertThat(Spawns.supportsWorkers(workerSupportSpawn.getSpawn())).isTrue();
   }
 
   @Test
   public void testMultiplexWorkerSupport() throws Exception {
     SpawnAction multiplexWorkerSupportSpawn =
-        createWorkerSupportSpawn(
-            ImmutableMap.<String, String>of("supports-multiplex-workers", "1"));
+        createWorkerSupportSpawn(ImmutableMap.of("supports-multiplex-workers", "1"));
     assertThat(Spawns.supportsMultiplexWorkers(multiplexWorkerSupportSpawn.getSpawn())).isTrue();
   }
 
   @Test
   public void testWorkerProtocolFormat_defaultIsProto() throws Exception {
-    SpawnAction spawn =
-        createWorkerSupportSpawn(ImmutableMap.<String, String>of("supports-workers", "1"));
+    SpawnAction spawn = createWorkerSupportSpawn(ImmutableMap.of("supports-workers", "1"));
     assertThat(Spawns.getWorkerProtocolFormat(spawn.getSpawn()))
         .isEqualTo(WorkerProtocolFormat.PROTO);
   }
@@ -601,8 +556,7 @@ public class SpawnActionTest extends BuildViewTestCase {
   public void testWorkerProtocolFormat_explicitProto() throws Exception {
     SpawnAction spawn =
         createWorkerSupportSpawn(
-            ImmutableMap.<String, String>of(
-                "supports-workers", "1", "requires-worker-protocol", "proto"));
+            ImmutableMap.of("supports-workers", "1", "requires-worker-protocol", "proto"));
     assertThat(Spawns.getWorkerProtocolFormat(spawn.getSpawn()))
         .isEqualTo(WorkerProtocolFormat.PROTO);
   }
@@ -611,15 +565,14 @@ public class SpawnActionTest extends BuildViewTestCase {
   public void testWorkerProtocolFormat_explicitJson() throws Exception {
     SpawnAction spawn =
         createWorkerSupportSpawn(
-            ImmutableMap.<String, String>of(
-                "supports-workers", "1", "requires-worker-protocol", "json"));
+            ImmutableMap.of("supports-workers", "1", "requires-worker-protocol", "json"));
     assertThat(Spawns.getWorkerProtocolFormat(spawn.getSpawn()))
         .isEqualTo(WorkerProtocolFormat.JSON);
   }
 
   @Test
   public void testWorkerMnemonicDefault() throws Exception {
-    SpawnAction defaultMnemonicSpawn = createWorkerSupportSpawn(ImmutableMap.<String, String>of());
+    SpawnAction defaultMnemonicSpawn = createWorkerSupportSpawn(ImmutableMap.of());
     assertThat(Spawns.getWorkerKeyMnemonic(defaultMnemonicSpawn.getSpawn()))
         .isEqualTo("ActionToolMnemonic");
   }
@@ -627,29 +580,9 @@ public class SpawnActionTest extends BuildViewTestCase {
   @Test
   public void testWorkerMnemonicOverride() throws Exception {
     SpawnAction customMnemonicSpawn =
-        createWorkerSupportSpawn(
-            ImmutableMap.<String, String>of("worker-key-mnemonic", "ToolPoolMnemonic"));
+        createWorkerSupportSpawn(ImmutableMap.of("worker-key-mnemonic", "ToolPoolMnemonic"));
     assertThat(Spawns.getWorkerKeyMnemonic(customMnemonicSpawn.getSpawn()))
         .isEqualTo("ToolPoolMnemonic");
-  }
-
-  @Test
-  public void testExecutableBuilder() throws Exception {
-    SpawnAction.Builder builder = builder().addOutput(destinationArtifact);
-    builder.executableArguments().add("binary").add("execArg1").add("execArg2");
-    SpawnAction action = builder.build(ActionsTestUtil.NULL_ACTION_OWNER, targetConfig);
-    collectingAnalysisEnvironment.registerAction(action);
-    assertThat(action.getArguments()).containsExactly("binary", "execArg1", "execArg2").inOrder();
-  }
-
-  @Test
-  public void testExecutableBuilderAfterSetExecutable() throws Exception {
-    SpawnAction.Builder builder = builder().addOutput(destinationArtifact);
-    builder.setExecutable(PathFragment.create("binary"));
-    builder.executableArguments().add("execArg1").add("execArg2");
-    SpawnAction action = builder.build(ActionsTestUtil.NULL_ACTION_OWNER, targetConfig);
-    collectingAnalysisEnvironment.registerAction(action);
-    assertThat(action.getArguments()).containsExactly("binary", "execArg1", "execArg2").inOrder();
   }
 
   private static RunfilesSupplier runfilesSupplier(Artifact manifest, PathFragment dir) {
@@ -658,7 +591,18 @@ public class SpawnActionTest extends BuildViewTestCase {
         Runfiles.EMPTY,
         manifest,
         /* repoMappingManifest= */ null,
-        /* buildRunfileLinks= */ false,
-        /* runfileLinksEnabled= */ false);
+        RunfileSymlinksMode.SKIP,
+        /* buildRunfileLinks= */ false);
+  }
+
+  private ActionOwner nullOwnerWithTargetConfig() {
+    return ActionOwner.create(
+        ActionsTestUtil.NULL_ACTION_OWNER.getLabel(),
+        ActionsTestUtil.NULL_ACTION_OWNER.getLocation(),
+        ActionsTestUtil.NULL_ACTION_OWNER.getTargetKind(),
+        targetConfig,
+        ActionsTestUtil.NULL_ACTION_OWNER.getExecutionPlatform(),
+        ActionsTestUtil.NULL_ACTION_OWNER.getAspectDescriptors(),
+        ActionsTestUtil.NULL_ACTION_OWNER.getExecProperties());
   }
 }

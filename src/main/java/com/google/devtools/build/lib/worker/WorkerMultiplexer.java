@@ -140,7 +140,8 @@ public class WorkerMultiplexer {
    * sets up the sandbox root dir with the required worker files.
    */
   public synchronized void createSandboxedProcess(
-      Path workDir, Set<PathFragment> workerFiles, SandboxInputs inputFiles) throws IOException {
+      Path workDir, Set<PathFragment> workerFiles, SandboxInputs inputFiles)
+      throws IOException, InterruptedException {
     // TODO: Make blaze clean remove the workdir.
     if (this.process == null) {
       // This should be a once-only operation.
@@ -153,8 +154,7 @@ public class WorkerMultiplexer {
           inputsToCreate,
           dirsToCreate,
           workerFiles,
-          SandboxOutputs.getEmptyInstance().files(),
-          SandboxOutputs.getEmptyInstance().dirs());
+          SandboxOutputs.getEmptyInstance());
       SandboxHelpers.cleanExisting(
           workDir.getParentDirectory(), inputFiles, inputsToCreate, dirsToCreate, workDir);
       SandboxHelpers.createDirectories(dirsToCreate, workDir, /* strict=*/ false);
@@ -454,11 +454,5 @@ public class WorkerMultiplexer {
       return -1;
     }
     return process.getProcessId();
-  }
-
-  // TODO: Check if this can be removed
-  @VisibleForTesting
-  Subprocess getProcess() {
-    return process;
   }
 }

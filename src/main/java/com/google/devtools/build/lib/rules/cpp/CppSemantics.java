@@ -17,15 +17,11 @@ package com.google.devtools.build.lib.rules.cpp;
 import com.google.common.collect.ImmutableSet;
 import com.google.devtools.build.lib.analysis.RuleContext;
 import com.google.devtools.build.lib.analysis.RuleErrorConsumer;
-import com.google.devtools.build.lib.analysis.TransitiveInfoCollection;
 import com.google.devtools.build.lib.analysis.config.BuildConfigurationValue;
 import com.google.devtools.build.lib.analysis.starlark.StarlarkActionFactory;
 import com.google.devtools.build.lib.packages.AspectDescriptor;
-import com.google.devtools.build.lib.packages.RuleClass.ConfiguredTargetFactory.RuleErrorException;
-import com.google.devtools.build.lib.packages.StructImpl;
 import com.google.devtools.build.lib.rules.cpp.CcCommon.Language;
 import com.google.devtools.build.lib.rules.cpp.CcToolchainFeatures.FeatureConfiguration;
-import com.google.devtools.build.lib.rules.cpp.CppConfiguration.HeadersCheckingMode;
 import net.starlark.java.eval.EvalException;
 import net.starlark.java.eval.Sequence;
 import net.starlark.java.eval.StarlarkThread;
@@ -52,13 +48,6 @@ public interface CppSemantics extends StarlarkValue {
       CppCompileActionBuilder actionBuilder,
       RuleErrorConsumer ruleErrorConsumer);
 
-  /** Determines the applicable mode of headers checking for the passed in ruleContext. */
-  HeadersCheckingMode determineHeadersCheckingMode(RuleContext ruleContext);
-
-  /** Determines the applicable mode of headers checking in Starlark. */
-  HeadersCheckingMode determineStarlarkHeadersCheckingMode(
-      RuleContext ruleContext, CppConfiguration cppConfiguration, CcToolchainProvider toolchain);
-
   /**
    * Returns if include scanning is allowed.
    *
@@ -69,15 +58,8 @@ public interface CppSemantics extends StarlarkValue {
   /** Returns true iff this build should perform .d input pruning. */
   boolean needsDotdInputPruning(BuildConfigurationValue configuration);
 
-  void validateAttributes(RuleContext ruleContext);
-
-  default void validateDeps(RuleContext ruleContext) throws RuleErrorException {}
-
   /** Returns true iff this build requires include validation. */
   boolean needsIncludeValidation();
-
-  /** Provider for cc_shared_libraries * */
-  StructImpl getCcSharedLibraryInfo(TransitiveInfoCollection dep);
 
   /** No-op in Bazel */
   void validateLayeringCheckFeatures(
@@ -85,10 +67,6 @@ public interface CppSemantics extends StarlarkValue {
       AspectDescriptor aspectDescriptor,
       CcToolchainProvider ccToolchain,
       ImmutableSet<String> unsupportedFeatures);
-
-  boolean createEmptyArchive();
-
-  void checkCanUseImplementationDeps(RuleContext ruleContext);
 
   void validateStarlarkCompileApiCall(
       StarlarkActionFactory actionFactory,

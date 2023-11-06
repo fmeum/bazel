@@ -23,20 +23,20 @@ import com.google.devtools.build.lib.bazel.rules.objc.BazelObjcImportRule;
 import com.google.devtools.build.lib.bazel.rules.objc.BazelObjcLibraryRule;
 import com.google.devtools.build.lib.cmdline.RepositoryName;
 import com.google.devtools.build.lib.rules.apple.AppleConfiguration;
-import com.google.devtools.build.lib.rules.apple.AppleToolchain;
 import com.google.devtools.build.lib.rules.apple.AvailableXcodesRule;
-import com.google.devtools.build.lib.rules.apple.XcodeConfigAlias.XcodeConfigAliasRule;
-import com.google.devtools.build.lib.rules.apple.XcodeConfigRule;
 import com.google.devtools.build.lib.rules.apple.XcodeVersionRule;
-import com.google.devtools.build.lib.rules.apple.cpp.AppleCcToolchainRule;
 import com.google.devtools.build.lib.rules.apple.swift.SwiftConfiguration;
 import com.google.devtools.build.lib.rules.core.CoreRules;
+import com.google.devtools.build.lib.rules.objc.AppleCcToolchainRule;
 import com.google.devtools.build.lib.rules.objc.AppleStarlarkCommon;
+import com.google.devtools.build.lib.rules.objc.AppleToolchain;
 import com.google.devtools.build.lib.rules.objc.J2ObjcConfiguration;
 import com.google.devtools.build.lib.rules.objc.ObjcConfiguration;
 import com.google.devtools.build.lib.rules.objc.ObjcImportBaseRule;
 import com.google.devtools.build.lib.rules.objc.ObjcLibraryBaseRule;
 import com.google.devtools.build.lib.rules.objc.ObjcRuleClasses;
+import com.google.devtools.build.lib.rules.objc.XcodeConfigAlias.XcodeConfigAliasRule;
+import com.google.devtools.build.lib.rules.objc.XcodeConfigRule;
 import com.google.devtools.build.lib.starlarkbuildapi.objc.AppleBootstrap;
 
 /** Rules for Objective-C support in Bazel. */
@@ -68,7 +68,6 @@ public class ObjcRules implements RuleSet {
     builder.addRuleDefinition(new ObjcRuleClasses.AlwaysLinkRule());
     builder.addRuleDefinition(new ObjcRuleClasses.SdkFrameworksDependerRule());
     builder.addRuleDefinition(new ObjcRuleClasses.CompileDependencyRule());
-    builder.addRuleDefinition(new ObjcRuleClasses.XcrunRule());
     builder.addRuleDefinition(new ObjcRuleClasses.CrosstoolRule());
     builder.addRuleDefinition(new XcodeConfigRule());
     builder.addRuleDefinition(new XcodeConfigAliasRule());

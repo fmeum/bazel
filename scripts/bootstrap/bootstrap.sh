@@ -35,12 +35,21 @@ _BAZEL_ARGS="--spawn_strategy=standalone \
       --nojava_header_compilation \
       --strategy=Javac=worker --worker_quit_after_build --ignore_unsupported_sandboxing \
       --compilation_mode=opt \
-      --distdir=derived/distdir \
+      --repository_cache=derived/repository_cache \
       --extra_toolchains=//scripts/bootstrap:all \
+      --extra_toolchains=@bazel_tools//tools/python:autodetecting_toolchain \
+      --enable_bzlmod \
+      --check_direct_dependencies=error \
+      --lockfile_mode=update \
+      --override_repository=$(cat derived/maven/MAVEN_CANONICAL_REPO_NAME)=derived/maven \
       ${DIST_BOOTSTRAP_ARGS:-} \
       ${EXTRA_BAZEL_ARGS:-}"
 
 cp scripts/bootstrap/BUILD.bootstrap scripts/bootstrap/BUILD
+
+# Remove lines containing 'install_deps' to avoid loading @bazel_pip_dev_deps,
+# which requires fetching the python toolchain.
+sed -i.bak '/install_deps/d' WORKSPACE && rm WORKSPACE.bak
 
 if [ -z "${BAZEL-}" ]; then
   function _run_bootstrapping_bazel() {

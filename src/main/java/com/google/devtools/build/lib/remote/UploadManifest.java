@@ -26,6 +26,7 @@ import build.bazel.remote.execution.v2.CacheCapabilities;
 import build.bazel.remote.execution.v2.Command;
 import build.bazel.remote.execution.v2.Digest;
 import build.bazel.remote.execution.v2.Directory;
+import build.bazel.remote.execution.v2.OutputSymlink;
 import build.bazel.remote.execution.v2.SymlinkAbsolutePathStrategy;
 import build.bazel.remote.execution.v2.Tree;
 import com.google.common.annotations.VisibleForTesting;
@@ -283,17 +284,23 @@ public class UploadManifest {
   }
 
   private void addFileSymbolicLink(Path file, PathFragment target) {
-    result
-        .addOutputFileSymlinksBuilder()
-        .setPath(remotePathResolver.localPathToOutputPath(file))
-        .setTarget(target.toString());
+    OutputSymlink outputSymlink =
+        OutputSymlink.newBuilder()
+            .setPath(remotePathResolver.localPathToOutputPath(file))
+            .setTarget(target.toString())
+            .build();
+    result.addOutputFileSymlinks(outputSymlink);
+    result.addOutputSymlinks(outputSymlink);
   }
 
   private void addDirectorySymbolicLink(Path file, PathFragment target) {
-    result
-        .addOutputDirectorySymlinksBuilder()
-        .setPath(remotePathResolver.localPathToOutputPath(file))
-        .setTarget(target.toString());
+    OutputSymlink outputSymlink =
+        OutputSymlink.newBuilder()
+            .setPath(remotePathResolver.localPathToOutputPath(file))
+            .setTarget(target.toString())
+            .build();
+    result.addOutputDirectorySymlinks(outputSymlink);
+    result.addOutputSymlinks(outputSymlink);
   }
 
   private void addFile(Digest digest, Path file) throws IOException {
@@ -449,11 +456,11 @@ public class UploadManifest {
   private static void reportUploadStarted(
       ExtendedEventHandler reporter,
       @Nullable ActionExecutionMetadata action,
-      String prefix,
+      Store store,
       Iterable<Digest> digests) {
     if (action != null) {
       for (Digest digest : digests) {
-        reporter.post(ActionUploadStartedEvent.create(action, prefix + digest.getHash()));
+        reporter.post(ActionUploadStartedEvent.create(action, store, digest));
       }
     }
   }
@@ -461,12 +468,11 @@ public class UploadManifest {
   private static void reportUploadFinished(
       ExtendedEventHandler reporter,
       @Nullable ActionExecutionMetadata action,
-      String resourceIdPrefix,
+      Store store,
       Iterable<Digest> digests) {
     if (action != null) {
       for (Digest digest : digests) {
-        reporter.post(
-            ActionUploadFinishedEvent.create(action, resourceIdPrefix + digest.getHash()));
+        reporter.post(ActionUploadFinishedEvent.create(action, store, digest));
       }
     }
   }
@@ -485,19 +491,18 @@ public class UploadManifest {
 
     ActionExecutionMetadata action = context.getSpawnOwner();
 
-    String outputPrefix = "cas/";
     Flowable<RxUtils.TransferResult> bulkTransfers =
         toSingle(() -> remoteCache.findMissingDigests(context, digests), directExecutor())
-            .doOnSubscribe(d -> reportUploadStarted(reporter, action, outputPrefix, digests))
-            .doOnError(error -> reportUploadFinished(reporter, action, outputPrefix, digests))
-            .doOnDispose(() -> reportUploadFinished(reporter, action, outputPrefix, digests))
+            .doOnSubscribe(d -> reportUploadStarted(reporter, action, Store.CAS, digests))
+            .doOnError(error -> reportUploadFinished(reporter, action, Store.CAS, digests))
+            .doOnDispose(() -> reportUploadFinished(reporter, action, Store.CAS, digests))
             .doOnSuccess(
                 missingDigests -> {
                   List<Digest> existedDigests =
                       digests.stream()
                           .filter(digest -> !missingDigests.contains(digest))
                           .collect(Collectors.toList());
-                  reportUploadFinished(reporter, action, outputPrefix, existedDigests);
+                  reportUploadFinished(reporter, action, Store.CAS, existedDigests);
                 })
             .flatMapPublisher(Flowable::fromIterable)
             .flatMapSingle(
@@ -506,13 +511,12 @@ public class UploadManifest {
                         .doFinally(
                             () ->
                                 reportUploadFinished(
-                                    reporter, action, outputPrefix, ImmutableList.of(digest))));
+                                    reporter, action, Store.CAS, ImmutableList.of(digest))));
     Completable uploadOutputs = mergeBulkTransfer(bulkTransfers);
 
     ActionResult actionResult = result.build();
     Completable uploadActionResult = Completable.complete();
     if (actionResult.getExitCode() == 0 && actionKey != null) {
-      String actionResultPrefix = "ac/";
       uploadActionResult =
           toCompletable(
                   () -> remoteCache.uploadActionResult(context, actionKey, actionResult),
@@ -520,17 +524,11 @@ public class UploadManifest {
               .doOnSubscribe(
                   d ->
                       reportUploadStarted(
-                          reporter,
-                          action,
-                          actionResultPrefix,
-                          ImmutableList.of(actionKey.getDigest())))
+                          reporter, action, Store.AC, ImmutableList.of(actionKey.getDigest())))
               .doFinally(
                   () ->
                       reportUploadFinished(
-                          reporter,
-                          action,
-                          actionResultPrefix,
-                          ImmutableList.of(actionKey.getDigest())));
+                          reporter, action, Store.AC, ImmutableList.of(actionKey.getDigest())));
     }
 
     return Completable.concatArray(uploadOutputs, uploadActionResult).toSingleDefault(actionResult);

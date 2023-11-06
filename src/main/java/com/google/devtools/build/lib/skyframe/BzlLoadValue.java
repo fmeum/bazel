@@ -17,7 +17,9 @@ import static com.google.common.base.Preconditions.checkNotNull;
 
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.MoreObjects;
+import com.google.common.base.Preconditions;
 import com.google.devtools.build.lib.cmdline.Label;
+import com.google.devtools.build.lib.cmdline.RepositoryName;
 import com.google.devtools.build.lib.concurrent.ThreadSafety.Immutable;
 import com.google.devtools.build.lib.packages.BzlVisibility;
 import com.google.devtools.build.lib.skyframe.serialization.autocodec.AutoCodec;
@@ -31,7 +33,11 @@ import java.util.Objects;
 import net.starlark.java.eval.Module;
 
 /**
- * A value that represents the .bzl module loaded by a Starlark {@code load()} statement.
+ * A value that represents the .bzl (or .scl) module loaded by a Starlark {@code load()} statement.
+ *
+ * <p>Note: Historically, all modules had the .bzl suffix, but this is no longer true now that Bazel
+ * supports the .scl dialect. In identifiers, code comments, and documentation, you should generally
+ * assume any "bzl" term could mean a .scl file as well.
  *
  * <p>The key consists of an absolute {@link Label} and the context in which the load occurs. The
  * Label should not reference the special {@code external} package.
@@ -93,6 +99,22 @@ public class BzlLoadValue implements SkyValue {
     /** Returns true if this is a request for a builtins bzl file. */
     boolean isBuiltins() {
       return false;
+    }
+
+    /** Returns true if the requested file follows the .scl dialect. */
+    // Note: Just as with .bzl, the same .scl file can be referred to from multiple key types, for
+    // instance if a BUILD file and a module rule both load foo.scl. Conceptually, .scl files
+    // shouldn't depend on what kind of top-level file caused them to load, but in practice, this
+    // implementation quirk means that the .scl file will be loaded twice as separate copies.
+    //
+    // This shouldn't matter except in rare edge cases, such as if a Starlark function is loaded
+    // from both copies and compared for equality. Performance wise, it also means that all
+    // transitive .scl files will be double-loaded, but we don't expect that to be significant.
+    //
+    // The alternative is to use a separate key type just for .scl, but that complicates repo logic;
+    // see BzlLoadFunction#getRepositoryMapping.
+    final boolean isSclDialect() {
+      return getLabel().getName().endsWith(".scl");
     }
 
     /**
@@ -320,7 +342,7 @@ public class BzlLoadValue implements SkyValue {
   /** A key for loading a .bzl to get the repo rule required by Bzlmod generated repositories. */
   @Immutable
   @AutoCodec.VisibleForSerialization
-  static final class KeyForBzlmod extends Key {
+  static class KeyForBzlmod extends Key {
     private final Label label;
 
     private KeyForBzlmod(Label label) {
@@ -343,9 +365,22 @@ public class BzlLoadValue implements SkyValue {
     }
   }
 
+  @Immutable
+  @AutoCodec.VisibleForSerialization
+  static class KeyForBzlmodBootstrap extends KeyForBzlmod {
+    private KeyForBzlmodBootstrap(Label label) {
+      super(label);
+    }
+
+    @Override
+    Key getKeyForLoad(Label loadLabel) {
+      return keyForBzlmodBootstrap(loadLabel);
+    }
+  }
+
   /** Constructs a key for loading a regular (non-workspace) .bzl file, from the .bzl's label. */
   public static Key keyForBuild(Label label) {
-    return keyInterner.intern(new KeyForBuild(label, /*isBuildPrelude=*/ false));
+    return keyInterner.intern(new KeyForBuild(label, /* isBuildPrelude= */ false));
   }
 
   /**
@@ -361,17 +396,24 @@ public class BzlLoadValue implements SkyValue {
   }
 
   /** Constructs a key for loading a .bzl file within the {@code @_builtins} pseudo-repository. */
-  static Key keyForBuiltins(Label label) {
+  public static Key keyForBuiltins(Label label) {
     return keyInterner.intern(new KeyForBuiltins(label));
   }
 
   /** Constructs a key for loading the special prelude .bzl. */
   static Key keyForBuildPrelude(Label label) {
-    return keyInterner.intern(new KeyForBuild(label, /*isBuildPrelude=*/ true));
+    return keyInterner.intern(new KeyForBuild(label, /* isBuildPrelude= */ true));
   }
 
   /** Constructs a key for loading a .bzl for Bzlmod repos */
   public static Key keyForBzlmod(Label label) {
     return keyInterner.intern(new KeyForBzlmod(label));
+  }
+
+  public static Key keyForBzlmodBootstrap(Label label) {
+    Preconditions.checkArgument(
+        label.getRepository().equals(RepositoryName.BAZEL_TOOLS),
+        "keyForBzlmodBootstrap must be called with a label in the bazel_tools repository");
+    return keyInterner.intern(new KeyForBzlmodBootstrap(label));
   }
 }

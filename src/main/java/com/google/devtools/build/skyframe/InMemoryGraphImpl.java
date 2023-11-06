@@ -80,9 +80,7 @@ public class InMemoryGraphImpl implements InMemoryGraph {
     this.usePooledInterning = usePooledInterning;
     if (usePooledInterning) {
       SkyKeyInterner.setGlobalPool(new SkyKeyPool());
-      if (UsePooledLabelInterningFlag.usePooledLabelInterningFlag()) {
-        LabelInterner.setGlobalPool(new LabelPool());
-      }
+      LabelInterner.setGlobalPool(new LabelPool());
     }
   }
 
@@ -90,7 +88,7 @@ public class InMemoryGraphImpl implements InMemoryGraph {
   public void remove(SkyKey skyKey) {
     weakInternSkyKey(skyKey);
     InMemoryNodeEntry nodeEntry = nodeMap.remove(skyKey);
-    if (skyKey instanceof PackageValue.Key && nodeEntry != null) {
+    if (skyKey instanceof PackageIdentifier && nodeEntry != null) {
       weakInternPackageTargetsLabels(
           (PackageValue) nodeEntry.toValue()); // Dirty or changed value are needed.
     }
@@ -103,7 +101,7 @@ public class InMemoryGraphImpl implements InMemoryGraph {
         (k, e) -> {
           if (e.isDone()) {
             weakInternSkyKey(k);
-            if (k instanceof PackageValue.Key) {
+            if (k instanceof PackageIdentifier) {
               weakInternPackageTargetsLabels((PackageValue) e.toValue());
             }
             return null;
@@ -127,9 +125,6 @@ public class InMemoryGraphImpl implements InMemoryGraph {
       return;
     }
     LabelInterner interner = Label.getLabelInterner();
-    if (interner == null) {
-      return;
-    }
 
     ImmutableSortedMap<String, Target> targets = packageValue.getPackage().getTargets();
     targets.values().forEach(t -> interner.weakIntern(t.getLabel()));
@@ -169,7 +164,7 @@ public class InMemoryGraphImpl implements InMemoryGraph {
 
   @ForOverride
   protected InMemoryNodeEntry newNodeEntry(SkyKey key) {
-    return new InMemoryNodeEntry(key);
+    return new IncrementalInMemoryNodeEntry(key);
   }
 
   @Override
@@ -238,17 +233,9 @@ public class InMemoryGraphImpl implements InMemoryGraph {
     nodeMap.forEachValue(PARALLELISM_THRESHOLD, consumer);
   }
 
-  /**
-   * Re-interns {@link SkyKey} instances that use {@link SkyKeyInterner} in node map back to the
-   * {@link SkyKeyInterner}'s weak interner.
-   *
-   * <p>Also uninstalls current {@link SkyKeyPool} instance from being {@link SkyKeyInterner}'s
-   * static global pool.
-   */
   @Override
-  public void cleanupInterningPool() {
+  public void cleanupInterningPools() {
     if (!usePooledInterning) {
-      // No clean up is needed when `usePooledInterning` is false for shell integration tests.
       return;
     }
     try (AutoProfiler ignored =
@@ -257,18 +244,24 @@ public class InMemoryGraphImpl implements InMemoryGraph {
           e -> {
             weakInternSkyKey(e.getKey());
 
-            if (!UsePooledLabelInterningFlag.usePooledLabelInterningFlag()
-                || !e.isDone()
-                || !e.getKey().functionName().equals(SkyFunctions.PACKAGE)) {
-              return;
+            if (e.isDone() && e.getKey().functionName().equals(SkyFunctions.PACKAGE)) {
+              weakInternPackageTargetsLabels((PackageValue) e.toValue());
             }
 
-            weakInternPackageTargetsLabels((PackageValue) e.toValue());
+            // The graph is about to be thrown away. Remove as we go to avoid temporarily storing
+            // everything in both the weak interner and the graph.
+            nodeMap.remove(e.getKey());
           });
     }
 
     SkyKeyInterner.setGlobalPool(null);
     LabelInterner.setGlobalPool(null);
+  }
+
+  @Override
+  @Nullable
+  public InMemoryNodeEntry getIfPresent(SkyKey key) {
+    return nodeMap.get(key);
   }
 
   static final class EdgelessInMemoryGraphImpl extends InMemoryGraphImpl {
@@ -279,12 +272,13 @@ public class InMemoryGraphImpl implements InMemoryGraph {
 
     @Override
     protected InMemoryNodeEntry newNodeEntry(SkyKey key) {
-      return new EdgelessInMemoryNodeEntry(key);
+      return new NonIncrementalInMemoryNodeEntry(key);
     }
   }
 
   /** {@link PooledInterner.Pool} for {@link SkyKey}s. */
   final class SkyKeyPool implements PooledInterner.Pool<SkyKey> {
+
     @Override
     public SkyKey getOrWeakIntern(SkyKey sample) {
       // Use computeIfAbsent not to mutate the map, but to call weakIntern under synchronization.
@@ -310,10 +304,9 @@ public class InMemoryGraphImpl implements InMemoryGraph {
       LabelInterner interner = checkNotNull(Label.getLabelInterner());
 
       PackageIdentifier packageIdentifier = sample.getPackageIdentifier();
-      PackageValue.Key packageKey = PackageValue.key(packageIdentifier);
 
       // Return pooled instance if sample is present in the pool.
-      InMemoryNodeEntry inMemoryNodeEntry = nodeMap.get(packageKey);
+      InMemoryNodeEntry inMemoryNodeEntry = nodeMap.get(packageIdentifier);
       if (inMemoryNodeEntry != null) {
         Label pooledInstance = getLabelFromInMemoryNodeEntry(inMemoryNodeEntry, sample);
         if (pooledInstance != null) {
@@ -327,7 +320,7 @@ public class InMemoryGraphImpl implements InMemoryGraph {
       try {
         // Check again whether sample is already present in the pool inside critical section.
         if (inMemoryNodeEntry == null) {
-          inMemoryNodeEntry = nodeMap.get(packageKey);
+          inMemoryNodeEntry = nodeMap.get(packageIdentifier);
         }
 
         if (inMemoryNodeEntry != null) {

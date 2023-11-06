@@ -16,11 +16,14 @@
 """Test utils for Bzlmod."""
 
 import base64
+import functools
 import hashlib
+import http.server
 import json
 import os
 import pathlib
 import shutil
+import threading
 import urllib.request
 import zipfile
 
@@ -106,7 +109,14 @@ class BazelRegistry:
     """Return the URL of this registry."""
     return self.root.resolve().as_uri()
 
-  def generateCcSource(self, name, version, deps=None, repo_names=None):
+  def generateCcSource(
+      self,
+      name,
+      version,
+      deps=None,
+      repo_names=None,
+      extra_module_file_contents=None,
+  ):
     """Generate a cc project with given dependency information.
 
     1. The cc projects implements a hello_<lib_name> function.
@@ -121,6 +131,8 @@ class BazelRegistry:
       version: The module version.
       deps: The dependencies of this module.
       repo_names: The desired repository name for some dependencies.
+      extra_module_file_contents: Extra lines to append to the MODULE.bazel
+        file.
 
     Returns:
       The generated source directory.
@@ -135,6 +147,8 @@ class BazelRegistry:
     for dep in deps:
       if dep not in repo_names:
         repo_names[dep] = dep
+    if not extra_module_file_contents:
+      extra_module_file_contents = []
 
     def calc_repo_name_str(dep):
       if dep == repo_names[dep]:
@@ -143,17 +157,21 @@ class BazelRegistry:
 
     scratchFile(src_dir.joinpath('WORKSPACE'))
     scratchFile(
-        src_dir.joinpath('MODULE.bazel'), [
+        src_dir.joinpath('MODULE.bazel'),
+        [
             'module(',
             '  name = "%s",' % name,
             '  version = "%s",' % version,
             '  compatibility_level = 1,',
             ')',
-        ] + [
-            'bazel_dep(name = "%s", version = "%s"%s)' %
-            (dep, version, calc_repo_name_str(dep))
+        ]
+        + [
+            'bazel_dep(name = "%s", version = "%s"%s)'
+            % (dep, version, calc_repo_name_str(dep))
             for dep, version in deps.items()
-        ])
+        ]
+        + extra_module_file_contents,
+    )
 
     scratchFile(
         src_dir.joinpath(name.lower() + '.h'), [
@@ -246,9 +264,12 @@ class BazelRegistry:
       patch_strip=0,
       archive_pattern=None,
       archive_type=None,
+      extra_module_file_contents=None,
   ):
     """Generate a cc project and add it as a module into the registry."""
-    src_dir = self.generateCcSource(name, version, deps, repo_names)
+    src_dir = self.generateCcSource(
+        name, version, deps, repo_names, extra_module_file_contents
+    )
     if archive_pattern:
       archive = self.createArchive(
           name, version, src_dir, filename_pattern=archive_pattern
@@ -319,3 +340,62 @@ class BazelRegistry:
 
     with module_dir.joinpath('source.json').open('w') as f:
       json.dump(source, f, indent=4, sort_keys=True)
+
+
+class StaticHTTPServer:
+  """An HTTP server serving static files, optionally with authentication."""
+
+  def __init__(self, root_directory, expected_auth=None):
+    self.root_directory = root_directory
+    self.expected_auth = expected_auth
+
+  def __enter__(self):
+    address = ('localhost', 0)  # assign random port
+    handler = functools.partial(
+        _Handler, self.root_directory, self.expected_auth
+    )
+    self.httpd = http.server.HTTPServer(address, handler)
+    self.thread = threading.Thread(target=self.httpd.serve_forever, daemon=True)
+    self.thread.start()
+    return self
+
+  def __exit__(self, exc_type, exc_value, traceback):
+    self.httpd.shutdown()
+    self.thread.join()
+
+  def getURL(self):
+    return 'http://{}:{}'.format(*self.httpd.server_address)
+
+
+class _Handler(http.server.SimpleHTTPRequestHandler):
+  """A SimpleHTTPRequestHandler with authentication."""
+
+  # Note: until Python 3.6, SimpleHTTPRequestHandler was only able to serve
+  # files from the working directory. A 'directory' parameter was added in
+  # Python 3.7, but sadly our CI builds are stuck with Python 3.6. Instead,
+  # we monkey-patch translate_path() to rewrite the path.
+
+  def __init__(self, root_directory, expected_auth, *args, **kwargs):
+    self.root_directory = root_directory
+    self.expected_auth = expected_auth
+    super().__init__(*args, **kwargs)
+
+  def translate_path(self, path):
+    abs_path = super().translate_path(path)
+    rel_path = os.path.relpath(abs_path, os.getcwd())
+    return os.path.join(self.root_directory, rel_path)
+
+  def check_auth(self):
+    auth_header = self.headers.get('Authorization', None)
+    if auth_header != self.expected_auth:
+      self.send_error(http.HTTPStatus.UNAUTHORIZED)
+      return False
+    return True
+
+  def do_HEAD(self):
+    if self.check_auth():
+      return super().do_HEAD()
+
+  def do_GET(self):
+    if self.check_auth():
+      return super().do_GET()

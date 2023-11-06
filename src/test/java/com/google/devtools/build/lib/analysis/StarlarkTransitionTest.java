@@ -11,7 +11,6 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-
 package com.google.devtools.build.lib.analysis;
 
 import static com.google.common.truth.Truth.assertThat;
@@ -76,6 +75,7 @@ public class StarlarkTransitionTest extends BuildViewTestCase {
         "string_flag(name = 'formation', build_setting_default = 'canyon')");
 
     reporter.removeHandler(failFastHandler);
+
     getConfiguredTarget("//test:arizona");
     assertContainsEvent(
         "Transition declares duplicate build setting '@@//test:formation' in INPUTS");
@@ -132,8 +132,13 @@ public class StarlarkTransitionTest extends BuildViewTestCase {
         "  build_setting = config.string(flag=True),",
         ")",
         "def _transition_impl(settings, attr):",
+        "  formation = settings['@//test:formation']",
+        "  if formation.endswith('-transitioned'):",
+        "    new_value = formation",
+        "  else:",
+        "    new_value = formation + '-transitioned'",
         "  return {",
-        "    '//test:formation': settings['@//test:formation']+'-transitioned',",
+        "    '//test:formation': new_value,",
         "  }",
         "formation_transition = transition(",
         "  implementation = _transition_impl,",

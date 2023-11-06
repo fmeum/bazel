@@ -15,6 +15,7 @@
 package com.google.devtools.build.lib.sandbox;
 
 import static com.google.common.base.Preconditions.checkNotNull;
+import static com.google.common.collect.ImmutableMap.toImmutableMap;
 import static com.google.devtools.build.lib.vfs.Dirent.Type.DIRECTORY;
 import static com.google.devtools.build.lib.vfs.Dirent.Type.SYMLINK;
 
@@ -75,9 +76,6 @@ public final class SandboxHelpers {
   /**
    * Moves all given outputs from a root to another.
    *
-   * <p>This is a support function to help with the implementation of {@link
-   * SandboxfsSandboxedSpawn#copyOutputs(Path)}.
-   *
    * @param outputs outputs to move as relative paths to a root
    * @param sourceRoot source directory from which to resolve outputs
    * @param targetRoot target directory to which to move the resolved outputs from the source
@@ -85,9 +83,10 @@ public final class SandboxHelpers {
    */
   public static void moveOutputs(SandboxOutputs outputs, Path sourceRoot, Path targetRoot)
       throws IOException {
-    for (PathFragment output : Iterables.concat(outputs.files(), outputs.dirs())) {
-      Path source = sourceRoot.getRelative(output);
-      Path target = targetRoot.getRelative(output);
+    for (Entry<PathFragment, PathFragment> output :
+        Iterables.concat(outputs.files().entrySet(), outputs.dirs().entrySet())) {
+      Path source = sourceRoot.getRelative(output.getValue());
+      Path target = targetRoot.getRelative(output.getKey());
       if (source.isFile() || source.isSymbolicLink()) {
         // Ensure the target directory exists in the target. The directories for the action outputs
         // have already been created, but the spawn outputs may be different from the overall action
@@ -132,11 +131,14 @@ public final class SandboxHelpers {
       Set<PathFragment> inputsToCreate,
       Set<PathFragment> dirsToCreate,
       Path workDir)
-      throws IOException {
+      throws IOException, InterruptedException {
     // To avoid excessive scanning of dirsToCreate for prefix dirs, we prepopulate this set of
     // prefixes.
     Set<PathFragment> prefixDirs = new HashSet<>();
     for (PathFragment dir : dirsToCreate) {
+      if (Thread.interrupted()) {
+        throw new InterruptedException();
+      }
       PathFragment parent = dir.getParentDirectory();
       while (parent != null && !prefixDirs.contains(parent)) {
         prefixDirs.add(parent);
@@ -157,9 +159,12 @@ public final class SandboxHelpers {
       Set<PathFragment> dirsToCreate,
       Path workDir,
       Set<PathFragment> prefixDirs)
-      throws IOException {
+      throws IOException, InterruptedException {
     Path execroot = workDir.getParentDirectory();
     for (Dirent dirent : root.readdir(Symlinks.NOFOLLOW)) {
+      if (Thread.interrupted()) {
+        throw new InterruptedException();
+      }
       Path absPath = root.getChild(dirent.getName());
       PathFragment pathRelativeToWorkDir;
       if (absPath.startsWith(workDir)) {
@@ -179,6 +184,8 @@ public final class SandboxHelpers {
         if (SYMLINK.equals(dirent.getType())
             && absPath.readSymbolicLink().equals(destination.get())) {
           inputsToCreate.remove(pathRelativeToWorkDir);
+        } else if (absPath.isDirectory()) {
+          absPath.deleteTree();
         } else {
           absPath.delete();
         }
@@ -215,8 +222,7 @@ public final class SandboxHelpers {
       Set<PathFragment> inputsToCreate,
       LinkedHashSet<PathFragment> dirsToCreate,
       Iterable<PathFragment> inputFiles,
-      ImmutableSet<PathFragment> outputFiles,
-      ImmutableSet<PathFragment> outputDirs) {
+      SandboxOutputs outputs) {
     // Add all worker files, input files, and the parent directories.
     for (PathFragment input : inputFiles) {
       inputsToCreate.add(input);
@@ -225,12 +231,12 @@ public final class SandboxHelpers {
 
     // And all parent directories of output files. Note that we don't add the files themselves --
     // any pre-existing files that have the same path as an output should get deleted.
-    for (PathFragment file : outputFiles) {
+    for (PathFragment file : outputs.files().values()) {
       dirsToCreate.add(file.getParentDirectory());
     }
 
     // Add all output directories.
-    dirsToCreate.addAll(outputDirs);
+    dirsToCreate.addAll(outputs.dirs().values());
 
     // Add some directories that should be writable, and thus exist.
     dirsToCreate.addAll(writableDirs);
@@ -280,7 +286,8 @@ public final class SandboxHelpers {
    *     are disallowed, for stricter sandboxing.
    */
   public static void createDirectories(
-      Iterable<PathFragment> dirsToCreate, Path dir, boolean strict) throws IOException {
+      Iterable<PathFragment> dirsToCreate, Path dir, boolean strict)
+      throws IOException, InterruptedException {
     Set<Path> knownDirectories = new HashSet<>();
     // Add sandboxExecRoot and it's parent -- all paths must fall under the parent of
     // sandboxExecRoot and we know that sandboxExecRoot exists. This stops the recursion in
@@ -289,6 +296,9 @@ public final class SandboxHelpers {
     knownDirectories.add(dir.getParentDirectory());
 
     for (PathFragment path : dirsToCreate) {
+      if (Thread.interrupted()) {
+        throw new InterruptedException();
+      }
       if (strict) {
         Preconditions.checkArgument(!path.isAbsolute(), path);
         if (path.containsUplevelReferences() && path.isMultiSegment()) {
@@ -529,9 +539,7 @@ public final class SandboxHelpers {
     }
 
     Map<Root, Path> sandboxRootToSourceRoot = new TreeMap<>();
-    for (Map.Entry<Root, Root> entry : sourceRootToSandboxSourceRoot.entrySet()) {
-      sandboxRootToSourceRoot.put(entry.getValue(), entry.getKey().asPath());
-    }
+    sourceRootToSandboxSourceRoot.forEach((k, v) -> sandboxRootToSourceRoot.put(v, k.asPath()));
 
     return new SandboxInputs(inputFiles, virtualInputs, inputSymlinks, sandboxRootToSourceRoot);
   }
@@ -539,16 +547,27 @@ public final class SandboxHelpers {
   /** The file and directory outputs of a sandboxed spawn. */
   @AutoValue
   public abstract static class SandboxOutputs {
-    public abstract ImmutableSet<PathFragment> files();
 
-    public abstract ImmutableSet<PathFragment> dirs();
+    /** A map from output file exec paths to paths in the sandbox. */
+    public abstract ImmutableMap<PathFragment, PathFragment> files();
+
+    /** A map from output directory exec paths to paths in the sandbox. */
+    public abstract ImmutableMap<PathFragment, PathFragment> dirs();
 
     private static final SandboxOutputs EMPTY_OUTPUTS =
-        SandboxOutputs.create(ImmutableSet.of(), ImmutableSet.of());
+        SandboxOutputs.create(ImmutableMap.of(), ImmutableMap.of());
+
+    public static SandboxOutputs create(
+        ImmutableMap<PathFragment, PathFragment> files,
+        ImmutableMap<PathFragment, PathFragment> dirs) {
+      return new AutoValue_SandboxHelpers_SandboxOutputs(files, dirs);
+    }
 
     public static SandboxOutputs create(
         ImmutableSet<PathFragment> files, ImmutableSet<PathFragment> dirs) {
-      return new AutoValue_SandboxHelpers_SandboxOutputs(files, dirs);
+      return new AutoValue_SandboxHelpers_SandboxOutputs(
+          files.stream().collect(toImmutableMap(f -> f, f -> f)),
+          dirs.stream().collect(toImmutableMap(d -> d, d -> d)));
     }
 
     public static SandboxOutputs getEmptyInstance() {
@@ -557,14 +576,14 @@ public final class SandboxHelpers {
   }
 
   public SandboxOutputs getOutputs(Spawn spawn) {
-    ImmutableSet.Builder<PathFragment> files = ImmutableSet.builder();
-    ImmutableSet.Builder<PathFragment> dirs = ImmutableSet.builder();
+    ImmutableMap.Builder<PathFragment, PathFragment> files = ImmutableMap.builder();
+    ImmutableMap.Builder<PathFragment, PathFragment> dirs = ImmutableMap.builder();
     for (ActionInput output : spawn.getOutputFiles()) {
-      PathFragment path = PathFragment.create(output.getExecPathString());
+      PathFragment mappedPath = spawn.getPathMapper().map(output.getExecPath());
       if (output instanceof Artifact && ((Artifact) output).isTreeArtifact()) {
-        dirs.add(path);
+        dirs.put(output.getExecPath(), mappedPath);
       } else {
-        files.add(path);
+        files.put(output.getExecPath(), mappedPath);
       }
     }
     return SandboxOutputs.create(files.build(), dirs.build());

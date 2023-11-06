@@ -14,6 +14,7 @@
 package com.google.devtools.build.lib.skyframe.actiongraph.v2;
 
 import static com.google.devtools.build.lib.skyframe.actiongraph.v2.AqueryOutputHandler.OutputType.BINARY;
+import static com.google.devtools.build.lib.skyframe.actiongraph.v2.AqueryOutputHandler.OutputType.DELIMITED_BINARY;
 import static com.google.devtools.build.lib.skyframe.actiongraph.v2.AqueryOutputHandler.OutputType.TEXT;
 
 import com.google.common.base.Preconditions;
@@ -27,33 +28,42 @@ import com.google.devtools.build.lib.analysis.AnalysisProtosV2.PathFragment;
 import com.google.devtools.build.lib.analysis.AnalysisProtosV2.RuleClass;
 import com.google.devtools.build.lib.analysis.AnalysisProtosV2.Target;
 import com.google.devtools.build.lib.skyframe.actiongraph.v2.PrintTask.ProtoPrintTask;
+import com.google.devtools.build.lib.skyframe.actiongraph.v2.PrintTask.StreamedProtoPrintTask;
 import com.google.devtools.build.lib.skyframe.actiongraph.v2.PrintTask.TextProtoPrintTask;
 import com.google.protobuf.CodedOutputStream;
 import com.google.protobuf.Message;
 import java.io.IOException;
+import java.io.OutputStream;
 import java.io.PrintStream;
+import java.util.ArrayList;
 import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.Callable;
 
 /** Manages the various streamed output channels of aquery. This does not support JSON format. */
 public class StreamedConsumingOutputHandler implements AqueryConsumingOutputHandler {
 
   public static final PrintTask POISON_PILL = ProtoPrintTask.create(null, 0);
   private final OutputType outputType;
-  private final CodedOutputStream outputStream;
+  private final OutputStream outputStream;
+  private final CodedOutputStream codedOutputStream;
   private final PrintStream printStream;
 
+  private final Object exitLock = new Object();
+  private volatile boolean readyToExit = false;
   private final BlockingQueue<PrintTask> queue;
 
   public StreamedConsumingOutputHandler(
       OutputType outputType,
-      CodedOutputStream outputStream,
+      OutputStream outputStream,
+      CodedOutputStream codedOutputStream,
       PrintStream printStream,
       BlockingQueue<PrintTask> queue) {
     this.outputType = outputType;
     Preconditions.checkArgument(
-        outputType == BINARY || outputType == TEXT,
-        "Only proto and textproto outputs should be streamed.");
+        outputType == BINARY || outputType == DELIMITED_BINARY || outputType == TEXT,
+        "Only proto, streamed_proto and textproto outputs should be streamed.");
     this.outputStream = outputStream;
+    this.codedOutputStream = codedOutputStream;
     this.printStream = printStream;
     this.queue = queue;
   }
@@ -100,22 +110,47 @@ public class StreamedConsumingOutputHandler implements AqueryConsumingOutputHand
   }
 
   @Override
-  public void startConsumer() {
-    new Thread(new AqueryOutputTaskConsumer(queue)).start();
+  public Callable<Void> startConsumer() {
+    return new AqueryOutputTaskConsumer(queue);
   }
 
   @Override
-  public void stopConsumer() throws InterruptedException {
-    queue.put(POISON_PILL);
+  public void stopConsumer(boolean discardRemainingTasks) throws InterruptedException {
+    if (discardRemainingTasks) {
+      queue.drainTo(new ArrayList<>());
+    }
+    // This lock ensures that the method actually waits until the consumer properly exits,
+    // which prevents a race condition with the #close() method below.
+    synchronized (exitLock) {
+      queue.put(POISON_PILL);
+      while (!readyToExit) {
+        exitLock.wait();
+      }
+    }
   }
 
   /** Construct the printing task and put it in the queue. */
   void addTaskToQueue(Message message, int fieldNumber, String messageLabel) {
+    // This means that there was an exception in the consumer.
+    if (readyToExit) {
+      return;
+    }
+    PrintTask task;
+    switch (outputType) {
+      case BINARY:
+        task = ProtoPrintTask.create(message, fieldNumber);
+        break;
+      case DELIMITED_BINARY:
+        task = StreamedProtoPrintTask.create(message, fieldNumber);
+        break;
+      case TEXT:
+        task = TextProtoPrintTask.create(message, messageLabel);
+        break;
+      default:
+        throw new IllegalStateException("Unknown outputType: " + outputType);
+    }
     try {
-      queue.put(
-          outputType == BINARY
-              ? ProtoPrintTask.create(message, fieldNumber)
-              : TextProtoPrintTask.create(message, messageLabel));
+      queue.put(task);
     } catch (InterruptedException e) {
       Thread.currentThread().interrupt();
     }
@@ -123,11 +158,23 @@ public class StreamedConsumingOutputHandler implements AqueryConsumingOutputHand
 
   @Override
   public void close() throws IOException {
-    outputStream.flush();
-    printStream.flush();
+    switch (outputType) {
+      case BINARY:
+        codedOutputStream.flush();
+        break;
+      case DELIMITED_BINARY:
+        outputStream.flush();
+        break;
+      case TEXT:
+        printStream.flush();
+        break;
+      default:
+        throw new IllegalStateException("Unknown outputType: " + outputType);
+    }
   }
 
-  private class AqueryOutputTaskConsumer implements Runnable {
+  // Only runs on 1 single thread.
+  private class AqueryOutputTaskConsumer implements Callable<Void> {
     private final BlockingQueue<PrintTask> queue;
 
     AqueryOutputTaskConsumer(BlockingQueue<PrintTask> queue) {
@@ -135,35 +182,35 @@ public class StreamedConsumingOutputHandler implements AqueryConsumingOutputHand
     }
 
     @Override
-    public void run() {
+    public Void call() throws InterruptedException, IOException {
       try {
         while (true) {
           PrintTask nextTask = queue.take();
 
           if (nextTask.equals(POISON_PILL)) {
-            return;
+            synchronized (exitLock) {
+              readyToExit = true;
+              exitLock.notify();
+            }
+            return null;
           }
           switch (outputType) {
             case BINARY:
-              ProtoPrintTask protoPrintTask = (ProtoPrintTask) nextTask;
-              outputStream.writeMessage(protoPrintTask.fieldNumber(), protoPrintTask.message());
+              ProtoPrintTask.print(codedOutputStream, (ProtoPrintTask) nextTask);
+              break;
+            case DELIMITED_BINARY:
+              StreamedProtoPrintTask.print(outputStream, (StreamedProtoPrintTask) nextTask);
               break;
             case TEXT:
-              TextProtoPrintTask textProtoPrintTask = (TextProtoPrintTask) nextTask;
-              printStream.print(
-                  textProtoPrintTask.messageLabel()
-                      + " {\n"
-                      + textProtoPrintTask.message()
-                      + "}\n");
+              TextProtoPrintTask.print(printStream, (TextProtoPrintTask) nextTask);
               break;
             default:
               throw new IllegalStateException("Unknown outputType " + outputType.formatName());
           }
         }
-      } catch (InterruptedException e) {
-        Thread.currentThread().interrupt();
-      } catch (IOException e) {
-        throw new IllegalStateException("Unexpected exception: ", e);
+      } finally {
+        // In case of an exception.
+        readyToExit = true;
       }
     }
   }

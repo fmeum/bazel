@@ -16,16 +16,21 @@ package com.google.devtools.build.lib.collect.nestedset;
 import com.google.common.base.Preconditions;
 import com.google.common.collect.ImmutableList;
 import com.google.devtools.build.docgen.annot.DocCategory;
+import com.google.devtools.build.docgen.annot.GlobalMethods;
+import com.google.devtools.build.docgen.annot.GlobalMethods.Environment;
 import com.google.devtools.build.lib.concurrent.ThreadSafety.Immutable;
 import com.google.devtools.build.lib.packages.semantics.BuildLanguageOptions;
 import java.util.List;
 import javax.annotation.Nullable;
+import net.starlark.java.annot.Param;
+import net.starlark.java.annot.ParamType;
 import net.starlark.java.annot.StarlarkAnnotations;
 import net.starlark.java.annot.StarlarkBuiltin;
 import net.starlark.java.annot.StarlarkMethod;
 import net.starlark.java.eval.Debug;
 import net.starlark.java.eval.Dict;
 import net.starlark.java.eval.EvalException;
+import net.starlark.java.eval.NoneType;
 import net.starlark.java.eval.Printer;
 import net.starlark.java.eval.Sequence;
 import net.starlark.java.eval.Starlark;
@@ -97,7 +102,7 @@ public final class Depset implements StarlarkValue, Debug.ValueWithDebugAttribut
   @Nullable private final Class<?> elemClass;
   private final NestedSet<?> set;
 
-  private Depset(@Nullable Class<?> elemClass, NestedSet<?> set) {
+  Depset(@Nullable Class<?> elemClass, NestedSet<?> set) {
     this.elemClass = elemClass;
     this.set = set;
   }
@@ -138,32 +143,12 @@ public final class Depset implements StarlarkValue, Debug.ValueWithDebugAttribut
   // One way to do that is to disallow constructing StarlarkTypes for classes
   // that would fail Starlark.valid; however remains the problem that
   // Object.class means "any Starlark value" but in fact allows any Java value.
-  //
-  // TODO(adonovan): it is possible to create an empty depset with a elemType (elemClass) other
-  // than EMPTY (null). The union operation will fail if it's combined with another depset of
-  // incompatible elemType.
-  // Options:
-  // - prohibit or ignore a non-EMPTY elemType when passed an empty NestedSet
-  // - continue to allow empty depsets to be distinguished by their nominal elemTypes for
-  //   union purposes, but allow casting them to NestedSet<T> for arbitrary T.
-  // - distinguish them for both union and casting, i.e. replace set.isEmpty() with a check for the
-  // empty type.
   public static <T> Depset of(Class<T> elemClass, NestedSet<T> set) {
+    Preconditions.checkNotNull(elemClass, "elemClass cannot be null");
+    if (set.isEmpty()) {
+      return set.getOrder().emptyDepset();
+    }
     return new Depset(ElementType.getTypeClass(elemClass), set);
-  }
-
-  /**
-   * Returns a Depset that wraps the specified NestedSet.
-   *
-   * <p>This operation is type-safe only if the specified element type is appropriate for every
-   * element of the set.
-   *
-   * <p>@Deprecated Use {@code #of} with the {@code elemClass} instead.
-   */
-  @Deprecated
-  public static <T> Depset of(ElementType elemType, NestedSet<T> set) {
-    Preconditions.checkNotNull(elemType, "element type cannot be null");
-    return new Depset(elemType.cls, set);
   }
 
   /**
@@ -275,14 +260,10 @@ public final class Depset implements StarlarkValue, Debug.ValueWithDebugAttribut
   public static <T> NestedSet<T> noneableCast(Object x, Class<T> type, String what)
       throws EvalException {
     if (x == Starlark.NONE) {
-      @SuppressWarnings("unchecked")
-      NestedSet<T> empty = (NestedSet<T>) EMPTY;
-      return empty;
+      return NestedSetBuilder.emptySet(Order.STABLE_ORDER);
     }
     return cast(x, type, what);
   }
-
-  private static final NestedSet<?> EMPTY = NestedSetBuilder.<Object>emptySet(Order.STABLE_ORDER);
 
   public boolean isEmpty() {
     return set.isEmpty();
@@ -354,7 +335,7 @@ public final class Depset implements StarlarkValue, Debug.ValueWithDebugAttribut
   }
 
   /** Create a Depset from the given direct and transitive components. */
-  static Depset fromDirectAndTransitive(
+  public static Depset fromDirectAndTransitive(
       Order order, List<Object> direct, List<Depset> transitive, boolean strict)
       throws EvalException {
     NestedSetBuilder<Object> builder = new NestedSetBuilder<>(order);
@@ -393,7 +374,19 @@ public final class Depset implements StarlarkValue, Debug.ValueWithDebugAttribut
       }
     }
 
-    return new Depset(type, builder.build());
+    if (builder.isEmpty()) {
+      return builder.getOrder().emptyDepset();
+    }
+    NestedSet<Object> set = builder.build();
+    // If the nested set was optimized to one of the transitive elements, reuse the corresponding
+    // depset.
+    for (Depset x : transitive) {
+      if (x.getSet() == set) {
+        return x;
+      }
+    }
+
+    return new Depset(type, set);
   }
 
   /** An exception thrown when validation fails on the type of elements of a nested set. */
@@ -511,11 +504,8 @@ public final class Depset implements StarlarkValue, Debug.ValueWithDebugAttribut
     }
   }
 
-  /**
-   * Implementation of the build language's depset function, aka
-   * StarlarkLibrary.CommonLibrary.depset.
-   */
-  public static Depset depset(
+  /** Implementation of the {@code depset()} callable. */
+  private static Depset depset(
       String orderString, Object direct, Object transitive, StarlarkSemantics semantics)
       throws EvalException {
     Order order;
@@ -553,5 +543,76 @@ public final class Depset implements StarlarkValue, Debug.ValueWithDebugAttribut
   @Override
   public boolean equals(Object other) {
     return other instanceof Depset && set.equals(((Depset) other).set);
+  }
+
+  /** The user-facing API to the {@code depset} callable. */
+  @GlobalMethods(environment = {Environment.BUILD, Environment.BZL})
+  public static final class DepsetLibrary {
+
+    private DepsetLibrary() {}
+
+    public static final DepsetLibrary INSTANCE = new DepsetLibrary();
+
+    @StarlarkMethod(
+        name = "depset",
+        doc =
+            "Creates a <a href=\"../builtins/depset.html\">depset</a>. The <code>direct</code>"
+                + " parameter is a list of direct elements of the depset, and"
+                + " <code>transitive</code> parameter is a list of depsets whose elements become"
+                + " indirect elements of the created depset. The order in which elements are"
+                + " returned when the depset is converted to a list is specified by the"
+                + " <code>order</code> parameter. See the <a"
+                + " href=\"https://bazel.build/extending/depsets\">Depsets overview</a> for more"
+                + " information.\n" //
+                + "<p>All"
+                + " elements (direct and indirect) of a depset must be of the same type, as"
+                + " obtained by the expression <code>type(x)</code>.\n" //
+                + "<p>Because a hash-based set is used to eliminate duplicates during iteration,"
+                + " all elements of a depset should be hashable. However, this invariant is not"
+                + " currently checked consistently in all constructors. Use the"
+                + " --incompatible_always_check_depset_elements flag to enable consistent"
+                + " checking; this will be the default behavior in future releases;  see <a"
+                + " href='https://github.com/bazelbuild/bazel/issues/10313'>Issue 10313</a>.\n" //
+                + "<p>In addition, elements must currently be immutable, though this restriction"
+                + " will be relaxed in future.\n" //
+                + "<p> The order of the created depset should be <i>compatible</i> with the order"
+                + " of its <code>transitive</code> depsets. <code>\"default\"</code> order is"
+                + " compatible with any other order, all other orders are only compatible with"
+                + " themselves.",
+        parameters = {
+          // TODO(cparsons): Make 'order' keyword-only.
+          @Param(
+              name = "direct",
+              defaultValue = "None",
+              named = true,
+              allowedTypes = {
+                @ParamType(type = Sequence.class),
+                @ParamType(type = NoneType.class),
+              },
+              doc = "A list of <i>direct</i> elements of a depset. "),
+          @Param(
+              name = "order",
+              defaultValue = "\"default\"",
+              doc =
+                  "The traversal strategy for the new depset. See "
+                      + "<a href=\"../builtins/depset.html\">here</a> for the possible values.",
+              named = true),
+          @Param(
+              name = "transitive",
+              named = true,
+              positional = false,
+              allowedTypes = {
+                @ParamType(type = Sequence.class, generic1 = Depset.class),
+                @ParamType(type = NoneType.class),
+              },
+              doc = "A list of depsets whose elements will become indirect elements of the depset.",
+              defaultValue = "None"),
+        },
+        useStarlarkThread = true)
+    public Depset depset(
+        Object direct, String orderString, Object transitive, StarlarkThread thread)
+        throws EvalException {
+      return Depset.depset(orderString, direct, transitive, thread.getSemantics());
+    }
   }
 }

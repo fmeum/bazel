@@ -16,8 +16,7 @@
 
 import os
 import tempfile
-import unittest
-
+from absl.testing import absltest
 from src.test.py.bazel import test_base
 from src.test.py.bazel.bzlmod.test_utils import BazelRegistry
 
@@ -116,7 +115,7 @@ class BazelOverridesTest(test_base.TestBase):
             ')',
         ],
     )
-    _, stdout, _ = self.RunBazel(['run', '//:main'], allow_failure=False)
+    _, stdout, _ = self.RunBazel(['run', '//:main'])
     self.assertIn('main function => aaa@1.0 (locally patched)', stdout)
     self.assertIn('main function => bbb@1.1', stdout)
     self.assertIn('bbb@1.1 => aaa@1.0 (locally patched)', stdout)
@@ -139,7 +138,7 @@ class BazelOverridesTest(test_base.TestBase):
             ')',
         ],
     )
-    _, stdout, _ = self.RunBazel(['run', '//:main'], allow_failure=False)
+    _, stdout, _ = self.RunBazel(['run', '//:main'])
     self.assertIn('main function => aaa@1.0 from another registry', stdout)
     self.assertIn('main function => bbb@1.0', stdout)
     self.assertIn('bbb@1.0 => aaa@1.0 from another registry', stdout)
@@ -160,7 +159,7 @@ class BazelOverridesTest(test_base.TestBase):
             ')',
         ],
     )
-    _, stdout, _ = self.RunBazel(['run', '//:main'], allow_failure=False)
+    _, stdout, _ = self.RunBazel(['run', '//:main'])
     self.assertIn('main function => aaa@1.0 (locally patched)', stdout)
     self.assertIn('main function => bbb@1.1', stdout)
     self.assertIn('bbb@1.1 => aaa@1.0 (locally patched)', stdout)
@@ -168,25 +167,22 @@ class BazelOverridesTest(test_base.TestBase):
   def testGitOverride(self):
     self.writeMainProjectFiles()
     src_aaa_1_0 = self.main_registry.projects.joinpath('aaa', '1.0')
-    self.RunProgram(['git', 'init'], cwd=src_aaa_1_0, allow_failure=False)
+    self.RunProgram(['git', 'init'], cwd=src_aaa_1_0)
     self.RunProgram(
         ['git', 'config', 'user.name', 'tester'],
         cwd=src_aaa_1_0,
-        allow_failure=False,
     )
     self.RunProgram(
         ['git', 'config', 'user.email', 'tester@foo.com'],
         cwd=src_aaa_1_0,
-        allow_failure=False,
     )
-    self.RunProgram(['git', 'add', './'], cwd=src_aaa_1_0, allow_failure=False)
+    self.RunProgram(['git', 'add', './'], cwd=src_aaa_1_0)
     self.RunProgram(
         ['git', 'commit', '-m', 'Initial commit.'],
         cwd=src_aaa_1_0,
-        allow_failure=False,
     )
     _, stdout, _ = self.RunProgram(
-        ['git', 'rev-parse', 'HEAD'], cwd=src_aaa_1_0, allow_failure=False
+        ['git', 'rev-parse', 'HEAD'], cwd=src_aaa_1_0
     )
     commit = stdout[0].strip()
 
@@ -204,7 +200,7 @@ class BazelOverridesTest(test_base.TestBase):
             ')',
         ],
     )
-    _, stdout, _ = self.RunBazel(['run', '//:main'], allow_failure=False)
+    _, stdout, _ = self.RunBazel(['run', '//:main'])
     self.assertIn('main function => aaa@1.0 (locally patched)', stdout)
     self.assertIn('main function => bbb@1.1', stdout)
     self.assertIn('bbb@1.1 => aaa@1.0 (locally patched)', stdout)
@@ -223,7 +219,7 @@ class BazelOverridesTest(test_base.TestBase):
             ')',
         ],
     )
-    _, stdout, _ = self.RunBazel(['run', '//:main'], allow_failure=False)
+    _, stdout, _ = self.RunBazel(['run', '//:main'])
     self.assertIn('main function => aaa@1.0', stdout)
     self.assertIn('main function => bbb@1.1', stdout)
     self.assertIn('bbb@1.1 => aaa@1.0', stdout)
@@ -272,8 +268,7 @@ class BazelOverridesTest(test_base.TestBase):
     self.ScratchFile('bb/WORKSPACE')
 
     _, _, stderr = self.RunBazel(
-        ['build', '@ss//:all', '--override_module', 'ss=' + self.Path('bb')],
-        allow_failure=False,
+        ['build', '@ss//:all', '--override_module', 'ss=' + self.Path('bb')]
     )
     # module file override should be ignored, and bb directory should be used
     self.assertIn(
@@ -315,7 +310,6 @@ class BazelOverridesTest(test_base.TestBase):
             '--enable_bzlmod',
         ],
         cwd=self.Path('aa/cc'),
-        allow_failure=False,
     )
     self.assertIn(
         'Target @ss~override//:choose_me up-to-date (nothing to build)', stderr
@@ -353,7 +347,6 @@ class BazelOverridesTest(test_base.TestBase):
             'ss=%workspace%/bb',
         ],
         cwd=self.Path('aa'),
-        allow_failure=False,
     )
     self.assertIn(
         'Target @ss~override//:choose_me up-to-date (nothing to build)', stderr
@@ -361,4 +354,4 @@ class BazelOverridesTest(test_base.TestBase):
 
 
 if __name__ == '__main__':
-  unittest.main()
+  absltest.main()

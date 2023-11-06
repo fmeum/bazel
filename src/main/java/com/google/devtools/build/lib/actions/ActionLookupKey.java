@@ -13,7 +13,7 @@
 // limitations under the License.
 package com.google.devtools.build.lib.actions;
 
-import com.google.devtools.build.lib.skyframe.BuildConfigurationKey;
+import com.google.devtools.build.lib.skyframe.config.BuildConfigurationKey;
 import com.google.devtools.build.skyframe.CPUHeavySkyKey;
 import com.google.devtools.build.skyframe.SkyKey;
 import javax.annotation.Nullable;
@@ -30,17 +30,16 @@ import javax.annotation.Nullable;
  * are subclasses of {@link ActionLookupKey}. This allows callers to easily find the value key,
  * while remaining agnostic to what action lookup values actually exist.
  */
-public abstract class ActionLookupKey implements ArtifactOwner, CPUHeavySkyKey {
-
+public interface ActionLookupKey extends ArtifactOwner, CPUHeavySkyKey {
   /**
    * Returns the {@link BuildConfigurationKey} for the configuration associated with this key, or
    * {@code null} if this key has no associated configuration.
    */
   @Nullable
-  public abstract BuildConfigurationKey getConfigurationKey();
+  BuildConfigurationKey getConfigurationKey();
 
   /**
-   * Returns {@code true} if this key <em>may</em> own shareable actions, as determined by {@link
+   * Returns {@code true} if the actions <em>may</em> own shareable actions, as determined by {@link
    * ActionLookupData#valueIsShareable}.
    *
    * <p>Returns {@code false} for some non-standard keys such as the build info key and coverage
@@ -50,12 +49,7 @@ public abstract class ActionLookupKey implements ArtifactOwner, CPUHeavySkyKey {
    * to determine whether the individual action can be shared - notably, for a test target,
    * compilation actions are shareable, but test actions are not.
    */
-  public boolean mayOwnShareableActions() {
+  default boolean mayOwnShareableActions() {
     return getLabel() != null;
-  }
-
-  @Override
-  public boolean hasLowFanout() {
-    return false; // May have >10k deps.
   }
 }

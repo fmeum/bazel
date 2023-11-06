@@ -23,9 +23,15 @@ import com.android.tools.r8.CompilationMode;
 import com.android.tools.r8.D8;
 import com.android.tools.r8.D8Command;
 import com.android.tools.r8.DexIndexedConsumer;
+import com.android.tools.r8.Diagnostic;
 import com.android.tools.r8.DiagnosticsHandler;
+import com.android.tools.r8.SyntheticInfoConsumer;
+import com.android.tools.r8.SyntheticInfoConsumerData;
+import com.android.tools.r8.errors.DexFileOverflowDiagnostic;
 import com.android.tools.r8.origin.ArchiveEntryOrigin;
 import com.android.tools.r8.origin.PathOrigin;
+import com.android.tools.r8.references.ClassReference;
+import com.android.tools.r8.utils.StringDiagnostic;
 import com.google.auto.value.AutoValue;
 import com.google.common.cache.Cache;
 import com.google.common.cache.CacheBuilder;
@@ -36,7 +42,6 @@ import com.google.devtools.build.lib.worker.ProtoWorkerMessageProcessor;
 import com.google.devtools.build.lib.worker.WorkRequestHandler;
 import com.google.devtools.common.options.OptionsParsingException;
 import java.io.BufferedOutputStream;
-import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.PrintStream;
@@ -65,10 +70,50 @@ import javax.annotation.Nullable;
  * <p>D8 version of DexBuilder.
  */
 public class CompatDexBuilder {
+
   private static final long ONE_MEG = 1024 * 1024;
+
+  private static class ContextConsumer implements SyntheticInfoConsumer {
+
+    // After compilation this will be non-null iff the compiled class is a D8 synthesized class.
+    ClassReference sythesizedPrimaryClass = null;
+
+    // If the above is non-null then this will be the non-synthesized context class that caused
+    // D8 to synthesize the above class.
+    ClassReference contextOfSynthesizedClass = null;
+
+    @Nullable
+    String getContextMapping() {
+      if (sythesizedPrimaryClass != null) {
+        return sythesizedPrimaryClass.getBinaryName()
+            + ";"
+            + contextOfSynthesizedClass.getBinaryName();
+      }
+      return null;
+    }
+
+    @Override
+    public synchronized void acceptSyntheticInfo(SyntheticInfoConsumerData data) {
+      verify(
+          sythesizedPrimaryClass == null || sythesizedPrimaryClass.equals(data.getSyntheticClass()),
+          "The single input classfile should ensure this has one value.");
+      verify(
+          contextOfSynthesizedClass == null
+              || contextOfSynthesizedClass.equals(data.getSynthesizingContextClass()),
+          "The single input classfile should ensure this has one value.");
+      sythesizedPrimaryClass = data.getSyntheticClass();
+      contextOfSynthesizedClass = data.getSynthesizingContextClass();
+    }
+
+    @Override
+    public void finished() {
+      // Do nothing.
+    }
+  }
 
   private static class DexConsumer implements DexIndexedConsumer {
 
+    final ContextConsumer contextConsumer = new ContextConsumer();
     byte[] bytes;
 
     @Override
@@ -86,6 +131,10 @@ public class CompatDexBuilder {
       this.bytes = byteCode;
     }
 
+    ContextConsumer getContextConsumer() {
+      return contextConsumer;
+    }
+
     @Override
     public void finished(DiagnosticsHandler handler) {
       // Do nothing.
@@ -96,14 +145,7 @@ public class CompatDexBuilder {
       throws IOException, InterruptedException, ExecutionException, OptionsParsingException {
     CompatDexBuilder compatDexBuilder = new CompatDexBuilder();
     if (ImmutableSet.copyOf(args).contains("--persistent_worker")) {
-      ByteArrayOutputStream buf = new ByteArrayOutputStream();
-      PrintStream ps = new PrintStream(buf, true);
-      PrintStream realStdOut = System.out;
       PrintStream realStdErr = System.err;
-
-      // Redirect all stdout and stderr output for logging.
-      System.setOut(ps);
-      System.setErr(ps);
 
       // Set up dexer cache
       Cache<DexingKeyR8, byte[]> dexCache =
@@ -121,37 +163,36 @@ public class CompatDexBuilder {
                   })
               .build();
       try {
+        DexDiagnosticsHandler diagnosticsHandler = new DexDiagnosticsHandler(System.err);
         WorkRequestHandler workerHandler =
             new WorkRequestHandler.WorkRequestHandlerBuilder(
                     new WorkRequestHandler.WorkRequestCallback(
                         (request, pw) ->
                             compatDexBuilder.processRequest(
-                                dexCache, request.getArgumentsList(), pw, buf)),
+                                dexCache, diagnosticsHandler, request.getArgumentsList(), pw)),
                     realStdErr,
-                    new ProtoWorkerMessageProcessor(System.in, realStdOut))
+                    new ProtoWorkerMessageProcessor(System.in, System.out))
                 .setCpuUsageBeforeGc(Duration.ofSeconds(10))
                 .build();
         workerHandler.processRequests();
       } catch (IOException e) {
         realStdErr.println(e.getMessage());
         System.exit(1);
-      } finally {
-        System.setOut(realStdOut);
-        System.setErr(realStdErr);
       }
     } else {
       // Dex cache has no value in non-persistent mode, so pass it as null.
-      compatDexBuilder.dexEntries(/* dexCache= */ null, Arrays.asList(args));
+      compatDexBuilder.dexEntries(
+          /* dexCache= */ null, Arrays.asList(args), new DexDiagnosticsHandler(System.err));
     }
   }
 
   private int processRequest(
       @Nullable Cache<DexingKeyR8, byte[]> dexCache,
+      DiagnosticsHandler diagnosticsHandler,
       List<String> args,
-      PrintWriter pw,
-      ByteArrayOutputStream buf) {
+      PrintWriter pw) {
     try {
-      dexEntries(dexCache, args);
+      dexEntries(dexCache, args, diagnosticsHandler);
       return 0;
     } catch (OptionsParsingException e) {
       pw.println("CompatDexBuilder raised OptionsParsingException: " + e.getMessage());
@@ -159,18 +200,14 @@ public class CompatDexBuilder {
     } catch (IOException | InterruptedException | ExecutionException e) {
       e.printStackTrace();
       return 1;
-    } finally {
-      // Write the captured buffer to the work response
-      synchronized (buf) {
-        String captured = buf.toString(UTF_8).trim();
-        buf.reset();
-        pw.print(captured);
-      }
     }
   }
 
   @SuppressWarnings("JdkObsolete")
-  private void dexEntries(@Nullable Cache<DexingKeyR8, byte[]> dexCache, List<String> args)
+  private void dexEntries(
+      @Nullable Cache<DexingKeyR8, byte[]> dexCache,
+      List<String> args,
+      DiagnosticsHandler dexDiagnosticsHandler)
       throws IOException, InterruptedException, ExecutionException, OptionsParsingException {
     List<String> flags = new ArrayList<>();
     String input = null;
@@ -267,12 +304,26 @@ public class CompatDexBuilder {
                           classEntry,
                           compilationMode,
                           minSdkVersion,
-                          executor)));
+                          executor,
+                          dexDiagnosticsHandler)));
         }
+        StringBuilder contextMappingBuilder = new StringBuilder();
         for (int i = 0; i < futures.size(); i++) {
           ZipEntry entry = toDex.get(i);
           DexConsumer consumer = futures.get(i).get();
           ZipUtils.addEntry(entry.getName() + ".dex", consumer.getBytes(), ZipEntry.STORED, out);
+          String mapping = consumer.getContextConsumer().getContextMapping();
+          if (mapping != null) {
+            contextMappingBuilder.append(mapping).append('\n');
+          }
+        }
+        String contextMapping = contextMappingBuilder.toString();
+        if (!contextMapping.isEmpty()) {
+          ZipUtils.addEntry(
+              "META-INF/synthetic-contexts.map",
+              contextMapping.getBytes(UTF_8),
+              ZipEntry.STORED,
+              out);
         }
       }
     } finally {
@@ -286,12 +337,14 @@ public class CompatDexBuilder {
       ZipEntry classEntry,
       CompilationMode mode,
       int minSdkVersion,
-      ExecutorService executor)
+      ExecutorService executor,
+      DiagnosticsHandler dexDiagnosticsHandler)
       throws IOException, CompilationFailedException {
     DexConsumer consumer = new DexConsumer();
-    D8Command.Builder builder = D8Command.builder();
+    D8Command.Builder builder = D8Command.builder(dexDiagnosticsHandler);
     builder
         .setProgramConsumer(consumer)
+        .setSyntheticInfoConsumer(consumer.getContextConsumer())
         .setMode(mode)
         .setMinApiLevel(minSdkVersion)
         .setDisableDesugaring(true)
@@ -341,6 +394,47 @@ public class CompatDexBuilder {
 
     @SuppressWarnings("mutable")
     public abstract byte[] classfileContent();
+  }
+
+  /**
+   * Custom implementation of DiagnosticsHandler that writes the info/warning diagnostics messages
+   * to original System#err stream instead of the WorkerResponse output. This keeps the Bazel
+   * console clean and concise.
+   *
+   * <p>Errors will continue to be written to the work response and can be seen directly in the
+   * console output.
+   */
+  private static class DexDiagnosticsHandler implements DiagnosticsHandler {
+
+    private final PrintStream stream;
+
+    public DexDiagnosticsHandler(PrintStream stream) {
+      this.stream = stream;
+    }
+
+    @Override
+    public void warning(Diagnostic warning) {
+      DiagnosticsHandler.printDiagnosticToStream(warning, "Warning", stream);
+    }
+
+    @Override
+    public void info(Diagnostic info) {
+      DiagnosticsHandler.printDiagnosticToStream(info, "Info", stream);
+    }
+
+    @Override
+    public void error(Diagnostic error) {
+      if (error instanceof DexFileOverflowDiagnostic) {
+        DexFileOverflowDiagnostic overflowDiagnostic = (DexFileOverflowDiagnostic) error;
+        if (!overflowDiagnostic.hasMainDexSpecification()) {
+          DiagnosticsHandler.super.error(
+              new StringDiagnostic(
+                  overflowDiagnostic.getDiagnosticMessage() + ". Try supplying a main-dex list"));
+          return;
+        }
+      }
+      DiagnosticsHandler.super.error(error);
+    }
   }
 }
 

@@ -13,10 +13,13 @@
 // limitations under the License.
 package com.google.devtools.build.lib.remote;
 
+import static com.google.common.base.Preconditions.checkState;
 import static com.google.common.truth.Truth.assertThat;
+import static com.google.common.truth.extensions.proto.ProtoTruth.assertThat;
 import static com.google.common.util.concurrent.Futures.immediateVoidFuture;
 import static com.google.common.util.concurrent.MoreExecutors.directExecutor;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doNothing;
@@ -49,8 +52,6 @@ import com.google.devtools.build.lib.actions.ResourceSet;
 import com.google.devtools.build.lib.actions.SimpleSpawn;
 import com.google.devtools.build.lib.actions.SpawnResult;
 import com.google.devtools.build.lib.actions.SpawnResult.Status;
-import com.google.devtools.build.lib.actions.cache.MetadataInjector;
-import com.google.devtools.build.lib.actions.util.ActionsTestUtil;
 import com.google.devtools.build.lib.clock.JavaClock;
 import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
 import com.google.devtools.build.lib.collect.nestedset.Order;
@@ -104,6 +105,9 @@ import org.mockito.stubbing.Answer;
 /** Tests for {@link RemoteSpawnCache}. */
 @RunWith(JUnit4.class)
 public class RemoteSpawnCacheTest {
+  private static final RemoteOutputChecker DUMMY_REMOTE_OUTPUT_CHECKER =
+      new RemoteOutputChecker(
+          new JavaClock(), "build", RemoteOutputsMode.MINIMAL, ImmutableList.of());
   private static final ArtifactExpander SIMPLE_ARTIFACT_EXPANDER =
       (artifact, output) -> output.add(artifact);
 
@@ -127,9 +131,23 @@ public class RemoteSpawnCacheTest {
 
   private final SpawnExecutionContext simplePolicy =
       new SpawnExecutionContext() {
+        @Nullable private com.google.devtools.build.lib.exec.Protos.Digest digest;
+
         @Override
         public int getId() {
           return 0;
+        }
+
+        @Override
+        public void setDigest(com.google.devtools.build.lib.exec.Protos.Digest digest) {
+          checkState(this.digest == null);
+          this.digest = digest;
+        }
+
+        @Override
+        @Nullable
+        public com.google.devtools.build.lib.exec.Protos.Digest getDigest() {
+          return digest;
         }
 
         @Override
@@ -189,11 +207,6 @@ public class RemoteSpawnCacheTest {
         }
 
         @Override
-        public MetadataInjector getMetadataInjector() {
-          return ActionsTestUtil.THROWING_METADATA_HANDLER;
-        }
-
-        @Override
         public boolean isRewindingEnabled() {
           return false;
         }
@@ -236,7 +249,7 @@ public class RemoteSpawnCacheTest {
             new RemoteExecutionService(
                 directExecutor(),
                 reporter,
-                /*verboseFailures=*/ true,
+                /* verboseFailures= */ true,
                 execRoot,
                 remotePathResolver,
                 BUILD_REQUEST_ID,
@@ -246,8 +259,10 @@ public class RemoteSpawnCacheTest {
                 remoteCache,
                 null,
                 tempPathGenerator,
-                /* captureCorruptedOutputsDir= */ null));
-    return new RemoteSpawnCache(execRoot, options, /* verboseFailures=*/ true, service);
+                /* captureCorruptedOutputsDir= */ null,
+                DUMMY_REMOTE_OUTPUT_CHECKER));
+    return new RemoteSpawnCache(
+        execRoot, options, /* verboseFailures= */ true, service, digestUtil);
   }
 
   @Before
@@ -318,15 +333,14 @@ public class RemoteSpawnCacheTest {
 
     // assert
     // All other methods on RemoteActionCache have side effects, so we verify all of them.
+    assertThat(simplePolicy.getDigest())
+        .isEqualTo(digestUtil.asSpawnLogProto(actionKeyCaptor.getValue()));
     verify(service)
         .downloadOutputs(
             any(), eq(RemoteActionResult.createFromCache(CachedActionResult.remote(actionResult))));
     verify(service, never()).uploadOutputs(any(), any());
     assertThat(result.getDigest())
-        .isEqualTo(
-            SpawnResult.Digest.of(
-                actionKeyCaptor.getValue().getDigest().getHash(),
-                actionKeyCaptor.getValue().getDigest().getSizeBytes()));
+        .isEqualTo(digestUtil.asSpawnLogProto(actionKeyCaptor.getValue()));
     assertThat(result.setupSuccess()).isTrue();
     assertThat(result.exitCode()).isEqualTo(0);
     assertThat(result.isCacheHit()).isTrue();
@@ -340,7 +354,15 @@ public class RemoteSpawnCacheTest {
   public void cacheMiss() throws Exception {
     RemoteSpawnCache cache = createRemoteSpawnCache();
     RemoteExecutionService service = cache.getRemoteExecutionService();
+    ArgumentCaptor<ActionKey> actionKeyCaptor = ArgumentCaptor.forClass(ActionKey.class);
+    when(remoteCache.downloadActionResult(
+            any(RemoteActionExecutionContext.class), actionKeyCaptor.capture(), anyBoolean()))
+        .thenReturn(null);
+
     CacheHandle entry = cache.lookup(simpleSpawn, simplePolicy);
+
+    assertThat(simplePolicy.getDigest())
+        .isEqualTo(digestUtil.asSpawnLogProto(actionKeyCaptor.getValue()));
     assertThat(entry.hasResult()).isFalse();
     SpawnResult result =
         new SpawnResult.Builder()
@@ -369,6 +391,7 @@ public class RemoteSpawnCacheTest {
             simpleSpawnWithExecutionInfo(ImmutableMap.of(requirement, ""));
         CacheHandle entry = remoteSpawnCache.lookup(uncacheableSpawn, simplePolicy);
         verify(remoteSpawnCache.getRemoteExecutionService(), never()).lookupCache(any());
+        assertThat(simplePolicy.getDigest()).isNull();
         assertThat(entry.hasResult()).isFalse();
         SpawnResult result =
             new SpawnResult.Builder()
@@ -391,7 +414,6 @@ public class RemoteSpawnCacheTest {
     RemoteOptions remoteCacheOptions = Options.getDefaults(RemoteOptions.class);
     remoteCacheOptions.remoteCache = "https://somecache.com";
     RemoteSpawnCache remoteSpawnCache = remoteSpawnCacheWithOptions(remoteCacheOptions);
-
     for (String requirement :
         ImmutableList.of(
             ExecutionRequirements.NO_CACHE,
@@ -402,9 +424,8 @@ public class RemoteSpawnCacheTest {
       CacheHandle entry = remoteSpawnCache.lookup(uncacheableSpawn, simplePolicy);
       verify(remoteCache, never())
           .downloadActionResult(
-              any(RemoteActionExecutionContext.class),
-              any(ActionKey.class),
-              /* inlineOutErr= */ eq(false));
+              any(RemoteActionExecutionContext.class), any(ActionKey.class), anyBoolean());
+      assertThat(simplePolicy.getDigest()).isNull();
       assertThat(entry.hasResult()).isFalse();
       SpawnResult result =
           new SpawnResult.Builder()
@@ -438,6 +459,7 @@ public class RemoteSpawnCacheTest {
               any(RemoteActionExecutionContext.class),
               any(ActionKey.class),
               /* inlineOutErr= */ eq(false));
+      assertThat(simplePolicy.getDigest()).isNull();
       assertThat(entry.hasResult()).isFalse();
       SpawnResult result =
           new SpawnResult.Builder()
@@ -456,10 +478,17 @@ public class RemoteSpawnCacheTest {
     RemoteOptions remoteOptions = Options.getDefaults(RemoteOptions.class);
     remoteOptions.diskCache = PathFragment.create("/etc/something/cache/here");
     RemoteSpawnCache cache = remoteSpawnCacheWithOptions(remoteOptions);
-
+    ArgumentCaptor<ActionKey> actionKeyCaptor = ArgumentCaptor.forClass(ActionKey.class);
+    when(remoteCache.downloadActionResult(
+            any(RemoteActionExecutionContext.class), actionKeyCaptor.capture(), anyBoolean()))
+        .thenReturn(null);
     SimpleSpawn cacheableSpawn =
         simpleSpawnWithExecutionInfo(ImmutableMap.of(ExecutionRequirements.NO_REMOTE_CACHE, ""));
+
     cache.lookup(cacheableSpawn, simplePolicy);
+
+    assertThat(simplePolicy.getDigest())
+        .isEqualTo(digestUtil.asSpawnLogProto(actionKeyCaptor.getValue()));
     verify(remoteCache)
         .downloadActionResult(
             any(RemoteActionExecutionContext.class),
@@ -472,7 +501,15 @@ public class RemoteSpawnCacheTest {
     RemoteSpawnCache cache = createRemoteSpawnCache();
     SimpleSpawn cacheableSpawn =
         simpleSpawnWithExecutionInfo(ImmutableMap.of(ExecutionRequirements.NO_REMOTE_EXEC, ""));
+    ArgumentCaptor<ActionKey> actionKeyCaptor = ArgumentCaptor.forClass(ActionKey.class);
+    when(remoteCache.downloadActionResult(
+            any(RemoteActionExecutionContext.class), actionKeyCaptor.capture(), anyBoolean()))
+        .thenReturn(null);
+
     cache.lookup(cacheableSpawn, simplePolicy);
+
+    assertThat(simplePolicy.getDigest())
+        .isEqualTo(digestUtil.asSpawnLogProto(actionKeyCaptor.getValue()));
     verify(remoteCache)
         .downloadActionResult(
             any(RemoteActionExecutionContext.class),

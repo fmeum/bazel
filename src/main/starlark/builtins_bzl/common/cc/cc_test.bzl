@@ -15,10 +15,10 @@
 """cc_test Starlark implementation."""
 
 load(":common/cc/cc_binary.bzl", "cc_binary_impl")
-load(":common/paths.bzl", "paths")
 load(":common/cc/cc_binary_attrs.bzl", "cc_binary_attrs_with_aspects", "cc_binary_attrs_without_aspects")
 load(":common/cc/cc_helper.bzl", "cc_helper")
 load(":common/cc/semantics.bzl", "semantics")
+load(":common/paths.bzl", "paths")
 
 cc_internal = _builtins.internal.cc_internal
 config_common = _builtins.toplevel.config_common
@@ -77,13 +77,12 @@ def _impl(ctx):
     providers.extend(test_providers)
     return providers
 
-def make_cc_test(with_linkstatic = False, with_aspects = False):
+def make_cc_test(with_aspects = False):
     """Makes one of the cc_test rule variants.
 
     This function shall only be used internally in CC ruleset.
 
     Args:
-      with_linkstatic: sets value _linkstatic_explicitly_set attribute
       with_aspects: Attaches graph_structure_aspect to `deps` attribute and
         implicit deps.
     Returns:
@@ -106,11 +105,6 @@ def make_cc_test(with_linkstatic = False, with_aspects = False):
                 "@" + paths.join(semantics.get_platforms_root(), "os:watchos"),
             ],
         ),
-        _windows_constraints = attr.label_list(
-            default = [
-                "@" + paths.join(semantics.get_platforms_root(), "os:windows"),
-            ],
-        ),
         # Starlark tests don't get `env_inherit` by default.
         env_inherit = attr.string_list(),
         stamp = attr.int(values = [-1, 0, 1], default = 0),
@@ -119,9 +113,6 @@ def make_cc_test(with_linkstatic = False, with_aspects = False):
     _cc_test_attrs.update(semantics.get_test_malloc_attr())
     _cc_test_attrs.update(semantics.get_coverage_attrs())
 
-    _cc_test_attrs.update(
-        _linkstatic_explicitly_set = attr.bool(default = with_linkstatic),
-    )
     return rule(
         implementation = _impl,
         attrs = _cc_test_attrs,
@@ -130,7 +121,7 @@ def make_cc_test(with_linkstatic = False, with_aspects = False):
             "stripped_binary": "%{name}.stripped",
             "dwp_file": "%{name}.dwp",
         },
-        fragments = ["google_cpp", "cpp", "coverage"],
+        fragments = ["cpp", "coverage"] + semantics.additional_fragments(),
         exec_groups = {
             "cpp_link": exec_group(toolchains = cc_helper.use_cpp_toolchain()),
             # testing.ExecutionInfo defaults to an exec_group of "test".
@@ -139,6 +130,5 @@ def make_cc_test(with_linkstatic = False, with_aspects = False):
         toolchains = [] +
                      cc_helper.use_cpp_toolchain() +
                      semantics.get_runtimes_toolchain(),
-        incompatible_use_toolchain_transition = True,
         test = True,
     )

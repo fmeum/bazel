@@ -15,9 +15,9 @@
 """Attributes for cc_binary.
 """
 
-load(":common/cc/semantics.bzl", "semantics")
-load(":common/cc/cc_shared_library.bzl", "CcSharedLibraryInfo", "graph_structure_aspect")
 load(":common/cc/cc_info.bzl", "CcInfo")
+load(":common/cc/cc_shared_library.bzl", "CcSharedLibraryInfo", "graph_structure_aspect")
+load(":common/cc/semantics.bzl", "semantics")
 
 cc_internal = _builtins.internal.cc_internal
 
@@ -70,7 +70,7 @@ cc_binary_attrs_with_aspects = {
         default = configuration_field(fragment = "cpp", name = "custom_malloc"),
         aspects = [graph_structure_aspect],
     ),
-    "_link_extra_lib": attr.label(
+    "link_extra_lib": attr.label(
         default = Label("@" + semantics.get_repo() + "//tools/cpp:link_extra_lib"),
         providers = [CcInfo],
         aspects = [graph_structure_aspect],
@@ -91,15 +91,14 @@ cc_binary_attrs_with_aspects = {
     "licenses": attr.license() if hasattr(attr, "license") else attr.string_list(),
     "_cc_binary": attr.bool(),
     "_is_test": attr.bool(default = False),
-    "_grep_includes": semantics.get_grep_includes(),
     "_stl": semantics.get_stl(),
     "_cc_toolchain": attr.label(default = "@" + semantics.get_repo() + "//tools/cpp:current_cc_toolchain"),
     "_cc_toolchain_type": attr.label(default = "@" + semantics.get_repo() + "//tools/cpp:toolchain_type"),
     "_def_parser": semantics.get_def_parser(),
+    "_use_auto_exec_groups": attr.bool(default = True),
 }
 
 cc_binary_attrs_with_aspects.update(semantics.get_distribs_attr())
-cc_binary_attrs_with_aspects.update(semantics.get_loose_mode_in_hdrs_check_allowed_attr())
 
 # Update attributes to contain no aspect implementation.
 cc_binary_attrs_without_aspects = dict(cc_binary_attrs_with_aspects)
@@ -117,6 +116,6 @@ cc_binary_attrs_without_aspects["malloc"] = attr.label(
 cc_binary_attrs_without_aspects["_default_malloc"] = attr.label(
     default = configuration_field(fragment = "cpp", name = "custom_malloc"),
 )
-cc_binary_attrs_without_aspects["_link_extra_lib"] = attr.label(
+cc_binary_attrs_without_aspects["link_extra_lib"] = attr.label(
     default = Label("@" + semantics.get_repo() + "//tools/cpp:link_extra_lib"),
 )

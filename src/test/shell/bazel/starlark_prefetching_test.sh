@@ -54,6 +54,7 @@ EOF
 load("//:rule.bzl", "myrule")
 myrule(name="ext", build_file="//:ext.BUILD")
 EOF
+  write_default_lockfile "MODULE.bazel.lock"
   bazel build @ext//:foo || fail "expected success"
   [ `cat "${WRKDIR}/log" | wc -l` -eq 1 ] \
       || fail "did not find precisely one invocation of the action"
@@ -82,6 +83,7 @@ EOF
 load("//:rule.bzl", "myrule")
 myrule(name="ext", unused="//does/not/exist:file")
 EOF
+  write_default_lockfile "MODULE.bazel.lock"
   bazel build @ext//:foo || fail "expected success"
 }
 
@@ -119,6 +121,7 @@ EOF
 load("//:rule.bzl", "myrule")
 myrule(name="ext", data = ["//:a.txt", "//:b.txt"])
 EOF
+  write_default_lockfile "MODULE.bazel.lock"
   echo Hello > a.txt
   echo World > b.txt
   bazel build @ext//:foo || fail "expected success"
@@ -151,6 +154,7 @@ load("//:rule.bzl", "myrule")
 myrule(name="ext", unused_list=["//does/not/exist:file1",
                                 "//does/not/exists:file2"])
 EOF
+  write_default_lockfile "MODULE.bazel.lock"
   bazel build @ext//:foo || fail "expected success"
 }
 
@@ -192,6 +196,7 @@ EOF
 load("//:rule.bzl", "myrule")
 myrule(name="ext", data = {"//:a.txt": "a", "//:b.txt": "b"})
 EOF
+  write_default_lockfile "MODULE.bazel.lock"
   echo Hello > a.txt
   echo World > b.txt
   bazel build @ext//:foo || fail "expected success"
@@ -224,7 +229,53 @@ load("//:rule.bzl", "myrule")
 myrule(name="ext", unused_dict={"//does/not/exist:file1": "file1",
                                 "//does/not/exists:file2": "file2"})
 EOF
+  write_default_lockfile "MODULE.bazel.lock"
   bazel build @ext//:foo || fail "expected success"
+}
+
+# Regression test for https://github.com/bazelbuild/bazel/issues/13441
+function test_files_tracked_with_non_existing_files() {
+  cat > rules.bzl <<'EOF'
+def _repo_impl(ctx):
+    ctx.symlink(ctx.path(Label("@//:WORKSPACE")).dirname, "link")
+    print("b.txt: " + ctx.read("link/b.txt"))
+    print("c.txt: " + ctx.read("link/c.txt"))
+
+    ctx.file("BUILD")
+    ctx.file("WORKSPACE")
+
+repo = repository_rule(
+    _repo_impl,
+    attrs = {"_files": attr.label_list(
+        default = [
+            Label("@//:a.txt"),
+            Label("@//:b.txt"),
+            Label("@//:c.txt"),
+        ],
+    )},
+)
+EOF
+
+  cat > WORKSPACE <<'EOF'
+load(":rules.bzl", "repo")
+repo(name = "ext")
+EOF
+  write_default_lockfile "MODULE.bazel.lock"
+  touch BUILD
+
+  # a.txt is intentionally not created
+  echo "bbbb" > b.txt
+  echo "cccc" > c.txt
+
+  # The missing file dependency is tolerated.
+  bazel build @ext//:all &> "$TEST_log" || fail "Expected repository rule to build"
+  expect_log "b.txt: bbbb"
+  expect_log "c.txt: cccc"
+
+  echo "not_cccc" > c.txt
+  bazel build @ext//:all &> "$TEST_log" || fail "Expected repository rule to build"
+  expect_log "b.txt: bbbb"
+  expect_log "c.txt: not_cccc"
 }
 
 run_suite "Starlark repo prefetching tests"

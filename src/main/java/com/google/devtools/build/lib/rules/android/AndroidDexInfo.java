@@ -13,11 +13,14 @@
 // limitations under the License.
 package com.google.devtools.build.lib.rules.android;
 
+import static com.google.devtools.build.lib.rules.android.AndroidStarlarkData.fromNoneable;
+
 import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.concurrent.ThreadSafety.Immutable;
 import com.google.devtools.build.lib.packages.BuiltinProvider;
 import com.google.devtools.build.lib.packages.NativeInfo;
 import com.google.devtools.build.lib.starlarkbuildapi.android.AndroidDexInfoApi;
+import javax.annotation.Nullable;
 import net.starlark.java.eval.EvalException;
 
 /** A provider for Android Dex artifacts */
@@ -29,12 +32,24 @@ public class AndroidDexInfo extends NativeInfo implements AndroidDexInfoApi<Arti
 
   private final Artifact deployJar;
   private final Artifact finalClassesDexZip;
+  private final Artifact filteredDeployJar;
+  private final Artifact finalProguardOutputMap;
   private final Artifact javaResourceJar;
+  private final Artifact shuffledJavaResourceJar;
 
-  public AndroidDexInfo(Artifact deployJar, Artifact finalClassesDexZip, Artifact javaResourceJar) {
+  public AndroidDexInfo(
+      Artifact deployJar,
+      Artifact finalClassesDexZip,
+      Artifact filteredDeployJar,
+      Artifact finalProguardOutputMap,
+      Artifact javaResourceJar,
+      Artifact shuffledJavaResourceJar) {
     this.deployJar = deployJar;
     this.finalClassesDexZip = finalClassesDexZip;
+    this.filteredDeployJar = filteredDeployJar;
+    this.finalProguardOutputMap = finalProguardOutputMap;
     this.javaResourceJar = javaResourceJar;
+    this.shuffledJavaResourceJar = shuffledJavaResourceJar;
   }
 
   @Override
@@ -48,13 +63,33 @@ public class AndroidDexInfo extends NativeInfo implements AndroidDexInfoApi<Arti
   }
 
   @Override
+  @Nullable
   public Artifact getFinalClassesDexZip() {
     return finalClassesDexZip;
   }
 
   @Override
+  @Nullable
   public Artifact getJavaResourceJar() {
     return javaResourceJar;
+  }
+
+  @Override
+  @Nullable
+  public Artifact getFinalProguardOutputMap() {
+    return finalProguardOutputMap;
+  }
+
+  @Override
+  @Nullable
+  public Artifact getFilteredDeployJar() {
+    return filteredDeployJar;
+  }
+
+  @Override
+  @Nullable
+  public Artifact getShuffledJavaResourceJar() {
+    return shuffledJavaResourceJar;
   }
 
   /** Provider for {@link AndroidDexInfo}. */
@@ -71,10 +106,21 @@ public class AndroidDexInfo extends NativeInfo implements AndroidDexInfoApi<Arti
 
     @Override
     public AndroidDexInfo createInfo(
-        Artifact deployJar, Artifact finalClassesDexZip, Artifact javaResourceJar)
+        Artifact deployJar,
+        Object finalClassesDexZip,
+        Object filteredDeployJar,
+        Object finalProguardOutputMap,
+        Object javaResourceJar,
+        Object shuffledJavaResourceJar)
         throws EvalException {
 
-      return new AndroidDexInfo(deployJar, finalClassesDexZip, javaResourceJar);
+      return new AndroidDexInfo(
+          deployJar,
+          fromNoneable(finalClassesDexZip, Artifact.class),
+          fromNoneable(filteredDeployJar, Artifact.class),
+          fromNoneable(finalProguardOutputMap, Artifact.class),
+          fromNoneable(javaResourceJar, Artifact.class),
+          fromNoneable(shuffledJavaResourceJar, Artifact.class));
     }
   }
 }

@@ -20,6 +20,7 @@ def _preprocess(ctx):
     pass
 
 semantics = struct(
+    PROTO_TOOLCHAIN = "@rules_proto//proto:toolchain_type",
     PROTO_COMPILER_LABEL = "@bazel_tools//tools/proto:protoc",
     EXTRA_ATTRIBUTES = {
         "import_prefix": attr.string(),
@@ -37,4 +38,5 @@ semantics = struct(
         "%%s is imported, but %s doesn't directly depend on a proto_library that 'srcs' it."
     ),
     EXEC_GROUPS = {},
+    allowlist_different_package = None,
 )

@@ -59,9 +59,12 @@ public class BuildEventStreamOptions extends OptionsBase {
       name = "build_event_json_file",
       oldName = "experimental_build_event_json_file",
       defaultValue = "",
+      implicitRequirements = {"--bes_upload_mode=wait_for_upload_complete"},
       documentationCategory = OptionDocumentationCategory.LOGGING,
       effectTags = {OptionEffectTag.AFFECTS_OUTPUTS},
-      help = "If non-empty, write a JSON serialisation of the build event protocol to that file.")
+      help =
+          "If non-empty, write a JSON serialisation of the build event protocol to that file."
+              + " This option implies --bes_upload_mode=wait_for_upload_complete.")
   public String buildEventJsonFile;
 
   @Option(
@@ -108,7 +111,7 @@ public class BuildEventStreamOptions extends OptionsBase {
 
   @Option(
       name = "build_event_max_named_set_of_file_entries",
-      defaultValue = "-1",
+      defaultValue = "5000",
       documentationCategory = OptionDocumentationCategory.LOGGING,
       effectTags = {OptionEffectTag.AFFECTS_OUTPUTS},
       help =

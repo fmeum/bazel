@@ -268,7 +268,7 @@ To define some toolchains for a given toolchain type, you need three things:
    suite for different platforms.
 
 3. For each such target, an associated target of the generic
-  [`toolchain`](/reference/be/platform#toolchain)
+  [`toolchain`](/reference/be/platforms-and-toolchains#toolchain)
    rule, to provide metadata used by the toolchain framework. This `toolchain`
    target also refers to the `toolchain_type` associated with this toolchain.
    This means that a given `_toolchain` rule could be associated with any
@@ -440,8 +440,18 @@ register_toolchains(
     "//bar_tools:barc_windows_toolchain",
     # Target patterns are also permitted, so you could have also written:
     # "//bar_tools:all",
+    # or even
+    # "//bar_tools/...",
 )
 ```
+
+When using target patterns to register toolchains, the order in which the
+individual toolchains are registered is determined by the following rules:
+
+* The toolchains defined in a subpackage of a package are registered before the
+  toolchains defined in the package itself.
+* Within a package, toolchains are registered in the lexicographical order of
+  their names.
 
 Now when you build a target that depends on a toolchain type, an appropriate
 toolchain will be selected based on the target and execution platforms.
@@ -478,10 +488,10 @@ Note: [Some Bazel rules](/concepts/platforms#status) do not yet support
 toolchain resolution.
 
 For each target that uses toolchains, Bazel's toolchain resolution procedure
-determines the target's concrete toolchain dependencies. The procedure takes as input a
-set of required toolchain types, the target platform, the list of available
-execution platforms, and the list of available toolchains. Its outputs are a
-selected toolchain for each toolchain type as well as a selected execution
+determines the target's concrete toolchain dependencies. The procedure takes as
+input a set of required toolchain types, the target platform, the list of
+available execution platforms, and the list of available toolchains. Its outputs
+are a selected toolchain for each toolchain type as well as a selected execution
 platform for the current target.
 
 The available execution platforms and toolchains are gathered from the
@@ -513,6 +523,9 @@ The resolution steps are as follows.
    [`exec_compatible_with` argument](/rules/lib/globals/bzl#rule.exec_compatible_with)),
    the list of available execution platforms is filtered to remove
    any that do not match the execution constraints.
+
+1. The list of available toolchains is filtered to remove any toolchains
+   specifying `target_settings` that don't match the current configuration.
 
 1. For each available execution platform, you associate each toolchain type with
    the first available toolchain, if any, that is compatible with this execution

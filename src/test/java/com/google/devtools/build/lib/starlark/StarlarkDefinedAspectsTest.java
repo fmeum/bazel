@@ -14,6 +14,7 @@
 package com.google.devtools.build.lib.starlark;
 
 import static com.google.common.collect.ImmutableList.toImmutableList;
+import static com.google.common.collect.Streams.stream;
 import static com.google.common.truth.Truth.assertThat;
 import static com.google.common.truth.Truth.assertWithMessage;
 import static com.google.common.truth.Truth8.assertThat;
@@ -51,6 +52,7 @@ import com.google.devtools.build.lib.server.FailureDetails.Analysis;
 import com.google.devtools.build.lib.server.FailureDetails.Analysis.Code;
 import com.google.devtools.build.lib.server.FailureDetails.FailureDetail;
 import com.google.devtools.build.lib.skyframe.AspectKeyCreator.AspectKey;
+import com.google.devtools.build.lib.skyframe.ConfiguredTargetKey;
 import com.google.devtools.build.lib.testutil.TestRuleClassProvider;
 import com.google.devtools.build.lib.vfs.FileSystemUtils;
 import com.google.devtools.build.lib.vfs.Path;
@@ -300,7 +302,9 @@ public class StarlarkDefinedAspectsTest extends AnalysisTestCase {
 
   @Test
   public void aspectsPropagatingForDefaultAndImplicit() throws Exception {
-    useConfiguration("--experimental_builtins_injection_override=+cc_library");
+    useConfiguration(
+        "--experimental_builtins_injection_override=+cc_library",
+        "--incompatible_enable_cc_toolchain_resolution");
     scratch.file(
         "test/aspect.bzl",
         "def _impl(target, ctx):",
@@ -351,8 +355,8 @@ public class StarlarkDefinedAspectsTest extends AnalysisTestCase {
                 }));
 
     assertThat(names).containsAtLeast("xxx", "yyy");
-    // 3-4 is the C++ toolchain and alias; its name changes between Blaze and Bazel.
-    assertThat(names).hasSize(4);
+    // 3rd is the C++ toolchain; its name changes between Blaze and Bazel.
+    assertThat(names).hasSize(3);
   }
 
   @Test
@@ -878,6 +882,65 @@ public class StarlarkDefinedAspectsTest extends AnalysisTestCase {
     String result = (String) configuredAspect.get("result");
 
     assertThat(result).isEqualTo("simple/afile");
+  }
+
+  @Test
+  public void expandLocationFailsForTargetsWithSameLabel() throws Exception {
+    scratch.overwriteFile(
+        "tools/allowlists/function_transition_allowlist/BUILD",
+        "package_group(",
+        "    name = 'function_transition_allowlist',",
+        "    packages = [",
+        "        '//a/...',",
+        "    ],",
+        ")");
+    scratch.file(
+        "a/defs.bzl",
+        "def _transition_impl(settings, attr):",
+        "    return {",
+        "        'opt': {'//command_line_option:compilation_mode': 'opt'},",
+        "        'dbg': {'//command_line_option:compilation_mode': 'dbg'},",
+        "    }",
+        "split_transition = transition(",
+        "    implementation = _transition_impl,",
+        "    inputs = [],",
+        "    outputs = ['//command_line_option:compilation_mode'])",
+        "def _split_deps_rule_impl(ctx):",
+        "    pass",
+        "split_deps_rule = rule(",
+        "    implementation = _split_deps_rule_impl,",
+        "    attrs = {",
+        "        'my_dep': attr.label(cfg = split_transition),",
+        "        '_allowlist_function_transition': attr.label(",
+        "            default = '//tools/allowlists/function_transition_allowlist')",
+        "    })",
+        "",
+        "def _print_expanded_location_impl(target, ctx):",
+        "    return struct(result=ctx.expand_location('$(location //a:lib)',"
+            + " [ctx.rule.attr.my_dep[0], ctx.rule.attr.my_dep[1]]))",
+        "",
+        "print_expanded_location = aspect(",
+        "    implementation = _print_expanded_location_impl,",
+        ")");
+    scratch.file(
+        "a/BUILD",
+        "load('//a:defs.bzl', 'split_deps_rule')",
+        "cc_library(name = 'lib', srcs = ['lib.cc'])",
+        "split_deps_rule(",
+        "    name = 'a',",
+        "    my_dep = ':lib')");
+
+    reporter.removeHandler(failFastHandler);
+
+    try {
+      AnalysisResult analysisResult =
+          update(ImmutableList.of("//a:defs.bzl%print_expanded_location"), "//a");
+      assertThat(keepGoing()).isTrue();
+      assertThat(analysisResult.hasError()).isTrue();
+    } catch (ViewCreationFailedException e) {
+      // expect to fail.
+    }
+    assertContainsEvent("Label \"//a:lib\" is found more than once in 'targets' list.");
   }
 
   @Test
@@ -8606,6 +8669,98 @@ public class StarlarkDefinedAspectsTest extends AnalysisTestCase {
             "aspect a on @//test:t4 sees b_provider = aspect b cannot see c_provider");
   }
 
+  @Test
+  public void testAspectWithSameExplicitAttributeNameAsUnderlyingTarget() throws Exception {
+    scratch.file(
+        "test/defs.bzl",
+        "def _a_impl(target, ctx):",
+        "  value = 'x from aspect = {}, x from target = {}'.format(ctx.attr.x, ctx.rule.attr.x)",
+        "  return struct(aspect_result = value)",
+        "a = aspect(",
+        "  implementation = _a_impl,",
+        "  attrs = {",
+        "    'x': attr.string(default = 'xyz')",
+        "  },",
+        ")",
+        "",
+        "def _rule_impl(ctx):",
+        "  pass",
+        "r1 = rule(",
+        "  implementation = _rule_impl,",
+        "  attrs = {",
+        "    'x': attr.int(default = 4)",
+        "  },",
+        ")");
+    scratch.file("test/BUILD", "load('//test:defs.bzl', 'r1')", "r1(name = 't1')");
+
+    AnalysisResult analysisResult = update(ImmutableList.of("//test:defs.bzl%a"), "//test:t1");
+
+    ImmutableMap<AspectKey, ConfiguredAspect> configuredAspects = analysisResult.getAspectsMap();
+    ConfiguredAspect aspectA = getConfiguredAspect(configuredAspects, "a");
+    assertThat(aspectA).isNotNull();
+    String aspectAResult = (String) aspectA.get("aspect_result");
+    assertThat(aspectAResult).isEqualTo("x from aspect = xyz, x from target = 4");
+  }
+
+  @Test
+  public void testAspectNotDependOnTargetDeps() throws Exception {
+    scratch.file(
+        "test/defs.bzl",
+        "def _a_impl(target, ctx):",
+        "  return []",
+        "a = aspect(",
+        "  implementation = _a_impl,",
+        "  attr_aspects = ['dep'],",
+        "  attrs = {",
+        "    '_tool': attr.label(default = '//test:tool'),",
+        "  },",
+        ")",
+        "",
+        "def _rule_impl(ctx):",
+        "  pass",
+        "r1 = rule(",
+        "  implementation = _rule_impl,",
+        "  attrs = {",
+        "    'dep': attr.label(),",
+        "    'another_dep': attr.label(),",
+        "    '_tool': attr.label(default = '//test:tool'),",
+        "  },",
+        ")");
+    scratch.file(
+        "test/BUILD",
+        "load('//test:defs.bzl', 'r1')",
+        "r1(name = 't1', dep = ':t2', another_dep = 't4')",
+        "r1(name = 't2', dep = ':t3')",
+        "r1(name = 't3')",
+        "r1(name = 't4')",
+        "sh_library(name = 'tool')");
+
+    AnalysisResult analysisResult = update(ImmutableList.of("//test:defs.bzl%a"), "//test:t1");
+
+    AspectKey key = Iterables.getOnlyElement(analysisResult.getAspectsMap().keySet());
+    var aspectNode =
+        skyframeExecutor.getEvaluator().getInMemoryGraph().getAllNodeEntries().stream()
+            .filter(n -> n.getKey().equals(key))
+            .findFirst()
+            .orElse(null);
+    assertThat(aspectNode).isNotNull();
+
+    ImmutableList<String> configuredTargetsDeps =
+        stream(Iterables.filter(aspectNode.getDirectDeps(), ConfiguredTargetKey.class))
+            .map(k -> k.getLabel().toString())
+            .collect(toImmutableList());
+    // aspect depends only on its target and its implicit dependencies not the dependencies of its
+    // target
+    assertThat(configuredTargetsDeps).containsExactly("//test:tool", "//test:t1");
+
+    ImmutableList<String> aspectsDeps =
+        stream(Iterables.filter(aspectNode.getDirectDeps(), AspectKey.class))
+            .map(k -> k.getLabel().toString())
+            .collect(toImmutableList());
+    // aspect depends on the result of its application on the target deps if it propagates to them
+    assertThat(aspectsDeps).containsExactly("//test:t2");
+  }
+
   private ImmutableList<AspectKey> getAspectKeys(String targetLabel, String aspectLabel) {
     return skyframeExecutor.getEvaluator().getDoneValues().entrySet().stream()
         .filter(
@@ -8649,9 +8804,9 @@ public class StarlarkDefinedAspectsTest extends AnalysisTestCase {
   private void exposeNativeAspectToStarlark() throws Exception {
     ConfiguredRuleClassProvider.Builder builder = new ConfiguredRuleClassProvider.Builder();
     TestRuleClassProvider.addStandardRules(builder);
-    builder.addStarlarkAccessibleTopLevels(
+    builder.addBzlToplevel(
         "starlark_native_aspect", TestAspects.STARLARK_NATIVE_ASPECT_WITH_PROVIDER);
-    builder.addStarlarkAccessibleTopLevels(
+    builder.addBzlToplevel(
         "parametrized_native_aspect",
         TestAspects.PARAMETRIZED_STARLARK_NATIVE_ASPECT_WITH_PROVIDER);
     builder.addNativeAspectClass(TestAspects.STARLARK_NATIVE_ASPECT_WITH_PROVIDER);

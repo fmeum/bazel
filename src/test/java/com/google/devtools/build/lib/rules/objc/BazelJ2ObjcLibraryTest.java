@@ -19,7 +19,6 @@ import static com.google.devtools.build.lib.actions.util.ActionsTestUtil.baseArt
 import static com.google.devtools.build.lib.actions.util.ActionsTestUtil.getFirstArtifactEndingWith;
 
 import com.google.common.base.Joiner;
-import com.google.common.base.Optional;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
@@ -35,19 +34,20 @@ import com.google.devtools.build.lib.actions.Artifact.SpecialArtifact;
 import com.google.devtools.build.lib.actions.Artifact.TreeFileArtifact;
 import com.google.devtools.build.lib.actions.CommandAction;
 import com.google.devtools.build.lib.actions.DiscoveredModulesPruner;
+import com.google.devtools.build.lib.actions.PathMapper;
 import com.google.devtools.build.lib.actions.ThreadStateReceiver;
 import com.google.devtools.build.lib.actions.util.ActionsTestUtil;
 import com.google.devtools.build.lib.analysis.ConfiguredTarget;
 import com.google.devtools.build.lib.analysis.actions.ParameterFileWriteAction;
 import com.google.devtools.build.lib.analysis.actions.SpawnAction;
-import com.google.devtools.build.lib.analysis.config.BuildConfigurationValue;
+import com.google.devtools.build.lib.analysis.configuredtargets.RuleConfiguredTarget;
 import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.cmdline.RepositoryName;
-import com.google.devtools.build.lib.packages.NativeAspectClass;
+import com.google.devtools.build.lib.collect.nestedset.Depset;
+import com.google.devtools.build.lib.packages.Provider;
+import com.google.devtools.build.lib.packages.StarlarkProvider;
+import com.google.devtools.build.lib.packages.StructImpl;
 import com.google.devtools.build.lib.packages.util.MockObjcSupport;
-import com.google.devtools.build.lib.rules.apple.ApplePlatform.PlatformType;
-import com.google.devtools.build.lib.rules.apple.AppleToolchain;
-import com.google.devtools.build.lib.rules.apple.DottedVersion;
 import com.google.devtools.build.lib.rules.cpp.CcCompilationContext;
 import com.google.devtools.build.lib.rules.cpp.CcInfo;
 import com.google.devtools.build.lib.rules.cpp.CcLinkingContext;
@@ -62,6 +62,8 @@ import com.google.devtools.build.lib.vfs.FileSystemUtils;
 import com.google.devtools.build.lib.vfs.PathFragment;
 import com.google.devtools.build.lib.vfs.SyscallCache;
 import java.io.ByteArrayOutputStream;
+import java.util.Optional;
+import java.util.regex.Pattern;
 import javax.annotation.Nullable;
 import org.junit.Test;
 import org.junit.runner.RunWith;
@@ -73,23 +75,21 @@ import org.junit.runners.JUnit4;
  */
 @RunWith(JUnit4.class)
 public class BazelJ2ObjcLibraryTest extends J2ObjcLibraryTest {
-  protected NativeAspectClass getJ2ObjcAspect() {
-    return ruleClassProvider.getNativeAspectClass(J2ObjcAspect.NAME);
+
+  private static final Provider.Key starlarkJ2objcMappingFileProviderKey =
+      new StarlarkProvider.Key(
+          Label.parseCanonicalUnchecked("@_builtins//:common/objc/providers.bzl"),
+          "J2ObjcMappingFileInfo");
+
+  private StructImpl getJ2ObjcMappingFileInfoFromTarget(ConfiguredTarget configuredTarget)
+      throws Exception {
+    return (StructImpl) configuredTarget.get(starlarkJ2objcMappingFileProviderKey);
   }
 
-  /**
-   * Gets the target with the given label, using the apple_binary multi-arch split transition with
-   * the default version of iOS as the platform.
-   */
-  private ConfiguredTarget getConfiguredTargetInAppleBinaryTransition(String label)
+  private ImmutableList<Artifact> getArtifacts(StructImpl j2ObjcMappingFileInfo, String attribute)
       throws Exception {
-    BuildConfigurationValue childConfig =
-        Iterables.getOnlyElement(
-            getSplitConfigurations(
-                targetConfig,
-                new MultiArchSplitTransitionProvider.AppleBinaryTransition(
-                    PlatformType.IOS, Optional.<DottedVersion>absent())));
-    return getConfiguredTarget(label, childConfig);
+    Depset filesDepset = (Depset) j2ObjcMappingFileInfo.getValue(attribute);
+    return filesDepset.toList(Artifact.class);
   }
 
   @Test
@@ -97,14 +97,10 @@ public class BazelJ2ObjcLibraryTest extends J2ObjcLibraryTest {
     ConfiguredTarget j2objcLibraryTarget = getConfiguredTarget(
         "//java/com/google/dummy/test:transpile");
 
-    ObjcProvider provider = j2objcLibraryTarget.get(ObjcProvider.STARLARK_CONSTRUCTOR);
-    assertThat(baseArtifactNames(provider.get(ObjcProvider.LIBRARY)))
-        .containsExactly("libjre_core_lib.a", "libtest_j2objc.a");
-
     CcLinkingContext ccLinkingContext =
         j2objcLibraryTarget.get(CcInfo.PROVIDER).getCcLinkingContext();
     assertThat(baseArtifactNames(ccLinkingContext.getStaticModeParamsForDynamicLibraryLibraries()))
-        .containsExactly("libjre_core_lib.a", "libtest_j2objc.a");
+        .containsExactly("libjre_core_lib.a", "libtest_j2objc.lo");
 
     CcCompilationContext ccCompilationContext =
         j2objcLibraryTarget.get(CcInfo.PROVIDER).getCcCompilationContext();
@@ -153,16 +149,14 @@ public class BazelJ2ObjcLibraryTest extends J2ObjcLibraryTest {
         "j2objc_library(",
         "    name = 'transpile',",
         "    deps = ['test'],",
+        "    tags = ['__J2OBJC_LIBRARY_MIGRATION_DO_NOT_USE_WILL_BREAK__'],",
         ")");
 
     ConfiguredTarget target = getConfiguredTarget("//java/com/google/test:transpile");
-    ObjcProvider provider = target.get(ObjcProvider.STARLARK_CONSTRUCTOR);
-    assertThat(baseArtifactNames(provider.get(ObjcProvider.LIBRARY)))
-        .containsExactly("libjre_core_lib.a", "libtest_j2objc.a");
 
     CcLinkingContext ccLinkingContext = target.get(CcInfo.PROVIDER).getCcLinkingContext();
     assertThat(baseArtifactNames(ccLinkingContext.getStaticModeParamsForDynamicLibraryLibraries()))
-        .containsExactly("libjre_core_lib.a", "libtest_j2objc.a");
+        .containsExactly("libjre_core_lib.a", "libtest_j2objc.lo");
 
     CcCompilationContext ccCompilationContext =
         target.get(CcInfo.PROVIDER).getCcCompilationContext();
@@ -202,19 +196,12 @@ public class BazelJ2ObjcLibraryTest extends J2ObjcLibraryTest {
         ")",
         "j2objc_library(",
         "    name = 'transpile',",
-        "    deps = ['test']",
+        "    deps = ['test'],",
+        "    tags = ['__J2OBJC_LIBRARY_MIGRATION_DO_NOT_USE_WILL_BREAK__'],",
         ")");
 
     ConfiguredTarget j2objcLibraryTarget = getConfiguredTarget(
         "//java/com/google/dummy/test/proto:transpile");
-
-    ObjcProvider provider = j2objcLibraryTarget.get(ObjcProvider.STARLARK_CONSTRUCTOR);
-    assertThat(baseArtifactNames(provider.get(ObjcProvider.LIBRARY)))
-        .containsExactly(
-            "libjre_core_lib.a",
-            "libproto_runtime.a",
-            "libtest_j2objc.a",
-            "libtest_proto_j2objc.a");
 
     CcLinkingContext ccLinkingContext =
         j2objcLibraryTarget.get(CcInfo.PROVIDER).getCcLinkingContext();
@@ -222,8 +209,8 @@ public class BazelJ2ObjcLibraryTest extends J2ObjcLibraryTest {
         .containsExactly(
             "libjre_core_lib.a",
             "libproto_runtime.a",
-            "libtest_j2objc.a",
-            "libtest_proto_j2objc.a");
+            "libtest_j2objc.lo",
+            "libtest_proto_j2objc.lo");
 
     CcCompilationContext ccCompilationContext =
         j2objcLibraryTarget.get(CcInfo.PROVIDER).getCcCompilationContext();
@@ -241,9 +228,11 @@ public class BazelJ2ObjcLibraryTest extends J2ObjcLibraryTest {
         ")");
 
     ConfiguredTarget target = getJ2ObjCAspectConfiguredTarget("//java/com/google/transpile:dummy");
-    J2ObjcMappingFileProvider provider = target.get(J2ObjcMappingFileProvider.PROVIDER);
+    StructImpl j2ObjcMappingFileInfo = getJ2ObjcMappingFileInfoFromTarget(target);
+    ImmutableList<Artifact> headerMappingFilesList =
+        getArtifacts(j2ObjcMappingFileInfo, "header_mapping_files");
 
-    assertThat(provider.getHeaderMappingFiles().getSingleton().getRootRelativePath().toString())
+    assertThat(headerMappingFilesList.get(0).getRootRelativePath().toString())
         .isEqualTo("java/com/google/transpile/dummy.mapping.j2objc");
   }
 
@@ -263,9 +252,11 @@ public class BazelJ2ObjcLibraryTest extends J2ObjcLibraryTest {
         ")");
 
     ConfiguredTarget target = getJ2ObjCAspectConfiguredTarget("//java/com/google/transpile:dummy");
-    J2ObjcMappingFileProvider provider = target.get(J2ObjcMappingFileProvider.PROVIDER);
+    StructImpl j2ObjcMappingFileInfo = getJ2ObjcMappingFileInfoFromTarget(target);
+    ImmutableList<Artifact> headerMappingFilesList =
+        getArtifacts(j2ObjcMappingFileInfo, "header_mapping_files");
 
-    assertThat(provider.getHeaderMappingFiles().getSingleton().getRootRelativePath().toString())
+    assertThat(headerMappingFilesList.get(0).getRootRelativePath().toString())
         .isEqualTo("java/com/google/dep/dep.mapping.j2objc");
   }
 
@@ -293,15 +284,13 @@ public class BazelJ2ObjcLibraryTest extends J2ObjcLibraryTest {
 
     ConfiguredTarget target = getJ2ObjCAspectConfiguredTarget(
         "//java/com/google/dummy/test/proto:test");
-    J2ObjcMappingFileProvider provider = target.get(J2ObjcMappingFileProvider.PROVIDER);
-    Artifact classMappingFile =
-        getGenfilesArtifact(
-            "test.clsmap.properties",
-            getConfiguredTarget(
-                "//java/com/google/dummy/test/proto:test_proto", getAppleCrosstoolConfiguration()),
-            getJ2ObjcAspect());
+    StructImpl j2ObjcMappingFileInfo = getJ2ObjcMappingFileInfoFromTarget(target);
+    ImmutableList<Artifact> classMappingFilesList =
+        getArtifacts(j2ObjcMappingFileInfo, "class_mapping_files");
 
-    assertThat(provider.getClassMappingFiles().toList()).containsExactly(classMappingFile);
+    assertThat(classMappingFilesList.get(0).getExecPathString())
+        .containsMatch(
+            "/darwin_x86_64-fastbuild-applebin_macos-ST-[^/]*/bin/java/com/google/dummy/test/proto/test.clsmap.properties");
   }
 
   @Test
@@ -324,19 +313,20 @@ public class BazelJ2ObjcLibraryTest extends J2ObjcLibraryTest {
         ")");
 
     ConfiguredTarget target = getJ2ObjCAspectConfiguredTarget("//x:test");
-    ConfiguredTarget test = getConfiguredTarget("//x:test_proto", getAppleCrosstoolConfiguration());
-    J2ObjcMappingFileProvider provider = target.get(J2ObjcMappingFileProvider.PROVIDER);
-    Artifact classMappingFile =
-        getGenfilesArtifact("test.clsmap.properties", test, getJ2ObjcAspect());
-    assertThat(provider.getClassMappingFiles().toList()).containsExactly(classMappingFile);
+    StructImpl j2ObjcMappingFileInfo = getJ2ObjcMappingFileInfoFromTarget(target);
+    ImmutableList<Artifact> classMappingFilesList =
+        getArtifacts(j2ObjcMappingFileInfo, "class_mapping_files");
+    assertThat(classMappingFilesList.get(0).getExecPathString())
+        .containsMatch(
+            "/darwin_x86_64-fastbuild-applebin_macos-ST-[^/]*/bin/x/test.clsmap.properties");
 
     ObjcProvider objcProvider = target.get(ObjcProvider.STARLARK_CONSTRUCTOR);
     CcCompilationContext ccCompilationContext =
         target.get(CcInfo.PROVIDER).getCcCompilationContext();
-    Artifact headerFile = getGenfilesArtifact("test.j2objc.pb.h", test, getJ2ObjcAspect());
-    Artifact sourceFile = getGenfilesArtifact("test.j2objc.pb.m", test, getJ2ObjcAspect());
-    assertThat(ccCompilationContext.getDeclaredIncludeSrcs().toList()).contains(headerFile);
-    assertThat(objcProvider.get(ObjcProvider.SOURCE).toList()).contains(sourceFile);
+    assertThat(ccCompilationContext.getDeclaredIncludeSrcs().toList().toString())
+        .containsMatch("/darwin_x86_64-fastbuild-applebin_macos-ST-[^/]*/bin]x/test.j2objc.pb.h");
+    assertThat(objcProvider.get(ObjcProvider.SOURCE).toList().toString())
+        .containsMatch("/darwin_x86_64-fastbuild-applebin_macos-ST-[^/]*/bin]x/test.j2objc.pb.m,");
   }
 
   @Test
@@ -371,25 +361,25 @@ public class BazelJ2ObjcLibraryTest extends J2ObjcLibraryTest {
         "    deps = ['@bla//foo:test_java_proto'])");
 
     ConfiguredTarget target = getJ2ObjCAspectConfiguredTarget("//x:test");
-    ConfiguredTarget test =
-        getConfiguredTarget("@bla//foo:test_proto", getAppleCrosstoolConfiguration());
 
-    J2ObjcMappingFileProvider provider = target.get(J2ObjcMappingFileProvider.PROVIDER);
+    StructImpl j2ObjcMappingFileInfo = getJ2ObjcMappingFileInfoFromTarget(target);
+    ImmutableList<Artifact> classMappingFilesList =
+        getArtifacts(j2ObjcMappingFileInfo, "class_mapping_files");
 
-    Artifact classMappingFile =
-        getGenfilesArtifact("../external/bla/foo/test.clsmap.properties", test, getJ2ObjcAspect());
-    assertThat(provider.getClassMappingFiles().toList()).containsExactly(classMappingFile);
+    assertThat(classMappingFilesList.get(0).getExecPathString())
+        .containsMatch(
+            "/darwin_x86_64-fastbuild-applebin_macos-ST-[^/]*/bin/external/bla/foo/test.clsmap.properties");
 
     ObjcProvider objcProvider = target.get(ObjcProvider.STARLARK_CONSTRUCTOR);
     CcCompilationContext ccCompilationContext =
         target.get(CcInfo.PROVIDER).getCcCompilationContext();
 
-    Artifact headerFile =
-        getGenfilesArtifact("../external/bla/foo/test.j2objc.pb.h", test, getJ2ObjcAspect());
-    Artifact sourceFile =
-        getGenfilesArtifact("../external/bla/foo/test.j2objc.pb.m", test, getJ2ObjcAspect());
-    assertThat(ccCompilationContext.getDeclaredIncludeSrcs().toList()).contains(headerFile);
-    assertThat(objcProvider.get(ObjcProvider.SOURCE).toList()).contains(sourceFile);
+    assertThat(ccCompilationContext.getDeclaredIncludeSrcs().toList().toString())
+        .containsMatch(
+            "/darwin_x86_64-fastbuild-applebin_macos-ST-[^/]*/bin]external/bla/foo/test.j2objc.pb.h");
+    assertThat(objcProvider.get(ObjcProvider.SOURCE).toList().toString())
+        .containsMatch(
+            "/darwin_x86_64-fastbuild-applebin_macos-ST-[^/]*/bin]external/bla/foo/test.j2objc.pb.m");
     assertThat(ccCompilationContext.getIncludeDirs())
         .contains(
             getConfiguration(target)
@@ -408,26 +398,36 @@ public class BazelJ2ObjcLibraryTest extends J2ObjcLibraryTest {
         ")");
 
     ConfiguredTarget target = getJ2ObjCAspectConfiguredTarget("//java/com/google/transpile:dummy");
-    J2ObjcMappingFileProvider provider = target.get(J2ObjcMappingFileProvider.PROVIDER);
+    StructImpl j2ObjcMappingFileInfo = getJ2ObjcMappingFileInfoFromTarget(target);
+    ImmutableList<Artifact> headerMappingFilesList =
+        getArtifacts(j2ObjcMappingFileInfo, "header_mapping_files");
+    ImmutableList<Artifact> classMappingFilesList =
+        getArtifacts(j2ObjcMappingFileInfo, "class_mapping_files");
 
-    assertThat(provider.getHeaderMappingFiles().getSingleton().getRootRelativePath().toString())
+    assertThat(headerMappingFilesList.get(0).getRootRelativePath().toString())
         .isEqualTo("java/com/google/transpile/dummy.mapping.j2objc");
-    assertThat(provider.getClassMappingFiles().toList()).isEmpty();
+    assertThat(classMappingFilesList).isEmpty();
+  }
+
+  protected Artifact getBinArtifact(String outputName, RuleConfiguredTarget target) {
+    for (ActionAnalysisMetadata action : target.getActions()) {
+      Optional<Artifact> artifact =
+          action.getOutputs().stream().filter(artifactNamed(outputName)).findFirst();
+      if (artifact.isPresent()) {
+        return artifact.get();
+      }
+    }
+    return null;
   }
 
   protected void checkObjcArchiveAndLinkActions(
-      String targetLabel,
-      String archiveFileName,
-      String objFileName,
-      Iterable<String> compilationInputExecPaths)
+      String archiveFileName, String objFileName, Iterable<String> compilationInputExecPaths)
       throws Exception {
-    String labelName = Label.parseCanonical(targetLabel).getName();
     CommandAction linkAction =
         (CommandAction)
             getGeneratingAction(
                 getBinArtifact(
-                    String.format("%s_bin", labelName),
-                    getConfiguredTargetInAppleBinaryTransition(targetLabel)));
+                    "app/app_bin", (RuleConfiguredTarget) getConfiguredTarget("//app:app")));
 
     checkObjcCompileActions(
         getFirstArtifactEndingWith(linkAction.getInputs(), archiveFileName),
@@ -437,8 +437,16 @@ public class BazelJ2ObjcLibraryTest extends J2ObjcLibraryTest {
   @Test
   public void testMissingEntryClassesError() throws Exception {
     useConfiguration("--j2objc_dead_code_removal");
-    checkError("java/com/google/dummy", "transpile", J2ObjcLibrary.NO_ENTRY_CLASS_ERROR_MSG,
-        "j2objc_library(name = 'transpile', deps = ['//java/com/google/dummy/test:test'])");
+    checkError(
+        "java/com/google/dummy",
+        "transpile",
+        "Entry classes must be specified when flag --compilation_mode=opt is on in order to perform"
+            + " J2ObjC dead code stripping.",
+        "j2objc_library(",
+        "    name = 'transpile',",
+        "    deps = ['//java/com/google/dummy/test:test'],",
+        "    tags = ['__J2OBJC_LIBRARY_MIGRATION_DO_NOT_USE_WILL_BREAK__'],",
+        ")");
   }
 
   @Test
@@ -459,20 +467,38 @@ public class BazelJ2ObjcLibraryTest extends J2ObjcLibraryTest {
     ConfiguredTarget j2objcLibraryTarget = getConfiguredTarget(
         "//java/com/google/dummy/test:transpile");
 
-    // jre_io_lib and jre_emul_lib should be excluded.
-    ObjcProvider provider = j2objcLibraryTarget.get(ObjcProvider.STARLARK_CONSTRUCTOR);
-    assertThat(baseArtifactNames(provider.get(ObjcProvider.LIBRARY)))
-        .containsExactly("libjre_core_lib.a", "libtest_j2objc.a");
-
     CcLinkingContext ccLinkingContext =
         j2objcLibraryTarget.get(CcInfo.PROVIDER).getCcLinkingContext();
     assertThat(baseArtifactNames(ccLinkingContext.getStaticModeParamsForDynamicLibraryLibraries()))
-        .containsExactly("libjre_core_lib.a", "libtest_j2objc.a");
+        .containsExactly("libjre_core_lib.a", "libtest_j2objc.lo");
 
     CcCompilationContext ccCompilationContext =
         j2objcLibraryTarget.get(CcInfo.PROVIDER).getCcCompilationContext();
     assertThat(baseArtifactNames(ccCompilationContext.getDeclaredIncludeSrcs()))
         .containsExactly("jre_core.h", "test.h");
+  }
+
+  @Test
+  public void testTagInJreDeps() throws Exception {
+    scratch.file(
+        "app/BUILD",
+        "package(default_visibility=['//visibility:public'])",
+        "objc_library(",
+        "    name = 'no_tag_dep',",
+        ")",
+        "j2objc_library(",
+        "    name = 'test',",
+        "    jre_deps = ['no_tag_dep'],",
+        "    tags = ['__J2OBJC_LIBRARY_MIGRATION_DO_NOT_USE_WILL_BREAK__'],",
+        ")");
+    reporter.removeHandler(failFastHandler);
+
+    getConfiguredTarget("//app:test");
+
+    assertContainsEvent(
+        Pattern.compile(
+            ".* objc_library rule \\'@//app:no_tag_dep\\' is misplaced here \\(Only J2ObjC JRE"
+                + " libraries are allowed\\)"));
   }
 
   @Test
@@ -548,12 +574,14 @@ public class BazelJ2ObjcLibraryTest extends J2ObjcLibraryTest {
 
     ConfiguredTarget target = getJ2ObjCAspectConfiguredTarget(
         "//java/com/google/transpile:lib1");
-    J2ObjcMappingFileProvider mappingFileProvider = target.get(J2ObjcMappingFileProvider.PROVIDER);
-    assertThat(baseArtifactNames(mappingFileProvider.getHeaderMappingFiles()))
+    StructImpl j2ObjcMappingFileInfo = getJ2ObjcMappingFileInfoFromTarget(target);
+    ImmutableList<Artifact> headerMappingFilesList =
+        getArtifacts(j2ObjcMappingFileInfo, "header_mapping_files");
+    assertThat(baseArtifactNames(headerMappingFilesList))
         .containsExactly("lib1.mapping.j2objc", "lib2.mapping.j2objc");
 
-    Artifact mappingFile = getFirstArtifactEndingWith(
-        mappingFileProvider.getHeaderMappingFiles(), "lib1.mapping.j2objc");
+    Artifact mappingFile =
+        getFirstArtifactEndingWith(headerMappingFilesList, "lib1.mapping.j2objc");
     SpawnAction headerMappingAction = (SpawnAction) getGeneratingAction(mappingFile);
     String execPath = getRuleContext(target).getBinFragment() + "/";
     assertThat(baseArtifactNames(headerMappingAction.getInputs()))
@@ -624,6 +652,7 @@ public class BazelJ2ObjcLibraryTest extends J2ObjcLibraryTest {
         "    name = 'transpile',",
         "    entry_classes = ['com.google.app.test.test'],",
         "    deps = ['test'],",
+        "    tags = ['__J2OBJC_LIBRARY_MIGRATION_DO_NOT_USE_WILL_BREAK__'],",
         ")");
   }
 
@@ -645,7 +674,8 @@ public class BazelJ2ObjcLibraryTest extends J2ObjcLibraryTest {
         ")",
         "j2objc_library(",
         "    name = 'transpile',",
-        "    deps = [':test']",
+        "    deps = [':test'],",
+        "    tags = ['__J2OBJC_LIBRARY_MIGRATION_DO_NOT_USE_WILL_BREAK__'],",
         ")");
   }
 
@@ -653,7 +683,7 @@ public class BazelJ2ObjcLibraryTest extends J2ObjcLibraryTest {
       throws Exception {
     ConfiguredTarget target = getConfiguredTarget(j2objcLibraryTarget);
     CcLinkingContext ccLinkingContext = target.get(CcInfo.PROVIDER).getCcLinkingContext();
-    String archiveName = String.format("lib%s_j2objc.a", javaTargetName);
+    String archiveName = String.format("lib%s_j2objc.lo", javaTargetName);
     return getFirstArtifactEndingWith(
         ccLinkingContext.getStaticModeParamsForDynamicLibraryLibraries(), archiveName);
   }
@@ -672,13 +702,9 @@ public class BazelJ2ObjcLibraryTest extends J2ObjcLibraryTest {
 
     ConfiguredTarget objcTarget = getConfiguredTarget("//app:lib");
 
-    ObjcProvider provider = objcTarget.get(ObjcProvider.STARLARK_CONSTRUCTOR);
-    assertThat(baseArtifactNames(provider.get(ObjcProvider.LIBRARY)))
-        .containsExactly("libjre_core_lib.a", "libtest_j2objc.a", "liblib.a");
-
     CcLinkingContext ccLinkingContext = objcTarget.get(CcInfo.PROVIDER).getCcLinkingContext();
     assertThat(baseArtifactNames(ccLinkingContext.getStaticModeParamsForDynamicLibraryLibraries()))
-        .containsExactly("libjre_core_lib.a", "libtest_j2objc.a", "liblib.a");
+        .containsExactly("libjre_core_lib.a", "libtest_j2objc.lo", "liblib.a");
 
     CcCompilationContext ccCompilationContext =
         objcTarget.get(CcInfo.PROVIDER).getCcCompilationContext();
@@ -711,6 +737,7 @@ public class BazelJ2ObjcLibraryTest extends J2ObjcLibraryTest {
         "j2objc_library(",
         "    name = 'transpile',",
         "    deps = [':dummyTwo'],",
+        "    tags = ['__J2OBJC_LIBRARY_MIGRATION_DO_NOT_USE_WILL_BREAK__'],",
         ")",
         "objc_library(",
         "    name = 'lib',",
@@ -720,15 +747,10 @@ public class BazelJ2ObjcLibraryTest extends J2ObjcLibraryTest {
 
     ConfiguredTarget objcTarget = getConfiguredTarget("//app:lib");
 
-    ObjcProvider provider = objcTarget.get(ObjcProvider.STARLARK_CONSTRUCTOR);
-    assertThat(baseArtifactNames(provider.get(ObjcProvider.LIBRARY)))
-        .containsExactly(
-            "libjre_core_lib.a", "libdummyOne_j2objc.a", "libdummyTwo_j2objc.a", "liblib.a");
-
     CcLinkingContext ccLinkingContext = objcTarget.get(CcInfo.PROVIDER).getCcLinkingContext();
     assertThat(baseArtifactNames(ccLinkingContext.getStaticModeParamsForDynamicLibraryLibraries()))
         .containsExactly(
-            "libjre_core_lib.a", "libdummyOne_j2objc.a", "libdummyTwo_j2objc.a", "liblib.a");
+            "libjre_core_lib.a", "libdummyOne_j2objc.lo", "libdummyTwo_j2objc.lo", "liblib.a");
 
     CcCompilationContext ccCompilationContext =
         objcTarget.get(CcInfo.PROVIDER).getCcCompilationContext();
@@ -768,6 +790,7 @@ public class BazelJ2ObjcLibraryTest extends J2ObjcLibraryTest {
         "j2objc_library(",
         "    name = 'j2',",
         "    deps = [ '//java/c/y:ylib' ],",
+        "    tags = ['__J2OBJC_LIBRARY_MIGRATION_DO_NOT_USE_WILL_BREAK__'],",
         "    jre_deps = [ '"
             + TestConstants.TOOLS_REPOSITORY
             + "//third_party/java/j2objc:jre_io_lib' ],",
@@ -784,13 +807,14 @@ public class BazelJ2ObjcLibraryTest extends J2ObjcLibraryTest {
         ")");
 
     CommandAction linkAction = linkAction("//x:test");
-    ConfiguredTarget target = getConfiguredTargetInAppleBinaryTransition("//x:test");
+    ConfiguredTarget target = getConfiguredTarget("//x:test");
     String binDir = removeConfigFragment(getRuleContext(target).getBinFragment().toString());
     ParameterFileWriteAction paramAction = paramFileWriteActionForLinkAction(linkAction);
     Iterable<String> paramFileArgs = paramAction.getCommandLine().arguments();
+    assertThat(removeConfigFragment(ImmutableList.copyOf(linkAction.getArguments())))
+        .contains("-force_load " + binDir + "/java/c/y/libylib_j2objc.lo");
     assertThat(removeConfigFragment(ImmutableList.copyOf(paramFileArgs)))
         .containsAtLeast(
-            binDir + "/java/c/y/libylib_j2objc.a",
             // All jre libraries mus appear after java libraries in the link order.
             binDir
                 + "/"
@@ -815,7 +839,10 @@ public class BazelJ2ObjcLibraryTest extends J2ObjcLibraryTest {
 
     // Test that the archive commandline contains the individual object files inside
     // the object file tree artifact.
-    assertThat(archiveAction.getLinkCommandLineForTesting().arguments(DUMMY_ARTIFACT_EXPANDER))
+    assertThat(
+            archiveAction
+                .getLinkCommandLineForTesting()
+                .arguments(DUMMY_ARTIFACT_EXPANDER, PathMapper.NOOP))
         .containsAtLeast(
             objectFilesFromGenJar.getExecPathString() + "/children1",
             objectFilesFromGenJar.getExecPathString() + "/children2",
@@ -850,20 +877,20 @@ public class BazelJ2ObjcLibraryTest extends J2ObjcLibraryTest {
 
     ActionExecutionContext dummyActionExecutionContext =
         new ActionExecutionContext(
-            /*executor=*/ null,
-            /*actionInputFileCache=*/ null,
+            /* executor= */ null,
+            /* inputMetadataProvider= */ null,
             ActionInputPrefetcher.NONE,
             actionKeyContext,
-            /*metadataHandler=*/ null,
-            /*rewindingEnabled=*/ false,
+            /* outputMetadataStore= */ null,
+            /* rewindingEnabled= */ false,
             LostInputsCheck.NONE,
-            /*fileOutErr=*/ null,
-            /*eventHandler=*/ null,
-            /*clientEnv=*/ ImmutableMap.of(),
-            /*topLevelFilesets=*/ ImmutableMap.of(),
+            /* fileOutErr= */ null,
+            /* eventHandler= */ null,
+            /* clientEnv= */ ImmutableMap.of(),
+            /* topLevelFilesets= */ ImmutableMap.of(),
             DUMMY_ARTIFACT_EXPANDER,
-            /*actionFileSystem=*/ null,
-            /*skyframeDepsResult=*/ null,
+            /* actionFileSystem= */ null,
+            /* skyframeDepsResult= */ null,
             DiscoveredModulesPruner.DEFAULT,
             SyscallCache.NO_CACHE,
             ThreadStateReceiver.NULL_INSTANCE);
@@ -910,20 +937,20 @@ public class BazelJ2ObjcLibraryTest extends J2ObjcLibraryTest {
 
     ActionExecutionContext dummyActionExecutionContext =
         new ActionExecutionContext(
-            /*executor=*/ null,
-            /*actionInputFileCache=*/ null,
+            /* executor= */ null,
+            /* inputMetadataProvider= */ null,
             ActionInputPrefetcher.NONE,
             actionKeyContext,
-            /*metadataHandler=*/ null,
-            /*rewindingEnabled=*/ false,
+            /* outputMetadataStore= */ null,
+            /* rewindingEnabled= */ false,
             LostInputsCheck.NONE,
-            /*fileOutErr=*/ null,
-            /*eventHandler=*/ null,
-            /*clientEnv=*/ ImmutableMap.of(),
-            /*topLevelFilesets=*/ ImmutableMap.of(),
+            /* fileOutErr= */ null,
+            /* eventHandler= */ null,
+            /* clientEnv= */ ImmutableMap.of(),
+            /* topLevelFilesets= */ ImmutableMap.of(),
             DUMMY_ARTIFACT_EXPANDER,
-            /*actionFileSystem=*/ null,
-            /*skyframeDepsResult=*/ null,
+            /* actionFileSystem= */ null,
+            /* skyframeDepsResult= */ null,
             DiscoveredModulesPruner.DEFAULT,
             SyscallCache.NO_CACHE,
             ThreadStateReceiver.NULL_INSTANCE);
@@ -973,8 +1000,7 @@ public class BazelJ2ObjcLibraryTest extends J2ObjcLibraryTest {
     addSimpleBinaryTarget("//java/com/google/dummy/test:transpile");
 
     checkObjcArchiveAndLinkActions(
-        "//app:app",
-        "libtest_j2objc.a",
+        "libtest_j2objc.lo",
         "test.o",
         ImmutableList.of("jre_core.h", "test.h", "test.m"));
   }
@@ -992,6 +1018,7 @@ public class BazelJ2ObjcLibraryTest extends J2ObjcLibraryTest {
         "",
         "j2objc_library(",
         "    name = 'transpile',",
+        "    tags = ['__J2OBJC_LIBRARY_MIGRATION_DO_NOT_USE_WILL_BREAK__'],",
         "    deps = [",
         "        ':dummy',",
         "        '//java/com/google/dummy/test:transpile',",
@@ -1000,14 +1027,12 @@ public class BazelJ2ObjcLibraryTest extends J2ObjcLibraryTest {
     addSimpleBinaryTarget("//java/com/google/dummy:transpile");
 
     checkObjcArchiveAndLinkActions(
-        "//app:app",
-        "libtest_j2objc.a",
+        "libtest_j2objc.lo",
         "test.o",
         ImmutableList.of("jre_core.h", "test.h", "test.m"));
 
     checkObjcArchiveAndLinkActions(
-        "//app:app",
-        "libdummy_j2objc.a",
+        "libdummy_j2objc.lo",
         "dummy.o",
         ImmutableList.of("jre_core.h", "dummy.h", "dummy.m"));
   }
@@ -1050,6 +1075,7 @@ public class BazelJ2ObjcLibraryTest extends J2ObjcLibraryTest {
         "    deps = [",
         "        ':outer',",
         "    ],",
+        "    tags = ['__J2OBJC_LIBRARY_MIGRATION_DO_NOT_USE_WILL_BREAK__'],",
         ")",
         "objc_library(",
         "    name = 'lib',",
@@ -1060,12 +1086,9 @@ public class BazelJ2ObjcLibraryTest extends J2ObjcLibraryTest {
     ConfiguredTarget objcTarget = getConfiguredTarget("//examples:lib");
 
     // The only way that //examples:lib can see inner's archive is through the Starlark rule.
-    ObjcProvider provider = objcTarget.get(ObjcProvider.STARLARK_CONSTRUCTOR);
-    assertThat(baseArtifactNames(provider.get(ObjcProvider.LIBRARY))).contains("libinner_j2objc.a");
-
     CcLinkingContext ccLinkingContext = objcTarget.get(CcInfo.PROVIDER).getCcLinkingContext();
     assertThat(baseArtifactNames(ccLinkingContext.getStaticModeParamsForDynamicLibraryLibraries()))
-        .contains("libinner_j2objc.a");
+        .contains("libinner_j2objc.lo");
   }
 
   @Test
@@ -1159,18 +1182,11 @@ public class BazelJ2ObjcLibraryTest extends J2ObjcLibraryTest {
         "",
         "j2objc_library(",
         "    name = 'transpile',",
+        "    tags = ['__J2OBJC_LIBRARY_MIGRATION_DO_NOT_USE_WILL_BREAK__'],",
         "    deps = ['test'])");
 
     ConfiguredTarget j2objcLibraryTarget =
         getConfiguredTarget("//java/com/google/dummy/test/proto:transpile");
-
-    ObjcProvider provider = j2objcLibraryTarget.get(ObjcProvider.STARLARK_CONSTRUCTOR);
-    assertThat(baseArtifactNames(provider.get(ObjcProvider.LIBRARY)))
-        .containsExactly(
-            "libjre_core_lib.a",
-            "libalt_proto_runtime.a",
-            "libtest_j2objc.a",
-            "libtest_proto_j2objc.a");
 
     CcLinkingContext ccLinkingContext =
         j2objcLibraryTarget.get(CcInfo.PROVIDER).getCcLinkingContext();
@@ -1178,8 +1194,8 @@ public class BazelJ2ObjcLibraryTest extends J2ObjcLibraryTest {
         .containsExactly(
             "libjre_core_lib.a",
             "libalt_proto_runtime.a",
-            "libtest_j2objc.a",
-            "libtest_proto_j2objc.a");
+            "libtest_j2objc.lo",
+            "libtest_proto_j2objc.lo");
 
     CcCompilationContext ccCompilationContext =
         j2objcLibraryTarget.get(CcInfo.PROVIDER).getCcCompilationContext();
@@ -1194,14 +1210,13 @@ public class BazelJ2ObjcLibraryTest extends J2ObjcLibraryTest {
     addAppleBinaryStarlarkRule(scratch);
     addSimpleBinaryTarget("//java/com/google/app/test:transpile");
 
-    ConfiguredTarget appTarget = getConfiguredTargetInAppleBinaryTransition("//app:app");
+    RuleConfiguredTarget appTarget = (RuleConfiguredTarget) getConfiguredTarget("//app:app");
     Artifact prunedArchive =
         getBinArtifact(
-            "_j2objc_pruned/app/java/com/google/app/test/libtest_j2objc_pruned.a", appTarget);
+            "app/_j2objc_pruned/app/java/com/google/app/test/libtest_j2objc_pruned.lo", appTarget);
     Action action = getGeneratingAction(prunedArchive);
-    ConfiguredTarget javaTarget =
-        getConfiguredTargetInAppleBinaryTransition("//java/com/google/app/test:test");
-    Artifact inputArchive = getBinArtifact("libtest_j2objc.a", javaTarget);
+    ConfiguredTarget javaTarget = getConfiguredTarget("//java/com/google/app/test:test");
+    Artifact inputArchive = getBinArtifact("libtest_j2objc.lo", javaTarget);
     Artifact headerMappingFile = getBinArtifact("test.mapping.j2objc", javaTarget);
     Artifact dependencyMappingFile = getBinArtifact("test.dependency_mapping.j2objc", javaTarget);
     Artifact archiveSourceMappingFile =
@@ -1219,8 +1234,6 @@ public class BazelJ2ObjcLibraryTest extends J2ObjcLibraryTest {
             execPath
                 + TestConstants.TOOLS_REPOSITORY_PATH_PREFIX
                 + "tools/objc/dummy/libdummy_lib.a",
-            "--xcrunwrapper",
-            removeConfigFragment(MOCK_XCRUNWRAPPER_EXECUTABLE_PATH),
             "--dependency_mapping_files",
             removeConfigFragment(dependencyMappingFile.getExecPathString()),
             "--header_mapping_files",
@@ -1318,5 +1331,33 @@ public class BazelJ2ObjcLibraryTest extends J2ObjcLibraryTest {
     for (String expectedArg : expectedArgs) {
       assertThat(commandLine).contains(expectedArg);
     }
+  }
+
+  @Test
+  public void j2objcLibrary_noPropperTag_lockdownError() throws Exception {
+    useConfiguration("--incompatible_j2objc_library_migration");
+    scratch.file("test/BUILD", "j2objc_library(name = 'test')");
+    reporter.removeHandler(failFastHandler);
+
+    getConfiguredTarget("//test");
+
+    assertContainsEvent(
+        "j2objc_library is locked. Please do not use this rule since it will be deleted in the"
+            + " future.");
+  }
+
+  @Test
+  public void j2objcLibrary_withPropperTag_noError() throws Exception {
+    useConfiguration("--incompatible_j2objc_library_migration");
+    scratch.file(
+        "test/BUILD",
+        "j2objc_library(",
+        "    name = 'test',",
+        "    tags = ['__J2OBJC_LIBRARY_MIGRATION_DO_NOT_USE_WILL_BREAK__'],",
+        ")");
+
+    getConfiguredTarget("//test");
+
+    assertNoEvents();
   }
 }

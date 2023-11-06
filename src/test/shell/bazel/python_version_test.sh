@@ -111,7 +111,7 @@ EOF
 from bazel_tools.tools.python.runfiles import runfiles
 
 r = runfiles.Create()
-path = r.Rlocation("$WORKSPACE_NAME/test/data.txt")
+path = r.Rlocation("_main/test/data.txt")
 print("Rlocation returned: " + str(path))
 if path is not None:
   with open(path, 'rt') as f:
@@ -189,6 +189,37 @@ EOF
       --extra_toolchains=//test:mock_toolchain --build_python_zip \
       &> $TEST_log || fail "bazel run failed"
   expect_log "I am mockpy!"
+}
+
+# Verify that looking up runfiles that require repo mapping works
+function test_build_python_zip_bzlmod_repo_mapping_runfiles() {
+  cat > WORKSPACE
+  cat > MODULE.bazel << EOF
+module(name="pyzip")
+bazel_dep(name = "rules_python", version = "0.19.0")
+EOF
+  mkdir test
+  cat > test/BUILD << EOF
+py_binary(
+  name = "pybin",
+  srcs = ["pybin.py"],
+  deps = ["@rules_python//python/runfiles"],
+  data = ["data.txt"],
+)
+EOF
+  echo "data" > test/data.txt
+  cat > test/pybin.py << EOF
+from python.runfiles import runfiles
+rf = runfiles.Create()
+path = rf.Rlocation("pyzip/test/data.txt")
+with open(path, "r") as fp:
+  fp.read()
+EOF
+
+  bazel run --enable_bzlmod --build_python_zip //test:pybin &> $TEST_log || fail "bazel run failed"
+
+  unzip -p bazel-bin/test/pybin.zip runfiles/_repo_mapping > actual_repo_mapping
+  assert_contains ",pyzip,_main" actual_repo_mapping
 }
 
 # Test that running a zip app without RUN_UNDER_RUNFILES=1 removes the
@@ -404,17 +435,15 @@ EOF
     exe=""
   fi
 
-  # NOTE: The "main" name isn't special. It's just the name the integration test
-  # setup puts in WORKSPACE.
   cp bazel-bin/py/foo$exe.runfiles_manifest runfiles_manifest
-  assert_contains main/external/repo2/r2.txt runfiles_manifest \
+  assert_contains _main/external/repo2/r2.txt runfiles_manifest \
     "runfiles manifest didn't have external path mapping"
 
   # By default, Python binaries are put into zip files on Windows and don't
   # have a real runfiles tree.
   if ! "$is_windows"; then
     find bazel-bin/py/foo.runfiles > runfiles_listing
-    assert_contains bazel-bin/py/foo.runfiles/main/external/repo2/r2.txt \
+    assert_contains bazel-bin/py/foo.runfiles/_main/external/repo2/r2.txt \
       runfiles_listing \
       "runfiles didn't have external links"
   fi

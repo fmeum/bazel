@@ -268,7 +268,6 @@ def _compiler_flag_impl(ctx):
 compiler_flag = rule(
     implementation = _compiler_flag_impl,
     toolchains = ["//target_skipping/custom_tools:toolchain_type"],
-    incompatible_use_toolchain_transition = True,
 )
 EOF
 }
@@ -443,7 +442,7 @@ function test_failure_on_incompatible_top_level_target() {
       "${incompatible_target}" &> "${TEST_log}" \
       && fail "Bazel passed unexpectedly."
 
-    expect_log 'ERROR: Target //target_skipping:pass_on_foo1_bar2 is incompatible and cannot be built'
+    expect_log 'ERROR:.* Target //target_skipping:pass_on_foo1_bar2 is incompatible and cannot be built'
     expect_log '^ERROR: Build did NOT complete successfully'
 
     # Now look at the build event log.
@@ -559,7 +558,7 @@ genrule(
     name = "genrule_foo1",
     target_compatible_with = [":foo1"],
     outs = ["foo1.sh"],
-    cmd = "echo 'Should not be executed' &>2; exit 1",
+    cmd = "echo 'Should not be executed' >&2; exit 1",
 )
 
 sh_binary(
@@ -585,7 +584,7 @@ EOF
     --host_platform=@//target_skipping:foo2_bar1_platform \
     --platforms=@//target_skipping:foo2_bar1_platform \
     //target_skipping:sh_foo2 &> "${TEST_log}" && fail "Bazel passed unexpectedly."
-  expect_log 'ERROR: Target //target_skipping:sh_foo2 is incompatible and cannot be built, but was explicitly requested'
+  expect_log 'ERROR:.* Target //target_skipping:sh_foo2 is incompatible and cannot be built, but was explicitly requested'
   expect_log 'ERROR: Build did NOT complete successfully'
 
   bazel build \
@@ -593,7 +592,7 @@ EOF
     --host_platform=@//target_skipping:foo2_bar1_platform \
     --platforms=@//target_skipping:foo2_bar1_platform \
     //target_skipping:foo_test &> "${TEST_log}" && fail "Bazel passed unexpectedly."
-  expect_log 'ERROR: Target //target_skipping:foo_test is incompatible and cannot be built, but was explicitly requested'
+  expect_log 'ERROR:.* Target //target_skipping:foo_test is incompatible and cannot be built, but was explicitly requested'
   expect_log 'ERROR: Build did NOT complete successfully'
 }
 
@@ -646,7 +645,7 @@ EOF
     --host_platform=@//target_skipping:foo3_platform \
     --platforms=@//target_skipping:foo3_platform \
     //target_skipping:hello_world_bin &> "${TEST_log}" && fail "Bazel passed unexpectedly."
-  expect_log 'ERROR: Target //target_skipping:hello_world_bin is incompatible and cannot be built, but was explicitly requested'
+  expect_log 'ERROR:.* Target //target_skipping:hello_world_bin is incompatible and cannot be built, but was explicitly requested'
   expect_log 'ERROR: Build did NOT complete successfully'
 }
 
@@ -775,7 +774,7 @@ EOF
     --host_platform=@//target_skipping:foo2_bar1_platform \
     --platforms=@//target_skipping:foo2_bar1_platform \
     //target_skipping:generated_test.cc &> "${TEST_log}" && fail "Bazel passed unexpectedly."
-  expect_log "ERROR: Target //target_skipping:generated_test.cc is incompatible and cannot be built, but was explicitly requested"
+  expect_log "ERROR:.* Target //target_skipping:generated_test.cc is incompatible and cannot be built, but was explicitly requested"
 
   # Validate that we get the dependency chain printed out.
   expect_log '^Dependency chain:$'
@@ -789,7 +788,7 @@ EOF
     --host_platform=@//target_skipping:foo2_bar1_platform \
     --platforms=@//target_skipping:foo2_bar1_platform \
     //target_skipping:generated_test &> "${TEST_log}" && fail "Bazel passed unexpectedly."
-  expect_log 'ERROR: Target //target_skipping:generated_test is incompatible and cannot be built, but was explicitly requested'
+  expect_log 'ERROR:.* Target //target_skipping:generated_test is incompatible and cannot be built, but was explicitly requested'
 
   # Validate that we get the dependency chain printed out.
   expect_log '^Dependency chain:$'
@@ -837,7 +836,7 @@ EOF
     --host_platform=@//target_skipping:foo2_bar1_platform \
     --platforms=@//target_skipping:foo2_bar1_platform \
     //target_skipping:generated_test &> "${TEST_log}" && fail "Bazel passed unexpectedly."
-  expect_log 'ERROR: Target //target_skipping:generated_test is incompatible and cannot be built, but was explicitly requested'
+  expect_log 'ERROR:.* Target //target_skipping:generated_test is incompatible and cannot be built, but was explicitly requested'
 
   # Validate that we get the dependency chain and constraints printed out.
   expect_log '^Dependency chain:$'
@@ -888,7 +887,7 @@ EOF
     //target_skipping:pass_on_foo1_or_foo2_but_not_on_foo3 &> "${TEST_log}" \
     && fail "Bazel passed unexpectedly."
 
-  expect_log 'ERROR: Target //target_skipping:pass_on_foo1_or_foo2_but_not_on_foo3 is incompatible and cannot be built, but was explicitly requested'
+  expect_log 'ERROR:.* Target //target_skipping:pass_on_foo1_or_foo2_but_not_on_foo3 is incompatible and cannot be built, but was explicitly requested'
   expect_log 'ERROR: Build did NOT complete successfully'
 }
 
@@ -947,7 +946,7 @@ EOF
     --platforms=@//target_skipping:foo1_bar1_platform \
     //target_skipping:pass_on_everything_but_foo1_and_foo2  &> "${TEST_log}" \
     && fail "Bazel passed unexpectedly."
-  expect_log 'ERROR: Target //target_skipping:pass_on_everything_but_foo1_and_foo2 is incompatible and cannot be built, but was explicitly requested'
+  expect_log 'ERROR:.* Target //target_skipping:pass_on_everything_but_foo1_and_foo2 is incompatible and cannot be built, but was explicitly requested'
   expect_log 'ERROR: Build did NOT complete successfully'
 
   # Try with :foo2. This should fail.
@@ -957,7 +956,7 @@ EOF
     --platforms=@//target_skipping:foo2_bar1_platform \
     //target_skipping:pass_on_everything_but_foo1_and_foo2 &> "${TEST_log}" \
     && fail "Bazel passed unexpectedly."
-  expect_log 'ERROR: Target //target_skipping:pass_on_everything_but_foo1_and_foo2 is incompatible and cannot be built, but was explicitly requested'
+  expect_log 'ERROR:.* Target //target_skipping:pass_on_everything_but_foo1_and_foo2 is incompatible and cannot be built, but was explicitly requested'
   expect_log 'ERROR: Build did NOT complete successfully'
 
   # Now with :foo3. This should pass.
@@ -1013,7 +1012,7 @@ EOF
     //target_skipping:pass_on_foo3_and_bar2 &> "${TEST_log}" \
     && fail "Bazel passed unexpectedly."
 
-  expect_log 'ERROR: Target //target_skipping:pass_on_foo3_and_bar2 is incompatible and cannot be built, but was explicitly requested'
+  expect_log 'ERROR:.* Target //target_skipping:pass_on_foo3_and_bar2 is incompatible and cannot be built, but was explicitly requested'
   expect_log "^    //target_skipping:pass_on_foo3_and_bar2 (.*)   <-- target platform (//target_skipping:foo1_bar1_platform) didn't satisfy constraint @platforms//:incompatible$"
   expect_log 'ERROR: Build did NOT complete successfully'
 }
@@ -1065,7 +1064,7 @@ EOF
     --platforms=@//target_skipping:foo1_bar1_platform \
     //target_skipping:also_some_foo3_target  &> "${TEST_log}" \
     && fail "Bazel passed unexpectedly."
-  expect_log 'ERROR: Target //target_skipping:also_some_foo3_target is incompatible and cannot be built, but was explicitly requested'
+  expect_log 'ERROR:.* Target //target_skipping:also_some_foo3_target is incompatible and cannot be built, but was explicitly requested'
   expect_log 'ERROR: Build did NOT complete successfully'
 }
 
@@ -1100,7 +1099,7 @@ EOF
     --platforms=@//target_skipping:foo1_bar1_platform \
     //target_skipping:test_cc &> "${TEST_log}" \
     && fail "Bazel passed unexpectedly"
-  expect_log_once 'ERROR: Target //target_skipping:test_cc is incompatible and cannot be built, but was explicitly requested.'
+  expect_log_once 'ERROR:.* Target //target_skipping:test_cc is incompatible and cannot be built, but was explicitly requested.'
 }
 
 # Validate that an incompatible target with a toolchain not available for the
@@ -1108,6 +1107,18 @@ EOF
 # for https://github.com/bazelbuild/bazel/issues/12897.
 function test_incompatible_with_missing_toolchain() {
   set_up_custom_toolchain
+  cat >> WORKSPACE <<'EOF'
+local_repository(name = 'build_bazel_apple_support', path = 'build_bazel_apple_support')
+EOF
+  mkdir -p build_bazel_apple_support/platforms
+  touch build_bazel_apple_support/WORKSPACE
+  cat > build_bazel_apple_support/platforms/BUILD <<'EOF'
+package(default_visibility=["//visibility:public"])
+platform(
+  name = "darwin_x86_64",
+  constraint_values = ["@platforms//os:macos", "@platforms//cpu:x86_64"],
+)
+EOF
 
   cat >> target_skipping/BUILD <<'EOF'
 load(
@@ -1235,7 +1246,7 @@ EOF
     --host_platform=@//target_skipping:foo1_bar1_platform \
     --platforms=@//target_skipping:foo2_bar1_platform \
     //target_skipping:host_tool &> "${TEST_log}" && fail "Bazel passed unexpectedly."
-  expect_log 'ERROR: Target //target_skipping:host_tool is incompatible and cannot be built, but was explicitly requested'
+  expect_log 'ERROR:.* Target //target_skipping:host_tool is incompatible and cannot be built, but was explicitly requested'
   expect_log 'ERROR: Build did NOT complete successfully'
 
   # Run with :foo1 in the host platform, but with :foo2 in the target platform.
@@ -1422,9 +1433,9 @@ EOF
     --output=starlark --starlark:file=target_skipping/compatibility.cquery \
     &> "${TEST_log}"
 
-  expect_log '^@//target_skipping:pass_on_foo1 is compatible$'
-  expect_log '^@//target_skipping:fail_on_foo2 is incompatible$'
-  expect_log '^@//target_skipping:some_foo3_target is incompatible$'
+  expect_log '^@@\?//target_skipping:pass_on_foo1 is compatible$'
+  expect_log '^@@\?//target_skipping:fail_on_foo2 is incompatible$'
+  expect_log '^@@\?//target_skipping:some_foo3_target is incompatible$'
 
   bazel cquery \
     --host_platform=//target_skipping:foo3_platform \
@@ -1433,9 +1444,9 @@ EOF
     --output=starlark --starlark:file=target_skipping/compatibility.cquery \
     &> "${TEST_log}"
 
-  expect_log '^@//target_skipping:pass_on_foo1 is incompatible$'
-  expect_log '^@//target_skipping:fail_on_foo2 is incompatible$'
-  expect_log '^@//target_skipping:some_foo3_target is compatible$'
+  expect_log '^@@\?//target_skipping:pass_on_foo1 is incompatible$'
+  expect_log '^@@\?//target_skipping:fail_on_foo2 is incompatible$'
+  expect_log '^@@\?//target_skipping:some_foo3_target is compatible$'
 }
 
 # Run an aquery on a target that is compatible. This should pass.
@@ -1620,7 +1631,7 @@ EOF
     --platforms=@//target_skipping:foo1_bar1_platform \
     //target_skipping:twice_inspected_foo3_target &> "${TEST_log}" \
     && fail "Bazel passed unexpectedly."
-  expect_log_once 'ERROR: Target //target_skipping:twice_inspected_foo3_target is incompatible and cannot be built, but was explicitly requested.'
+  expect_log_once 'ERROR:.* Target //target_skipping:twice_inspected_foo3_target is incompatible and cannot be built, but was explicitly requested.'
   expect_log_once '^Dependency chain:$'
   expect_log_once '^    //target_skipping:twice_inspected_foo3_target '
   expect_log_once '^    //target_skipping:previously_inspected_basic_target '

@@ -221,6 +221,22 @@ EOF
   assert_contains "test content" "${base_external_path}/test_dir/test_file"
 }
 
+function test_http_archive_upper_case_sha() {
+  cat >> $(create_workspace_with_default_repos WORKSPACE) <<EOF
+load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
+http_archive(
+    name = 'test_zstd_repo',
+    url = 'file://$(rlocation io_bazel/src/test/shell/bazel/testdata/zstd_test_archive.tar.zst)',
+    sha256 = '12B0116F2A3C804859438E102A8A1D5F494C108D1B026DA9F6CA55FB5107C7E9',
+    build_file_content = 'filegroup(name="x", srcs=glob(["*"]))',
+)
+EOF
+  bazel build @test_zstd_repo//...
+
+  base_external_path=bazel-out/../external/test_zstd_repo
+  assert_contains "test content" "${base_external_path}/test_dir/test_file"
+}
+
 function test_http_archive_no_server() {
   cat >> $(create_workspace_with_default_repos WORKSPACE) <<EOF
 load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
@@ -657,7 +673,7 @@ EOF
   # But it is required after a clean.
   bazel clean --expunge || fail "Clean failed"
   bazel build --fetch=false //zoo:ball-pit >& $TEST_log && fail "Expected build to fail"
-  expect_log "bazel fetch //..."
+  expect_log "fetching repositories is disabled"
 }
 
 function test_prefix_stripping_tar_gz() {
@@ -928,7 +944,23 @@ genrule(
 )
 EOF
   bazel build :foo &> "$TEST_log" && fail "Expected failure" || true
-  expect_log "no such package '@foo//'"
+  expect_log "No repository visible as '@foo' from main repository"
+}
+
+function test_bind_repo_mapping() {
+  cat >> $(create_workspace_with_default_repos WORKSPACE myws) <<'EOF'
+load('//:foo.bzl', 'foo')
+foo()
+bind(name='bar', actual='@myws//:something')
+EOF
+  cat > foo.bzl <<'EOF'
+def foo():
+  native.bind(name='foo', actual='@myws//:something')
+EOF
+  cat > BUILD <<'EOF'
+filegroup(name='something', visibility=["//visibility:public"])
+EOF
+  bazel build //external:foo //external:bar &> "$TEST_log" || fail "don't fail!"
 }
 
 function test_flip_flopping() {
@@ -2776,7 +2808,7 @@ genrule(
 EOF
   execroot="$(bazel info execution_root)"
 
-  bazel build --experimental_merged_skyframe_analysis_execution --experimental_skymeld_ui //:foo \
+  bazel build --experimental_merged_skyframe_analysis_execution //:foo \
     || fail 'Expected build to succeed with Skymeld'
 
   test -h "$execroot/external/ext" || fail "Expected symlink to external repo."

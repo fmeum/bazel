@@ -50,6 +50,7 @@ import com.google.devtools.build.lib.buildeventstream.transports.TextFormatFileT
 import com.google.devtools.build.lib.events.Event;
 import com.google.devtools.build.lib.events.EventHandler;
 import com.google.devtools.build.lib.events.Reporter;
+import com.google.devtools.build.lib.exec.Protos.SpawnExec;
 import com.google.devtools.build.lib.network.ConnectivityStatus;
 import com.google.devtools.build.lib.network.ConnectivityStatus.Status;
 import com.google.devtools.build.lib.network.ConnectivityStatusProvider;
@@ -72,6 +73,7 @@ import com.google.devtools.build.lib.util.io.OutErr;
 import com.google.devtools.common.options.OptionsBase;
 import com.google.devtools.common.options.OptionsParsingException;
 import com.google.devtools.common.options.OptionsParsingResult;
+import com.google.protobuf.util.JsonFormat.TypeRegistry;
 import com.google.protobuf.util.Timestamps;
 import java.io.BufferedOutputStream;
 import java.io.IOException;
@@ -142,6 +144,7 @@ public abstract class BuildEventServiceModule<OptionsT extends BuildEventService
   @Nullable private Reporter reporter;
   @Nullable private BuildEventStreamer streamer;
   @Nullable private ConnectivityStatusProvider connectivityProvider;
+  @Nullable private String commandName;
   private static final String CONNECTIVITY_CACHE_KEY = "BES";
 
   protected OptionsT besOptions;
@@ -192,7 +195,7 @@ public abstract class BuildEventServiceModule<OptionsT extends BuildEventService
   private void cancelAndResetPendingUploads() {
     closeFuturesWithTimeoutsMap
         .values()
-        .forEach(closeFuture -> closeFuture.cancel(/*mayInterruptIfRunning=*/ true));
+        .forEach(closeFuture -> closeFuture.cancel(/* mayInterruptIfRunning= */ true));
     resetPendingUploads();
   }
 
@@ -290,8 +293,9 @@ public abstract class BuildEventServiceModule<OptionsT extends BuildEventService
   }
 
   @Override
-  public void beforeCommand(CommandEnvironment cmdEnv) {
+  public void beforeCommand(CommandEnvironment cmdEnv) throws AbruptExitException {
     this.invocationId = cmdEnv.getCommandId().toString();
+    this.commandName = cmdEnv.getCommandName();
     this.buildRequestId = cmdEnv.getBuildRequestId();
     this.reporter = cmdEnv.getReporter();
 
@@ -629,7 +633,8 @@ public abstract class BuildEventServiceModule<OptionsT extends BuildEventService
     if (besStreamOptions != null && !besStreamOptions.keepBackendConnections) {
       clearBesClient();
     } else if (besStreamOptions == null) {
-      BugReport.sendBugReport(new NullPointerException("besStreamOptions null: in a crash?"));
+      BugReport.sendNonFatalBugReport(
+          new NullPointerException("besStreamOptions null: in a crash?"));
     }
   }
 
@@ -641,12 +646,14 @@ public abstract class BuildEventServiceModule<OptionsT extends BuildEventService
     this.buildRequestId = null;
     this.reporter = null;
     this.streamer = null;
+    this.commandName = null;
   }
 
   private void constructAndMaybeReportInvocationIdUrl() {
-    if (!getInvocationIdPrefix().isEmpty()) {
+    if (!getInvocationIdPrefix(commandName).isEmpty()) {
       reporter.handle(
-          Event.info("Streaming build results to: " + getInvocationIdPrefix() + invocationId));
+          Event.info(
+              "Streaming build results to: " + getInvocationIdPrefix(commandName) + invocationId));
     }
   }
 
@@ -743,6 +750,16 @@ public abstract class BuildEventServiceModule<OptionsT extends BuildEventService
         .build();
   }
 
+  /**
+   * Returns the JSON type registry, used to resolve {@code Any} type names at serialization time.
+   *
+   * <p>Intended to be overridden by custom build tools with a subclassed {@link
+   * BuildEventServiceModule} to add additional Any types to be produced.
+   */
+  protected TypeRegistry makeJsonTypeRegistry() {
+    return TypeRegistry.newBuilder().add(SpawnExec.getDescriptor()).build();
+  }
+
   private ImmutableSet<BuildEventTransport> createBepTransports(
       CommandEnvironment cmdEnv,
       ThrowingBuildEventArtifactUploaderSupplier uploaderSupplier,
@@ -815,7 +832,11 @@ public abstract class BuildEventServiceModule<OptionsT extends BuildEventService
                 : new LocalFilesArtifactUploader();
         bepTransportsBuilder.add(
             new JsonFormatFileTransport(
-                bepJsonOutputStream, bepOptions, localFileUploader, artifactGroupNamer));
+                bepJsonOutputStream,
+                bepOptions,
+                localFileUploader,
+                artifactGroupNamer,
+                makeJsonTypeRegistry()));
       } catch (IOException exception) {
         // TODO(b/125216340): Consider making this a warning instead of an error once the
         //  associated bug has been resolved.
@@ -862,15 +883,21 @@ public abstract class BuildEventServiceModule<OptionsT extends BuildEventService
 
   protected abstract Set<String> allowedCommands(OptionsT besOptions);
 
-  protected Set<String> getBesKeywords(
+  protected ImmutableSet<String> getBesKeywords(
       OptionsT besOptions, @Nullable OptionsParsingResult startupOptionsProvider) {
-    return besOptions.besKeywords.stream()
-        .map(keyword -> "user_keyword=" + keyword)
-        .collect(ImmutableSet.toImmutableSet());
+    List<String> userKeywords = besOptions.besKeywords;
+    List<String> systemKeywords = besOptions.besSystemKeywords;
+    ImmutableSet.Builder<String> keywords =
+        ImmutableSet.builderWithExpectedSize(userKeywords.size() + systemKeywords.size());
+    for (String userKeyword : userKeywords) {
+      keywords.add("user_keyword=" + userKeyword);
+    }
+    keywords.addAll(systemKeywords);
+    return keywords.build();
   }
 
   /** A prefix used when printing the invocation ID in the command line */
-  protected abstract String getInvocationIdPrefix();
+  protected abstract String getInvocationIdPrefix(String commandName);
 
   /** A prefix used when printing the build request ID in the command line */
   protected abstract String getBuildRequestIdPrefix();

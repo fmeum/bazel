@@ -15,6 +15,8 @@
 package com.google.devtools.build.lib.sandbox;
 
 import com.google.common.flogger.GoogleLogger;
+import com.google.devtools.build.lib.exec.TreeDeleter;
+import com.google.devtools.build.lib.vfs.FileSystem;
 import com.google.devtools.build.lib.vfs.Path;
 import java.io.FileNotFoundException;
 import java.io.IOException;
@@ -34,7 +36,7 @@ public class SandboxStash {
   private static final GoogleLogger logger = GoogleLogger.forEnclosingClass();
 
   /** An incrementing count of stashes to avoid filename clashes. */
-  static AtomicInteger stash = new AtomicInteger(0);
+  static final AtomicInteger stash = new AtomicInteger(0);
 
   /** If true, we have already warned about an error causing us to turn off reuse. */
   private final AtomicBoolean warnedAboutTurningOffReuse = new AtomicBoolean();
@@ -47,11 +49,11 @@ public class SandboxStash {
 
   private static SandboxStash instance;
   private final String workspaceName;
-  private final Path sandboxBase;
+  private final Path outputBase;
 
-  public SandboxStash(String workspaceName, Path sandboxBase) {
+  public SandboxStash(String workspaceName, Path outputBase) {
     this.workspaceName = workspaceName;
-    this.sandboxBase = sandboxBase;
+    this.outputBase = outputBase;
   }
 
   static boolean takeStashedSandbox(Path sandboxPath, String mnemonic) {
@@ -63,17 +65,24 @@ public class SandboxStash {
 
   private boolean takeStashedSandboxInternal(Path sandboxPath, String mnemonic) {
     try {
-      Path sandboxes = getSandboxStashDir(mnemonic);
+      Path sandboxes = getSandboxStashDir(mnemonic, sandboxPath.getFileSystem());
       if (sandboxes == null) {
         return false;
       }
       Collection<Path> stashes = sandboxes.getDirectoryEntries();
-      // We have to remove the sandbox root to move a stash there, but it is currently empty
-      // and we reinstate it if we don't get a sandbox.
-      sandboxPath.deleteTree();
+      if (stashes.isEmpty()) {
+        return false;
+      }
+      // We have to remove the sandbox execroot dir to move a stash there, but it is currently empty
+      // and we reinstate it later if we don't get a sandbox. We can't just move the stash dir
+      // fully, as we would then lose siblings of the execroot dir, such as hermetic-tmp dirs.
+      Path sandboxExecroot = sandboxPath.getChild("execroot");
+      sandboxExecroot.deleteTree();
       for (Path stash : stashes) {
         try {
-          stash.renameTo(sandboxPath);
+          Path stashExecroot = stash.getChild("execroot");
+          stashExecroot.renameTo(sandboxExecroot);
+          stash.deleteTree();
           return true;
         } catch (FileNotFoundException e) {
           // Try the next one, somebody else took this one.
@@ -90,17 +99,17 @@ public class SandboxStash {
   }
 
   /** Atomically moves the sandboxPath directory aside for later reuse. */
-  static boolean stashSandbox(Path path, String mnemonic) {
+  static void stashSandbox(Path path, String mnemonic) {
     if (instance == null) {
-      return false;
+      return;
     }
-    return instance.stashSandboxInternal(path, mnemonic);
+    instance.stashSandboxInternal(path, mnemonic);
   }
 
-  private boolean stashSandboxInternal(Path path, String mnemonic) {
-    Path sandboxes = getSandboxStashDir(mnemonic);
+  private void stashSandboxInternal(Path path, String mnemonic) {
+    Path sandboxes = getSandboxStashDir(mnemonic, path.getFileSystem());
     if (sandboxes == null) {
-      return false;
+      return;
     }
     String stashName;
     synchronized (stash) {
@@ -108,27 +117,30 @@ public class SandboxStash {
     }
     Path stashPath = sandboxes.getChild(stashName);
     if (!path.exists()) {
-      return false;
+      return;
     }
     try {
-      path.renameTo(stashPath);
+      stashPath.createDirectory();
+      path.getChild("execroot").renameTo(stashPath.getChild("execroot"));
     } catch (IOException e) {
       // Since stash names are unique, this IOException indicates some other problem with stashing,
       // so we turn it off.
       turnOffReuse("Error stashing sandbox at %s: %s", stashPath, e);
-      return false;
     }
-    return true;
   }
 
   /**
    * Returns the sandbox stashing directory appropriate for this mnemonic. In order to maximize
    * reuse, we keep stashed sandboxes separated by mnemonic. May return null if there are errors, in
    * which case sandbox reuse also gets turned off.
+   *
+   * <p>TODO(bazel-team): Fix integration tests to instantiate FileSystem only once, so that passing
+   * it in here (to avoid the cross-filesystem precondition check in renameTo) is no longer
+   * necessary.
    */
   @Nullable
-  private Path getSandboxStashDir(String mnemonic) {
-    Path stashDir = getStashBase();
+  private Path getSandboxStashDir(String mnemonic, FileSystem fileSystem) {
+    Path stashDir = getStashBase(fileSystem.getPath(this.outputBase.getPathString()));
     try {
       stashDir.createDirectory();
       if (!maybeClearExistingStash(stashDir)) {
@@ -150,8 +162,8 @@ public class SandboxStash {
     }
   }
 
-  private Path getStashBase() {
-    return this.sandboxBase.getChild("sandbox_stash");
+  private static Path getStashBase(Path outputBase1) {
+    return outputBase1.getChild("sandbox_stash");
   }
 
   /**
@@ -189,7 +201,7 @@ public class SandboxStash {
       if (instance == null) {
         instance = new SandboxStash(workspaceName, sandboxBase);
       } else if (!Objects.equals(workspaceName, instance.workspaceName)) {
-        Path stashBase = instance.getStashBase();
+        Path stashBase = getStashBase(instance.outputBase);
         try {
           for (Path directoryEntry : stashBase.getDirectoryEntries()) {
             directoryEntry.deleteTree();
@@ -202,6 +214,32 @@ public class SandboxStash {
       }
     } else {
       instance = null;
+    }
+  }
+
+  /** Cleans up the entire current stash, if any. Cleaning may be asynchronous. */
+  static void clean(TreeDeleter treeDeleter, Path outputBase) {
+    Path stashDir = getStashBase(outputBase);
+    if (!stashDir.isDirectory()) {
+      return;
+    }
+    Path stashTrashDir = stashDir.getChild("__trash");
+    try {
+      stashDir.renameTo(stashTrashDir);
+    } catch (IOException e) {
+      // If we couldn't move the stashdir away for deletion, we need to delete it synchronously
+      // in place, so we can't use the treeDeleter.
+      treeDeleter = null;
+      stashTrashDir = stashDir;
+    }
+    try {
+      if (treeDeleter != null) {
+        treeDeleter.deleteTree(stashTrashDir);
+      } else {
+        stashTrashDir.deleteTree();
+      }
+    } catch (IOException e) {
+      logger.atWarning().withCause(e).log("Failed to clean sandbox stash %s", stashDir);
     }
   }
 }

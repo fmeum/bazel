@@ -16,13 +16,12 @@
 Definition of java_library rule.
 """
 
-load(":common/java/java_common.bzl", "BASIC_JAVA_LIBRARY_IMPLICIT_ATTRS", "basic_java_library", "construct_defaultinfo")
-load(":common/rule_util.bzl", "merge_attrs")
-load(":common/java/java_semantics.bzl", "semantics")
 load(":common/cc/cc_info.bzl", "CcInfo")
-
-JavaInfo = _builtins.toplevel.JavaInfo
-JavaPluginInfo = _builtins.toplevel.JavaPluginInfo
+load(":common/java/android_lint.bzl", "android_lint_subrule")
+load(":common/java/basic_java_library.bzl", "BASIC_JAVA_LIBRARY_IMPLICIT_ATTRS", "basic_java_library", "construct_defaultinfo")
+load(":common/java/java_info.bzl", "JavaInfo", "JavaPluginInfo")
+load(":common/java/java_semantics.bzl", "semantics")
+load(":common/rule_util.bzl", "merge_attrs")
 
 def bazel_java_library_rule(
         ctx,
@@ -168,17 +167,27 @@ JAVA_LIBRARY_ATTRS = merge_attrs(
     },
 )
 
-java_library = rule(
-    _proxy,
-    attrs = merge_attrs(
-        JAVA_LIBRARY_ATTRS,
-        {"_use_auto_exec_groups": attr.bool(default = True)},
-    ),
-    provides = [JavaInfo],
-    outputs = {
-        "classjar": "lib%{name}.jar",
-        "sourcejar": "lib%{name}-src.jar",
-    },
-    fragments = ["java", "cpp"],
-    toolchains = [semantics.JAVA_TOOLCHAIN],
-)
+def _make_java_library_rule(extra_attrs = {}):
+    return rule(
+        _proxy,
+        attrs = merge_attrs(
+            JAVA_LIBRARY_ATTRS,
+            extra_attrs,
+        ),
+        provides = [JavaInfo],
+        outputs = {
+            "classjar": "lib%{name}.jar",
+            "sourcejar": "lib%{name}-src.jar",
+        },
+        fragments = ["java", "cpp"],
+        toolchains = [semantics.JAVA_TOOLCHAIN],
+        subrules = [android_lint_subrule],
+    )
+
+java_library = _make_java_library_rule()
+
+# for experimental_java_library_export_do_not_use
+def make_sharded_java_library(default_shard_size):
+    return _make_java_library_rule({
+        "experimental_javac_shard_size": attr.int(default = default_shard_size),
+    })

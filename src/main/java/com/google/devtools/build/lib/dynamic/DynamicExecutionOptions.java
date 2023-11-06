@@ -78,7 +78,8 @@ public class DynamicExecutionOptions extends OptionsBase {
               + "strategy is used. For example, `worker,sandboxed` runs actions that support "
               + "persistent workers using the worker strategy, and all others using the sandboxed "
               + "strategy. If no mnemonic is given, the list of strategies is used as the "
-              + "fallback for all mnemonics. The default fallback list is `worker,sandboxed`. "
+              + "fallback for all mnemonics. The default fallback list is `worker,sandboxed`, or"
+              + "`worker,sandboxed,standalone` if `experimental_local_lockfree_output` is set. "
               + "Takes [mnemonic=]local_strategy[,local_strategy,...]")
   public List<Map.Entry<String, List<String>>> dynamicLocalStrategy;
 
@@ -117,28 +118,6 @@ public class DynamicExecutionOptions extends OptionsBase {
       effectTags = {OptionEffectTag.UNKNOWN},
       defaultValue = "false")
   public boolean debugSpawnScheduler;
-
-  @Option(
-      name = "experimental_require_availability_info",
-      documentationCategory = OptionDocumentationCategory.UNDOCUMENTED,
-      effectTags = {OptionEffectTag.UNKNOWN},
-      defaultValue = "false",
-      help =
-          "If true, fail the build if there are actions that set requires-darwin but do not have"
-              + "Xcode availability-related execution requirements set.")
-  public boolean requireAvailabilityInfo;
-
-  @Option(
-      name = "experimental_availability_info_exempt",
-      documentationCategory = OptionDocumentationCategory.UNDOCUMENTED,
-      effectTags = {OptionEffectTag.UNKNOWN},
-      defaultValue = "Genrule,TestRunner",
-      converter = Converters.CommaSeparatedOptionListConverter.class,
-      help =
-          "A comma-separated list of mnemonics that are not required to have Xcode-related "
-              + "execution info if --experimental_require_availability_info=true. No-op if "
-              + "--experimental_require_availability_info=false.")
-  public List<String> availabilityInfoExempt;
 
   @Option(
       name = "experimental_dynamic_slow_remote_time",
@@ -183,7 +162,7 @@ public class DynamicExecutionOptions extends OptionsBase {
 
   @Option(
       name = "experimental_dynamic_ignore_local_signals",
-      documentationCategory = OptionDocumentationCategory.UNCATEGORIZED,
+      documentationCategory = OptionDocumentationCategory.BUILD_TIME_OPTIMIZATION,
       converter = SignalListConverter.class,
       effectTags = {OptionEffectTag.EXECUTION},
       defaultValue = "null",

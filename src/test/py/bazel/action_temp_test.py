@@ -14,7 +14,7 @@
 
 import os
 import re
-import unittest
+from absl.testing import absltest
 from src.test.py.bazel import test_base
 
 
@@ -107,8 +107,7 @@ class ActionTempTest(test_base.TestBase):
       return ['TMPDIR']
 
   def _BazelOutputDirectory(self, info_key):
-    exit_code, stdout, stderr = self.RunBazel(['info', info_key])
-    self.AssertExitCode(exit_code, 0, stderr)
+    _, stdout, _ = self.RunBazel(['info', info_key])
     return stdout[0]
 
   def _InvalidateActions(self, content):
@@ -200,9 +199,10 @@ class ActionTempTest(test_base.TestBase):
 
   def _SpawnStrategies(self):
     """Returns the list of supported --spawn_strategy values."""
-    exit_code, _, stderr = self.RunBazel([
-        'build', '--color=no', '--curses=no', '--spawn_strategy=foo'
-    ])
+    exit_code, _, stderr = self.RunBazel(
+        ['build', '--color=no', '--curses=no', '--spawn_strategy=foo'],
+        allow_failure=True,
+    )
     self.AssertExitCode(exit_code, 2, stderr)
     pattern = re.compile(r'^ERROR:.*no strategy.*Valid values are: \[(.*)\]$')
     for line in stderr:
@@ -222,14 +222,17 @@ class ActionTempTest(test_base.TestBase):
       with open(path, 'rt') as f:
         return [l.strip() for l in f]
 
-    exit_code, _, stderr = self.RunBazel([
-        'build',
-        '--verbose_failures',
-        '--spawn_strategy=%s' % strategy,
-        '//foo:genrule',
-        '//foo:starlark',
-    ], env_remove, env_add)
-    self.AssertExitCode(exit_code, 0, stderr)
+    self.RunBazel(
+        [
+            'build',
+            '--verbose_failures',
+            '--spawn_strategy=%s' % strategy,
+            '//foo:genrule',
+            '//foo:starlark',
+        ],
+        env_remove,
+        env_add,
+    )
     self.assertTrue(
         os.path.exists(os.path.join(bazel_genfiles, 'foo/genrule.txt')))
     self.assertTrue(os.path.exists(os.path.join(bazel_bin, 'foo/starlark.txt')))
@@ -260,4 +263,4 @@ class ActionTempTest(test_base.TestBase):
 
 
 if __name__ == '__main__':
-  unittest.main()
+  absltest.main()

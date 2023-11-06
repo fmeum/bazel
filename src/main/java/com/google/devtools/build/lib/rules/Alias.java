@@ -60,6 +60,8 @@ public class Alias implements RuleConfiguredTargetFactory {
   public static class AliasRule implements RuleDefinition {
     @Override
     public RuleClass build(RuleClass.Builder builder, RuleDefinitionEnvironment environment) {
+      // If transitions are added here, AspectFunction should be modified to follow all
+      // configurations along alias chains.
       return builder
           /*<!-- #BLAZE_RULE(alias).ATTRIBUTE(actual) -->
           The target this alias refers to. It does not need to be a rule, it can also be an input
@@ -104,6 +106,13 @@ public class Alias implements RuleConfiguredTargetFactory {
 <p>
   Aliasing only works for "regular" targets. In particular, <code>package_group</code>
   and <code>test_suite</code> cannot be aliased.
+</p>
+
+<p>
+  Aliasing may be of help in large repositories where renaming a target would require making
+  changes to lots of files. You can also use alias rule to store a
+  <a href="${link select}">select</a> function call if you want to reuse that logic for
+  multiple targets.
 </p>
 
 <p>

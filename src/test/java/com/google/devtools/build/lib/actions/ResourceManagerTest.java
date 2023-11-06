@@ -79,7 +79,6 @@ public final class ResourceManagerTest {
     sync = new CyclicBarrier(2);
     sync2 = new CyclicBarrier(2);
     rm.resetResourceUsage();
-    rm.setPrioritizeLocalActions(true);
     worker = mock(Worker.class);
     rm.setWorkerPool(createWorkerPool());
   }
@@ -517,66 +516,6 @@ public final class ResourceManagerTest {
 
   @Test
   @SuppressWarnings("ThreadPriorityCheck")
-  public void testRelease_noPriority() throws Exception {
-    rm.setPrioritizeLocalActions(false);
-    assertThat(rm.inUse()).isFalse();
-
-    TestThread thread1 =
-        new TestThread(
-            () -> {
-              acquire(700, 0, 0);
-              sync.await();
-              sync2.await();
-              release(700, 0, 0);
-            });
-    thread1.start();
-    // Wait for thread1 to have acquired its RAM
-    sync.await(1, TimeUnit.SECONDS);
-
-    // Set up threads that compete for resources
-    CyclicBarrier syncDynamicStandalone =
-        startAcquireReleaseThread(ResourcePriority.DYNAMIC_STANDALONE);
-    while (rm.getWaitCount() < 1) {
-      Thread.yield();
-    }
-    CyclicBarrier syncDynamicWorker = startAcquireReleaseThread(ResourcePriority.DYNAMIC_WORKER);
-    while (rm.getWaitCount() < 2) {
-      Thread.yield();
-    }
-    CyclicBarrier syncLocal = startAcquireReleaseThread(ResourcePriority.LOCAL);
-    while (rm.getWaitCount() < 3) {
-      Thread.yield();
-    }
-
-    sync2.await();
-
-    while (syncLocal.getNumberWaiting()
-            + syncDynamicWorker.getNumberWaiting()
-            + syncDynamicStandalone.getNumberWaiting()
-        == 0) {
-      Thread.yield();
-    }
-    assertThat(rm.getWaitCount()).isEqualTo(2);
-    assertThat(syncDynamicStandalone.getNumberWaiting()).isEqualTo(1);
-    syncDynamicStandalone.await(1, TimeUnit.SECONDS);
-
-    while (syncDynamicWorker.getNumberWaiting() + syncLocal.getNumberWaiting() == 0) {
-      Thread.yield();
-    }
-    assertThat(syncDynamicWorker.getNumberWaiting()).isEqualTo(1);
-    assertThat(rm.getWaitCount()).isEqualTo(1);
-
-    syncDynamicWorker.await(1, TimeUnit.SECONDS);
-    while (syncLocal.getNumberWaiting() == 0) {
-      Thread.yield();
-    }
-    assertThat(syncLocal.getNumberWaiting()).isEqualTo(1);
-    assertThat(rm.getWaitCount()).isEqualTo(0);
-    syncLocal.await(1, TimeUnit.SECONDS);
-  }
-
-  @Test
-  @SuppressWarnings("ThreadPriorityCheck")
   public void testRelease_highPriorityFirst() throws Exception {
     assertThat(rm.inUse()).isFalse();
 
@@ -760,12 +699,6 @@ public final class ResourceManagerTest {
     return rm.areResourcesAvailable(ResourceSet.create(ram, cpu, localTestCount));
   }
 
-  synchronized boolean isAvailable(
-      ResourceManager rm, double ram, double cpu, int localTestCount, WorkerKey workerKey) {
-    return rm.areResourcesAvailable(
-        ResourceSet.createWithWorkerKey(ram, cpu, localTestCount, workerKey));
-  }
-
   private static class ResourceOwnerStub implements ActionExecutionMetadata {
 
     @Override
@@ -875,11 +808,6 @@ public final class ResourceManagerTest {
     @Override
     public ImmutableSet<Artifact> getMandatoryOutputs() {
       return ImmutableSet.of();
-    }
-
-    @Override
-    public boolean shouldReportPathPrefixConflict(ActionAnalysisMetadata action) {
-      throw new IllegalStateException();
     }
 
     @Override

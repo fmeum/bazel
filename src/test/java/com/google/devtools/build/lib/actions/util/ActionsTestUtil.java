@@ -82,8 +82,8 @@ import com.google.devtools.build.lib.exec.SingleBuildFileCache;
 import com.google.devtools.build.lib.skyframe.ActionExecutionValue;
 import com.google.devtools.build.lib.skyframe.ActionTemplateExpansionValue;
 import com.google.devtools.build.lib.skyframe.ActionTemplateExpansionValue.ActionTemplateExpansionKey;
-import com.google.devtools.build.lib.skyframe.BuildConfigurationKey;
 import com.google.devtools.build.lib.skyframe.TreeArtifactValue;
+import com.google.devtools.build.lib.skyframe.config.BuildConfigurationKey;
 import com.google.devtools.build.lib.skyframe.serialization.autocodec.SerializationConstant;
 import com.google.devtools.build.lib.util.FileType;
 import com.google.devtools.build.lib.util.Fingerprint;
@@ -272,7 +272,7 @@ public final class ActionsTestUtil {
   public static ActionExecutionValue createActionExecutionValue(
       ImmutableMap<Artifact, FileArtifactValue> artifactData,
       ImmutableMap<Artifact, TreeArtifactValue> treeArtifactData) {
-    return ActionExecutionValue.create(
+    return ActionExecutionValue.createFromOutputMetadataStore(
         artifactData,
         treeArtifactData,
         /* outputSymlinks= */ ImmutableList.of(),
@@ -308,9 +308,9 @@ public final class ActionsTestUtil {
   }
 
   public static SpecialArtifact createTreeArtifactWithGeneratingAction(
-      ArtifactRoot root, String path) {
+      ArtifactRoot root, String rootRelativePath) {
     return createTreeArtifactWithGeneratingAction(
-        root, root.getExecPath().getRelative(PathFragment.create(path)));
+        root, root.getExecPath().getRelative(rootRelativePath));
   }
 
   public static SpecialArtifact createUnresolvedSymlinkArtifact(
@@ -363,16 +363,6 @@ public final class ActionsTestUtil {
       @Override
       public PathFragment getExecPath() {
         return path;
-      }
-
-      @Override
-      public boolean isDirectory() {
-        return false;
-      }
-
-      @Override
-      public boolean isSymlink() {
-        return false;
       }
 
       @Override
@@ -462,11 +452,6 @@ public final class ActionsTestUtil {
     }
 
     @Override
-    public boolean restartPermitted() {
-      return false;
-    }
-
-    @Override
     public <T extends SkyKeyComputeState> T getState(Supplier<T> stateSupplier) {
       return stateSupplier.get();
     }
@@ -519,7 +504,7 @@ public final class ActionsTestUtil {
           NULL_LABEL,
           new Location("dummy-file", 0, 0),
           /* targetKind= */ "dummy-kind",
-          /* mnemonic= */ "dummy-configuration-mnemonic",
+          /* buildConfigurationMnemonic= */ "dummy-configuration-mnemonic",
           /* configurationChecksum= */ "dummy-configuration",
           new BuildConfigurationEvent(
               BuildEventStreamProtos.BuildEventId.getDefaultInstance(),

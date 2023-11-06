@@ -363,7 +363,7 @@ java_library(
     name = "serialization-tests",
     testonly = 1,
     srcs = glob(
-        ["**/*.java"],
+        ["*.java"],
         exclude = [
             "PackageLookupValueCodecTest.java",
             "MutableListCodecTest.java",
@@ -411,7 +411,7 @@ java_library(
         "//third_party:mockito",
         "//third_party:truth",
         "//third_party/protobuf:protobuf_java",
-        "@com_google_testparameterinjector//:testparameterinjector",
+        "@maven//:com_google_testparameterinjector_test_parameter_injector",
     ],
 )
 

@@ -223,6 +223,13 @@ public final class AndroidRuleClasses {
           null,
           (rule, attributes, androidConfig) -> androidConfig.getLegacyMainDexListGenerator());
 
+  @SerializationConstant
+  static final LabelLateBoundDefault<AndroidConfiguration> OPTIMIZING_DEXER =
+      LabelLateBoundDefault.fromTargetConfiguration(
+          AndroidConfiguration.class,
+          null,
+          (rule, attributes, androidConfig) -> androidConfig.getOptimizingDexer());
+
   public static final FileType ANDROID_IDL = FileType.of(".aidl");
 
   public static final String[] ALLOWED_DEPENDENCIES = {
@@ -812,13 +819,22 @@ public final class AndroidRuleClasses {
                   .cfg(TransitionFactories.of(ANDROID_SPLIT_TRANSITION))
                   .value(env.getToolsLabel("//tools/cpp:current_cc_toolchain")))
           /* <!-- #BLAZE_RULE(android_binary).ATTRIBUTE(manifest_values) -->
-          A dictionary of values to be overridden in the manifest. Any instance of ${name} in the
-          manifest will be replaced with the value corresponding to name in this dictionary.
-          applicationId, versionCode, versionName, minSdkVersion, targetSdkVersion and
-          maxSdkVersion will also override the corresponding attributes of the manifest and
-          uses-sdk tags. packageName will be ignored and will be set from either applicationId if
-          specified or the package in manifest. When manifest_merger is set to legacy, only
-          applicationId, versionCode and versionName will have any effect.
+          A dictionary of values to be overridden in the manifest.
+          <p>
+          Any instance of <code>${name}</code> in the manifest will be replaced with the value
+          corresponding to name in this dictionary.
+          <p>
+          <code>applicationId</code>, <code>versionCode</code>, <code>versionName</code>,
+          <code>minSdkVersion</code>, <code>targetSdkVersion</code> and
+          <code>maxSdkVersion</code> will also override the corresponding attributes in the manifest
+          and <code>uses-sdk</code> tags.
+          <p>
+          <code>packageName</code> will be ignored and will be set from either
+          <code>applicationId</code> if specified or the package in manifest.
+          <p>
+          When <code>manifest_merger</code> is set to <code>legacy</code>, only
+          <code>applicationId</code>, <code>versionCode</code> and <code>versionName</code> will
+          have any effect.
           <!-- #END_BLAZE_RULE.ATTRIBUTE --> */
           .add(attr("manifest_values", STRING_DICT))
           .add(
@@ -893,6 +909,12 @@ public final class AndroidRuleClasses {
                   .cfg(ExecutionTransitionFactory.createFactory())
                   .value(LEGACY_MAIN_DEX_LIST_GENERATOR)
                   .exec())
+          // This comes from the --optimizing_dexer flag.
+          .add(
+              attr(":optimizing_dexer", LABEL)
+                  .cfg(ExecutionTransitionFactory.createFactory())
+                  .value(OPTIMIZING_DEXER)
+                  .exec())
           .removeAttribute("data")
           .advertiseStarlarkProvider(StarlarkProviderIdentifier.forKey(ApkInfo.PROVIDER.getKey()))
           .advertiseStarlarkProvider(StarlarkProviderIdentifier.forKey(JavaInfo.PROVIDER.getKey()))
@@ -953,13 +975,7 @@ public final class AndroidRuleClasses {
   }
 
   /** Definition of the {@code android_tools_defaults_jar} rule. */
-  public static final class AndroidToolsDefaultsJarRule implements RuleDefinition {
-
-    private final Class<? extends AndroidToolsDefaultsJar> factoryClass;
-
-    public AndroidToolsDefaultsJarRule(Class<? extends AndroidToolsDefaultsJar> factoryClass) {
-      this.factoryClass = factoryClass;
-    }
+  public static final class AndroidBaseToolsDefaultsJarRule implements RuleDefinition {
 
     @Override
     public RuleClass build(RuleClass.Builder builder, RuleDefinitionEnvironment environment) {
@@ -975,9 +991,9 @@ public final class AndroidRuleClasses {
     @Override
     public Metadata getMetadata() {
       return Metadata.builder()
-          .name("android_tools_defaults_jar")
+          .name("$android_base_tools_defaults_jar")
+          .type(RuleClassType.ABSTRACT)
           .ancestors(BaseRuleClasses.NativeBuildRule.class)
-          .factoryClass(factoryClass)
           .build();
     }
   }

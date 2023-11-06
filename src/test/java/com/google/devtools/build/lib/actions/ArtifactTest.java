@@ -36,7 +36,7 @@ import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.cmdline.LabelConstants;
 import com.google.devtools.build.lib.rules.cpp.CppFileTypes;
 import com.google.devtools.build.lib.rules.java.JavaSemantics;
-import com.google.devtools.build.lib.skyframe.BuildConfigurationKey;
+import com.google.devtools.build.lib.skyframe.config.BuildConfigurationKey;
 import com.google.devtools.build.lib.skyframe.serialization.AutoRegistry;
 import com.google.devtools.build.lib.skyframe.serialization.ObjectCodecs;
 import com.google.devtools.build.lib.skyframe.serialization.testutils.SerializationDepsUtils;
@@ -456,7 +456,7 @@ public final class ArtifactTest {
         .addEqualityGroup(derived2)
         .addEqualityGroup(source1, source2)
         .testEquals();
-    assertThat(derived1.hashCode()).isEqualTo(derived2.hashCode());
+    assertThat(derived1.hashCode()).isNotEqualTo(derived2.hashCode());
     assertThat(derived1.hashCode()).isNotEqualTo(source1.hashCode());
     assertThat(source1.hashCode()).isEqualTo(source2.hashCode());
     Artifact.OwnerlessArtifactWrapper wrapper1 = new Artifact.OwnerlessArtifactWrapper(derived1);

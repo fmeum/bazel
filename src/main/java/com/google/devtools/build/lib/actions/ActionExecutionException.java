@@ -57,7 +57,7 @@ public class ActionExecutionException extends Exception implements DetailedExcep
       ActionAnalysisMetadata action,
       boolean catastrophe,
       DetailedExitCode detailedExitCode) {
-    super(combineMessages(message, cause), cause);
+    super(message, cause);
     this.action = action;
     this.catastrophe = catastrophe;
     this.detailedExitCode = checkNotNull(detailedExitCode);
@@ -96,7 +96,7 @@ public class ActionExecutionException extends Exception implements DetailedExcep
       NestedSet<Cause> rootCauses,
       boolean catastrophe,
       DetailedExitCode detailedExitCode) {
-    super(combineMessages(message, cause), cause);
+    super(message, cause);
     this.action = action;
     this.rootCauses = rootCauses;
     this.catastrophe = catastrophe;
@@ -143,7 +143,6 @@ public class ActionExecutionException extends Exception implements DetailedExcep
 
     DetailedExitCode code =
         DetailedExitCode.of(exception.getFailureDetail(action.describe() + " failed: " + message));
-
     if (exception instanceof LostInputsExecException) {
       return ((LostInputsExecException) exception).fromExecException(message, action, code);
     }
@@ -202,13 +201,5 @@ public class ActionExecutionException extends Exception implements DetailedExcep
    */
   public boolean showError() {
     return getMessage() != null;
-  }
-
-  @Nullable
-  private static String combineMessages(String message, @Nullable Throwable cause) {
-    if (cause == null || cause.getMessage() == null) {
-      return message;
-    }
-    return message + ": " + cause.getMessage();
   }
 }

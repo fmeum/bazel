@@ -13,8 +13,8 @@
 // limitations under the License.
 package com.google.devtools.build.lib.packages;
 
-import static com.google.common.collect.ImmutableList.toImmutableList;
 import static com.google.common.truth.Truth.assertThat;
+import static com.google.devtools.build.lib.packages.util.TargetDataSubject.assertThat;
 
 import com.google.common.collect.ImmutableList;
 import com.google.devtools.build.lib.cmdline.PackageIdentifier;
@@ -432,23 +432,21 @@ public class PackageGroupTest extends PackageLoadingTestCase {
                 pkgSpec(other, "//..."),
                 pkgSpec(main, "public"),
                 pkgSpec(main, "private")));
-    assertThat(
-            contents.streamPackageStrings(/*includeDoubleSlash=*/ false).collect(toImmutableList()))
+    assertThat(contents.packageStrings(/* includeDoubleSlash= */ false))
         .containsExactly(
             "a",
-            "a/b/...",
-            "-c",
-            "-c/d/...",
-            "//...",
-            "-//...",
             "",
-            "-",
             "@other//z",
+            "a/b/...",
+            "//...",
             "@other//...",
+            "-c",
+            "-",
+            "-c/d/...",
+            "-//...",
             "//...", // legacy syntax for public
             "private");
-    assertThat(
-            contents.streamPackageStrings(/*includeDoubleSlash=*/ true).collect(toImmutableList()))
+    assertThat(contents.packageStrings(/* includeDoubleSlash= */ true))
         .containsExactly(
             "//a",
             "//a/b/...",
@@ -462,7 +460,7 @@ public class PackageGroupTest extends PackageLoadingTestCase {
             "@other//...",
             "public",
             "private");
-    assertThat(contents.streamPackageStringsWithoutRepository().collect(toImmutableList()))
+    assertThat(contents.packageStringsWithDoubleSlashAndWithoutRepository())
         .containsExactly(
             "//a",
             "//a/b/...",
@@ -476,6 +474,27 @@ public class PackageGroupTest extends PackageLoadingTestCase {
             "//...",
             "public",
             "private");
+  }
+
+  @Test
+  public void testReduceForSerialization() throws Exception {
+    setBuildLanguageOptions("--incompatible_package_group_has_public_syntax=true");
+
+    scratch.file(
+        "fruits/BUILD",
+        "package_group(",
+        "    name = 'apple',",
+        "    packages = ['//vegetables'],",
+        ")",
+        "package_group(",
+        "    name = 'mango',",
+        "    packages = ['public'],",
+        ")");
+    PackageGroup grp = getPackageGroup("fruits", "apple");
+    assertThat(grp).hasSamePropertiesAs(grp.reduceForSerialization());
+
+    grp = getPackageGroup("fruits", "mango");
+    assertThat(grp).hasSamePropertiesAs(grp.reduceForSerialization());
   }
 
   /** Convenience method for obtaining a PackageSpecification. */

@@ -868,6 +868,10 @@ def _impl(ctx):
                                 flags = ["-Wl,-whole-archive"],
                                 expand_if_true =
                                     "libraries_to_link.is_whole_archive",
+                                expand_if_equal = variable_with_value(
+                                    name = "libraries_to_link.type",
+                                    value = "static_library",
+                                ),
                             ),
                             flag_group(
                                 flags = ["%{libraries_to_link.object_files}"],
@@ -915,6 +919,10 @@ def _impl(ctx):
                             flag_group(
                                 flags = ["-Wl,-no-whole-archive"],
                                 expand_if_true = "libraries_to_link.is_whole_archive",
+                                expand_if_equal = variable_with_value(
+                                    name = "libraries_to_link.type",
+                                    value = "static_library",
+                                ),
                             ),
                             flag_group(
                                 flags = ["-Wl,--end-lib"],
@@ -1458,8 +1466,8 @@ def _impl(ctx):
             unfiltered_compile_flags_feature,
             treat_warnings_as_errors_feature,
             archive_param_file_feature,
-            static_library_validation_feature,
-        ] + layering_check_features(ctx.attr.compiler)
+            static_library_validation_feature
+        ]
 
     return cc_common.create_cc_toolchain_config_info(
         ctx = ctx,

@@ -15,20 +15,26 @@ package com.google.devtools.build.lib.buildtool;
 
 import static com.google.common.truth.Truth.assertThat;
 import static com.google.devtools.build.lib.testutil.MoreAsserts.assertContainsEvent;
+import static java.nio.charset.StandardCharsets.UTF_8;
 import static org.junit.Assert.assertThrows;
 
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Iterables;
+import com.google.common.io.ByteStreams;
 import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.actions.BuildFailedException;
 import com.google.devtools.build.lib.analysis.ViewCreationFailedException;
 import com.google.devtools.build.lib.buildtool.util.BuildIntegrationTestCase;
 import com.google.devtools.build.lib.skyframe.TransitiveTargetKey;
+import com.google.protobuf.ByteString;
 import com.google.testing.junit.testparameterinjector.TestParameter;
 import com.google.testing.junit.testparameterinjector.TestParameterInjector;
+import java.io.ByteArrayOutputStream;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.regex.Pattern;
+import java.util.zip.GZIPInputStream;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 
@@ -37,6 +43,17 @@ import org.junit.runner.RunWith;
 public class GenQueryIntegrationTest extends BuildIntegrationTestCase {
 
   @TestParameter private boolean ttvFree;
+  @TestParameter private boolean keepGoing;
+
+  @Override
+  protected void setupOptions() throws Exception {
+    super.setupOptions();
+    runtimeWrapper.addOptions(
+        ttvFree
+            ? "--experimental_skip_ttvs_for_genquery"
+            : "--noexperimental_skip_ttvs_for_genquery");
+    runtimeWrapper.addOptions(keepGoing ? "--keep_going" : "--nokeep_going");
+  }
 
   @Test
   public void testDoesNotFailHorribly() throws Exception {
@@ -50,7 +67,8 @@ public class GenQueryIntegrationTest extends BuildIntegrationTestCase {
     assertQueryResult("//fruits:q", "//fruits:melon", "//fruits:papaya");
   }
 
-  private void deterministicTestHelper(boolean graphless) throws Exception {
+  @Test
+  public void testDeterministic() throws Exception {
     write(
         "fruits/BUILD",
         "sh_library(name='melon', deps=[':papaya', ':apple'])",
@@ -64,22 +82,8 @@ public class GenQueryIntegrationTest extends BuildIntegrationTestCase {
     String firstResult = getQueryResult("//fruits:q");
     for (int i = 0; i < 10; i++) {
       createFilesAndMocks(); // Do a clean.
-      if (graphless) {
-        runtimeWrapper.addOptions("--experimental_genquery_use_graphless_query");
-      }
       assertThat(getQueryResult("//fruits:q")).isEqualTo(firstResult);
     }
-  }
-
-  @Test
-  public void testDeterministic() throws Exception {
-    deterministicTestHelper(/* graphless= */ false);
-  }
-
-  @Test
-  public void testDeterministicGraphless() throws Exception {
-    runtimeWrapper.addOptions("--experimental_genquery_use_graphless_query");
-    deterministicTestHelper(/* graphless= */ true);
   }
 
   @Test
@@ -92,20 +96,20 @@ public class GenQueryIntegrationTest extends BuildIntegrationTestCase {
         "genquery(name='q',",
         "         scope=['//query:common'],",
         "         expression='deps(//query:common)')");
-    runtimeWrapper.addOptions("--experimental_genquery_use_graphless_query");
     assertThat(getQueryResult("//query:q").split("\n")).hasLength(3);
   }
 
   @Test
   public void testFailsIfGoesOutOfScope() throws Exception {
-    write("vegetables/BUILD",
+    write(
+        "vegetables/BUILD",
         "sh_library(name='tomato', deps=[':cabbage'])",
         "sh_library(name='cabbage')",
         "genquery(name='q',",
         "         scope=[':cabbage'],",
         "         expression='deps(//vegetables:tomato)')");
 
-    assertThrows(ViewCreationFailedException.class, () -> buildTarget("//vegetables:q"));
+    assertThrows(expectedExceptionClass(), () -> buildTarget("//vegetables:q"));
 
     assertContainsEvent(events.collector(), "is not within the scope of the query");
   }
@@ -113,18 +117,23 @@ public class GenQueryIntegrationTest extends BuildIntegrationTestCase {
   // Regression test for http://b/29964062.
   @Test
   public void testFailsIfGoesOutOfScopeViaSelect() throws Exception {
-    write("q/BUILD",
+    write(
+        "q/BUILD",
         "genquery(name='q', expression='deps(//q:f)', scope=['f'])",
         "config_setting(name='cs', values={'define':'D=1'})",
         "filegroup(name='f', srcs=select({'cs':[], '//conditions:default':['//dne']}))");
 
-    addOptions("--keep_going");
     addOptions("--define=D=1");
-    assertThrows(BuildFailedException.class, () -> buildTarget("//q"));
+    assertThrows(expectedExceptionClass(), () -> buildTarget("//q"));
 
-    assertContainsEvent(
-        events.collector(),
-        "errors were encountered while computing transitive closure of the scope.");
+    events.assertContainsError(
+        "in genquery rule //q:q: errors were encountered while computing transitive closure of the"
+            + " scope");
+    events.assertContainsError(
+        Pattern.compile(
+            "no such package 'dne': BUILD file not found in any of the following directories. Add a"
+                + " BUILD file to a directory to mark it as a package.\n"
+                + " - .*/dne"));
   }
 
   // Regression test for http://b/34132681
@@ -138,15 +147,14 @@ public class GenQueryIntegrationTest extends BuildIntegrationTestCase {
     // d exists but is missing "srcs"
     write("d/BUILD", "sh_binary(name = 'd')");
 
-    addOptions("--keep_going");
     addOptions("--define=D=1");
-    assertThrows(BuildFailedException.class, () -> buildTarget("//q"));
+    assertThrows(expectedExceptionClass(), () -> buildTarget("//q"));
 
-    assertContainsEvent(
-        events.collector(),
-        "errors were encountered while computing transitive closure of the scope");
+    events.assertContainsError(
+        "in genquery rule //q:q: errors were encountered while computing transitive closure of the"
+            + " scope");
+    events.assertContainsError("Target '//d:d' contains an error and its package is in error");
   }
-
 
   @Test
   public void testResultsAlphabetized() throws Exception {
@@ -178,19 +186,22 @@ public class GenQueryIntegrationTest extends BuildIntegrationTestCase {
 
   @Test
   public void testQueryReexecutedIfDepsChange() throws Exception {
-    write("food/BUILD",
+    write(
+        "food/BUILD",
         "sh_library(name='fruit_salad', deps=['//fruits:tropical'])",
         "genquery(name='q',",
-        "         scope=[':fruit_salad']," +
+        "         scope=[':fruit_salad'],",
         "         expression='deps(//food:fruit_salad)')");
 
-    write("fruits/BUILD",
+    write(
+        "fruits/BUILD",
         "sh_library(name='tropical', deps=[':papaya'])",
         "sh_library(name='papaya')");
 
     assertQueryResult("//food:q", "//food:fruit_salad", "//fruits:papaya", "//fruits:tropical");
 
-    write("fruits/BUILD",
+    write(
+        "fruits/BUILD",
         "sh_library(name='tropical', deps=[':papaya', ':coconut'])",
         "sh_library(name='papaya')",
         "sh_library(name='coconut')");
@@ -205,14 +216,16 @@ public class GenQueryIntegrationTest extends BuildIntegrationTestCase {
 
   @Test
   public void testGenQueryEncountersAnotherGenQuery() throws Exception {
-    write("spices/BUILD",
+    write(
+        "spices/BUILD",
         "sh_library(name='cinnamon', deps=[':nutmeg'])",
         "sh_library(name='nutmeg')",
         "genquery(name='q',",
         "         scope=[':cinnamon'],",
         "         expression='deps(//spices:cinnamon)')");
 
-    write("fruits/BUILD",
+    write(
+        "fruits/BUILD",
         "sh_library(name='pear', deps=[':plum'])",
         "sh_library(name='plum')",
         "genquery(name='q',",
@@ -233,20 +246,82 @@ public class GenQueryIntegrationTest extends BuildIntegrationTestCase {
    */
   @Test
   public void testHandlesMissingTargetGracefully() throws Exception {
-    write("a/BUILD",
+    write(
+        "a/BUILD",
         "genquery(name='query', scope=['//b:target'], expression='deps(//b:nosuchtarget)')");
-    write("b/BUILD",
-        "sh_library(name = 'target')");
-    assertThrows(ViewCreationFailedException.class, () -> buildTarget("//a:query"));
+    write("b/BUILD", "sh_library(name = 'target')");
+    assertThrows(expectedExceptionClass(), () -> buildTarget("//a:query"));
     events.assertContainsError(
         "in genquery rule //a:query: query failed: no such target '//b:nosuchtarget'");
   }
 
   @Test
+  public void testReportsMissingScopeTarget() throws Exception {
+    write("a/BUILD", "genquery(name='query', scope=['//b:target'], expression='set()')");
+    write("b/BUILD");
+    assertThrows(expectedExceptionClass(), () -> buildTarget("//a:query"));
+    events.assertContainsError(
+        "in genquery rule //a:query: errors were encountered while computing transitive closure of"
+            + " the scope");
+    events.assertContainsError(
+        Pattern.compile(
+            "no such target '//b:target': target 'target' not declared in package 'b' defined by"
+                + " .*/b/BUILD"));
+  }
+
+  @Test
+  public void testReportsMissingTransitiveScopeTarget() throws Exception {
+    write(
+        "a/BUILD",
+        "genquery(name='query', scope=[':missingdep'], expression='set()')",
+        "sh_library(name='missingdep', deps=['//b:target'])");
+    write("b/BUILD");
+    assertThrows(expectedExceptionClass(), () -> buildTarget("//a:query"));
+    events.assertContainsError(
+        "in genquery rule //a:query: errors were encountered while computing transitive closure of"
+            + " the scope");
+    events.assertContainsError(
+        Pattern.compile(
+            "no such target '//b:target': target 'target' not declared in package 'b' defined by"
+                + " .*/b/BUILD"));
+  }
+
+  @Test
+  public void testReportsMissingScopePackage() throws Exception {
+    write("a/BUILD", "genquery(name='query', scope=['//b:target'], expression='set()')");
+    assertThrows(expectedExceptionClass(), () -> buildTarget("//a:query"));
+    events.assertContainsError(
+        "in genquery rule //a:query: errors were encountered while computing transitive closure of"
+            + " the scope");
+    events.assertContainsError(
+        Pattern.compile(
+            "no such package 'b': BUILD file not found in any of the following directories. Add a"
+                + " BUILD file to a directory to mark it as a package.\n"
+                + " - .*/b"));
+  }
+
+  @Test
+  public void testReportsMissingTransitiveScopePackage() throws Exception {
+    write(
+        "a/BUILD",
+        "genquery(name='query', scope=[':missingdep'], expression='set()')",
+        "sh_library(name='missingdep', deps=['//b:target'])");
+    assertThrows(expectedExceptionClass(), () -> buildTarget("//a:query"));
+    events.assertContainsError(
+        "in genquery rule //a:query: errors were encountered while computing transitive closure"
+            + " of the scope");
+    events.assertContainsError(
+        Pattern.compile(
+            "no such package 'b': BUILD file not found in any of the following"
+                + " directories. Add a BUILD file to a directory to mark it as a package.\n"
+                + " - .*/b"));
+  }
+
+  @Test
   public void testMultiplePatternsInQuery() throws Exception {
     String buildFile = "";
-    String genQuery = "genquery(name = 'q', scope = [':top'], "
-        + "expression = 'deps(//spices:top) ' + \n";
+    String genQuery =
+        "genquery(name = 'q', scope = [':top'], expression = 'deps(//spices:top) ' + \n";
     String topTarget = "sh_library(name = 'top', deps = [\n";
     for (int i = 0; i < 20; i++) {
       String targetName = (i % 2 == 0 ? "in" : "out") + i;
@@ -312,9 +387,7 @@ public class GenQueryIntegrationTest extends BuildIntegrationTestCase {
 
   @Test
   public void testDoesntAllowLocationOutputWithLoadfiles() throws Exception {
-    write(
-        "foo/bzl.bzl",
-        "x = 2");
+    write("foo/bzl.bzl", "x = 2");
     write(
         "foo/BUILD",
         "load('//foo:bzl.bzl', 'x')",
@@ -330,11 +403,8 @@ public class GenQueryIntegrationTest extends BuildIntegrationTestCase {
         "  opts = ['--output=location'],",
         "  scope = ['//foo:foo'],",
         ")");
-    assertQueryResult(
-        "//foo:gen-loadfiles",
-        "//foo:bzl.bzl");
-    assertThrows(
-        ViewCreationFailedException.class, () -> buildTarget("//foo:gen-loadfiles-location"));
+    assertQueryResult("//foo:gen-loadfiles", "//foo:bzl.bzl");
+    assertThrows(expectedExceptionClass(), () -> buildTarget("//foo:gen-loadfiles-location"));
     events.assertContainsError(
         "in genquery rule //foo:gen-loadfiles-location: query failed: Query expressions "
             + "involving 'buildfiles' or 'loadfiles' cannot be used with --output=location");
@@ -342,9 +412,7 @@ public class GenQueryIntegrationTest extends BuildIntegrationTestCase {
 
   @Test
   public void testDoesntAllowLocationOutputWithBuildfiles() throws Exception {
-    write(
-        "foo/bzl.bzl",
-        "x = 2");
+    write("foo/bzl.bzl", "x = 2");
     write(
         "foo/BUILD",
         "load('//foo:bzl.bzl', 'x')",
@@ -361,8 +429,7 @@ public class GenQueryIntegrationTest extends BuildIntegrationTestCase {
         "  scope = ['//foo:foo'],",
         ")");
     assertQueryResult("//foo:gen-buildfiles", "//foo:BUILD", "//foo:bzl.bzl");
-    assertThrows(
-        ViewCreationFailedException.class, () -> buildTarget("//foo:gen-buildfiles-location"));
+    assertThrows(expectedExceptionClass(), () -> buildTarget("//foo:gen-buildfiles-location"));
     events.assertContainsError(
         "in genquery rule //foo:gen-buildfiles-location: query failed: Query expressions "
             + "involving 'buildfiles' or 'loadfiles' cannot be used with --output=location");
@@ -431,17 +498,19 @@ public class GenQueryIntegrationTest extends BuildIntegrationTestCase {
 
   @Test
   public void testNodepDeps_defaultIsFalse() throws Exception {
-    runNodepDepsTest(/*optsStringValue=*/ "[]", /*expectVisibilityDep=*/ false);
+    runNodepDepsTest(/* optsStringValue= */ "[]", /* expectVisibilityDep= */ false);
   }
 
   @Test
   public void testNodepDeps_false() throws Exception {
-    runNodepDepsTest(/*optsStringValue=*/ "['--nodep_deps=false']", /*expectVisibilityDep=*/ false);
+    runNodepDepsTest(
+        /* optsStringValue= */ "['--nodep_deps=false']", /* expectVisibilityDep= */ false);
   }
 
   @Test
   public void testNodepDeps_true() throws Exception {
-    runNodepDepsTest(/*optsStringValue=*/ "['--nodep_deps=true']", /*expectVisibilityDep=*/ true);
+    runNodepDepsTest(
+        /* optsStringValue= */ "['--nodep_deps=true']", /* expectVisibilityDep= */ true);
   }
 
   @Test
@@ -459,8 +528,7 @@ public class GenQueryIntegrationTest extends BuildIntegrationTestCase {
     if (ttvFree) {
       assertQueryResult("//cycle:gen", "//cycle:cycle");
     } else {
-      runtimeWrapper.addOptions("--noexperimental_skip_ttvs_for_genquery");
-      assertThrows(ViewCreationFailedException.class, () -> buildTarget("//cycle:gen"));
+      assertThrows(expectedExceptionClass(), () -> buildTarget("//cycle:gen"));
       assertContainsEvent(
           events.collector(), "in sh_library rule //cycle:cycle: cycle in dependency graph");
     }
@@ -518,6 +586,29 @@ public class GenQueryIntegrationTest extends BuildIntegrationTestCase {
         "//start:startdep");
   }
 
+  @Test
+  public void testGenQueryOutputCompressed() throws Exception {
+    write(
+        "fruits/BUILD",
+        "sh_library(name='melon', deps=[':papaya'])",
+        "sh_library(name='papaya')",
+        "genquery(name='q',",
+        "         scope=[':melon'],",
+        "         compressed_output=True,",
+        "         expression='deps(//fruits:melon)')");
+
+    buildTarget("//fruits:q");
+    Artifact output = Iterables.getOnlyElement(getArtifacts("//fruits:q"));
+    ByteString compressedContent = readContentAsByteArray(output);
+
+    ByteArrayOutputStream decompressedOut = new ByteArrayOutputStream();
+    try (GZIPInputStream gzipIn = new GZIPInputStream(compressedContent.newInput())) {
+      ByteStreams.copy(gzipIn, decompressedOut);
+    }
+
+    assertThat(decompressedOut.toString(UTF_8)).isEqualTo("//fruits:melon\n//fruits:papaya\n");
+  }
+
   private void assertQueryResult(String queryTarget, String... expected) throws Exception {
     assertThat(getQueryResult(queryTarget).split("\n"))
         .asList()
@@ -533,17 +624,16 @@ public class GenQueryIntegrationTest extends BuildIntegrationTestCase {
   }
 
   private String getQueryResult(String queryTarget) throws Exception {
-    if (ttvFree) {
-      runtimeWrapper.addOptions("--experimental_skip_ttvs_for_genquery");
-    } else {
-      runtimeWrapper.addOptions("--noexperimental_skip_ttvs_for_genquery");
-    }
-    buildTarget(queryTarget);
+    var unused = buildTarget(queryTarget);
     Artifact output = Iterables.getOnlyElement(getArtifacts(queryTarget));
     assertThat(
             getSkyframeExecutor().getEvaluator().getValues().keySet().stream()
                 .anyMatch(key -> key instanceof TransitiveTargetKey))
         .isEqualTo(!ttvFree);
     return readContentAsLatin1String(output);
+  }
+
+  private Class<? extends Throwable> expectedExceptionClass() {
+    return keepGoing ? BuildFailedException.class : ViewCreationFailedException.class;
   }
 }
