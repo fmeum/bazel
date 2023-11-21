@@ -51,6 +51,14 @@ public final class JavaRuntimeRule implements RuleDefinition {
         Files in the runtime needed for hermetic deployments.
         <!-- #END_BLAZE_RULE.ATTRIBUTE --> */
         .add(attr("hermetic_srcs", LABEL_LIST).allowedFileTypes(FileTypeSet.ANY_FILE))
+        /* <!-- #BLAZE_RULE(java_runtime).ATTRIBUTE(lib_ct_sym) -->
+        The lib/ct.sym file needed for compilation with --release.
+        <!-- #END_BLAZE_RULE.ATTRIBUTE --> */
+        .add(
+            attr("lib_ct_sym", LABEL)
+                .singleArtifact()
+                .allowedFileTypes(FileTypeSet.ANY_FILE)
+                .exec())
         /* <!-- #BLAZE_RULE(java_runtime).ATTRIBUTE(lib_modules) -->
         The lib/modules file needed for hermetic deployments.
         <!-- #END_BLAZE_RULE.ATTRIBUTE --> */
