@@ -276,8 +276,13 @@ _bazel__expand_package_name() {
 _bazel__expand_repo_name() {
   local workspace=$1 current=$2
   # TODO: ${BAZEL}
-  bazel-dev mod dump_repo_mapping '' --noshow_progress  2>/dev/null |
-    grep -F "  \"${current#@}" | cut -d'"' -f2 | sed 's/^/@/'
+  local result=$(bazel-dev mod dump_repo_mapping '' --noshow_progress  2>/dev/null |
+    grep -F "  \"${current#@}" | grep -v -F ": \"\"" | cut -d'"' -f2 | sed 's/^/@/')
+  if [ "$result" == "$current" ]; then
+    echo "$result//"
+  else
+    echo "$result"
+  fi
 }
 
 _bazel__external_root() {
