@@ -287,19 +287,40 @@ _bazel__external_root() {
   echo "${output_base}/external"
 }
 
+_bazel__external_repo_root() {
+  local workspace=$1 apparent_repo=$2
+  # TODO: ${BAZEL}
+  local canonical_repo=$(bazel-dev mod dump_repo_mapping '' --noshow_progress 2>/dev/null |
+    grep -F "  \"${apparent_repo}\"" | cut -d'"' -f4)
+  if [ -z "$canonical_repo" ]; then
+    return
+  fi
+  local repo_root=$(_bazel__external_root "$workspace")/$canonical_repo
+  echo "$repo_root"
+}
+
 _bazel__expand_external_package_name() {
   local workspace=$1 current=$2 label_syntax=$3
   local apparent_repo=$(echo "$current" | cut -f1 -d/ | cut -c2-)
   local package=$(echo "$current" | cut -f3- -d/)
-  # TODO: ${BAZEL}
-  local repo=$(bazel-dev mod dump_repo_mapping '' --noshow_progress 2>/dev/null |
-    grep -F "  \"${apparent_repo}\"" | cut -d'"' -f4)
-  if [ -z "$repo" ]; then
+  local repo_root=$(_bazel__external_repo_root "$workspace" "$apparent_repo")
+  if [ -z "$repo_root" ]; then
     return
   fi
-  local repo_root=$(_bazel__external_root "$workspace")/$repo
   _bazel__expand_package_name "$repo_root" "" "$package" "$label_syntax" \
     | sed "s|^|@${apparent_repo}//|"
+}
+
+_bazel__expand_rules_in_external_package() {
+  local workspace=$1 current=$2 label_syntax=$3
+  local apparent_repo=$(echo "$current" | cut -f1 -d/ | cut -c2-)
+  local package=$(echo "$current" | cut -f3- -d/ | cut -f1 -d:)
+  local name=$(echo "$current" | cut -f2 -d:)
+  local repo_root=$(_bazel__external_repo_root "$workspace" "$apparent_repo")
+  if [ -z "$repo_root" ]; then
+    return
+  fi
+  _bazel__expand_rules_in_package "$repo_root" "" "//$package:$name" "$label_syntax"
 }
 
 # Usage: _bazel__expand_target_pattern <workspace> <displacement>
@@ -312,6 +333,7 @@ _bazel__expand_target_pattern() {
   local workspace=$1 displacement=$2 current=$3 label_syntax=$4
   case "$current" in
     @*//*:*) # Expand rule names within external repository.
+      _bazel__expand_rules_in_external_package "$workspace" "$current" "$label_syntax"
       ;;
     @*//*) # Expand package names within external repository.
       _bazel__expand_external_package_name "$workspace" "$current" "$label_syntax"
