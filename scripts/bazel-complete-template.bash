@@ -273,6 +273,13 @@ _bazel__expand_package_name() {
   done
 }
 
+_bazel__expand_repo_name() {
+  local workspace=$1 current=$2
+  # TODO: ${BAZEL}
+  bazel-dev mod dump_repo_mapping '' --noshow_progress  2>/dev/null |
+    grep -F "  \"${current#@}" | cut -d'"' -f2 | sed 's/^/@/'
+}
+
 # Usage: _bazel__expand_target_pattern <workspace> <displacement>
 #                                      <word> <label-syntax>
 #
@@ -282,6 +289,13 @@ _bazel__expand_package_name() {
 _bazel__expand_target_pattern() {
   local workspace=$1 displacement=$2 current=$3 label_syntax=$4
   case "$current" in
+    @*//*:*) # Expand rule names within external repository.
+      ;;
+    @*//*) # Expand package names within external repository.
+      ;;
+    @*) # Expand external repository name.
+      _bazel__expand_repo_name "$workspace" "$current"
+      ;;
     //*:*) # Expand rule names within package, no displacement.
       if [ "${label_syntax}" = "label-package" ]; then
         compgen -S " " -W "BUILD" "$(echo current | cut -f ':' -d2)"
