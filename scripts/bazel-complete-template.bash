@@ -277,7 +277,8 @@ _bazel__expand_repo_name() {
   local workspace=$1 current=$2
   # TODO: ${BAZEL}
   local result=$(bazel-dev mod dump_repo_mapping '' --noshow_progress  2>/dev/null |
-    grep -F "  \"${current#@}" | grep -v -F ": \"\"" | cut -d'"' -f2 | sed 's/^/@/')
+    tr '{},' '\n' |
+    grep "^\"${current#@}" | grep -v -F ":\"\"" | cut -d'"' -f2 | sed 's/^/@/')
   if [ "$result" == "$current" ]; then
     echo "$result//"
   else
@@ -296,7 +297,8 @@ _bazel__external_repo_root() {
   local workspace=$1 apparent_repo=$2
   # TODO: ${BAZEL}
   local canonical_repo=$(bazel-dev mod dump_repo_mapping '' --noshow_progress 2>/dev/null |
-    grep -F "  \"${apparent_repo}\"" | cut -d'"' -f4)
+    tr '{},' '\n' |
+    grep "^\"${apparent_repo}\"" | cut -d'"' -f4)
   if [ -z "$canonical_repo" ]; then
     return
   fi

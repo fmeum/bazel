@@ -14,7 +14,6 @@
 package com.google.devtools.build.lib.bazel.commands;
 
 import static com.google.common.collect.ImmutableList.toImmutableList;
-import static com.google.common.collect.ImmutableMap.builder;
 import static com.google.common.collect.ImmutableMap.toImmutableMap;
 import static com.google.common.collect.ImmutableSet.toImmutableSet;
 import static com.google.devtools.build.lib.bazel.bzlmod.modcommand.ModOptions.Charset.UTF8;
@@ -26,7 +25,6 @@ import com.google.common.base.Preconditions;
 import com.google.common.collect.ImmutableBiMap;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
-import com.google.common.collect.ImmutableMultimap;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.ImmutableSortedSet;
 import com.google.common.collect.Iterables;
@@ -38,7 +36,6 @@ import com.google.devtools.build.lib.bazel.bzlmod.BazelModuleInspectorValue.Augm
 import com.google.devtools.build.lib.bazel.bzlmod.BzlmodRepoRuleValue;
 import com.google.devtools.build.lib.bazel.bzlmod.ModuleExtensionId;
 import com.google.devtools.build.lib.bazel.bzlmod.ModuleKey;
-import com.google.devtools.build.lib.bazel.bzlmod.SingleExtensionEvalValue;
 import com.google.devtools.build.lib.bazel.bzlmod.modcommand.ExtensionArg;
 import com.google.devtools.build.lib.bazel.bzlmod.modcommand.ExtensionArg.ExtensionArgConverter;
 import com.google.devtools.build.lib.bazel.bzlmod.modcommand.InvalidArgumentException;
@@ -78,8 +75,6 @@ import com.google.devtools.common.options.OptionsParsingException;
 import com.google.devtools.common.options.OptionsParsingResult;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
-import com.google.gson.JsonArray;
-import com.google.gson.JsonObject;
 import com.google.gson.stream.JsonWriter;
 import java.io.IOException;
 import java.io.OutputStreamWriter;
@@ -162,6 +157,13 @@ public final class ModCommand implements BlazeCommand {
 
     ImmutableList.Builder<SkyKey> repositoryMappingKeysBuilder = ImmutableList.builder();
     if (subcommand.equals(ModSubcommand.DUMP_REPO_MAPPING)) {
+      if (args.isEmpty()) {
+        // TODO: Make this case an error so that we are free to add a mode that emits all mappings
+        //  in a single JSON object.
+        env.getReporter().handle(Event.error(null, "No repository name(s) specified."));
+        return reportAndCreateFailureResult(
+            env, "No repository name(s) specified", Code.INVALID_ARGUMENTS);
+      }
       for (String arg : args) {
         try {
           repositoryMappingKeysBuilder.add(RepositoryMappingValue.key(RepositoryName.create(arg)));
@@ -231,7 +233,7 @@ public final class ModCommand implements BlazeCommand {
 
     if (subcommand.equals(ModSubcommand.DUMP_REPO_MAPPING)) {
       try {
-        dumpRepoMapping(
+        dumpRepoMappings(
             repositoryMappingValues,
             new OutputStreamWriter(
                 env.getReporter().getOutErr().getOutputStream(),
@@ -567,14 +569,14 @@ public final class ModCommand implements BlazeCommand {
                 .build()));
   }
 
-  public static void dumpRepoMapping(
-      List<RepositoryMappingValue> repositoryMappingValues, Writer writer) throws IOException {
-    Gson gson = new GsonBuilder().setPrettyPrinting().disableHtmlEscaping().create();
-    for (RepositoryMappingValue repositoryMappingValue : repositoryMappingValues) {
+  public static void dumpRepoMappings(List<RepositoryMappingValue> repoMappings, Writer writer)
+      throws IOException {
+    Gson gson = new GsonBuilder().disableHtmlEscaping().create();
+    for (RepositoryMappingValue repoMapping : repoMappings) {
       JsonWriter jsonWriter = gson.newJsonWriter(writer);
       jsonWriter.beginObject();
       for (Entry<String, RepositoryName> entry :
-          repositoryMappingValue.getRepositoryMapping().entries().entrySet()) {
+          repoMapping.getRepositoryMapping().entries().entrySet()) {
         jsonWriter.name(entry.getKey());
         jsonWriter.value(entry.getValue().getName());
       }
