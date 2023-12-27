@@ -273,12 +273,20 @@ _bazel__expand_package_name() {
   done
 }
 
+_bazel__filter_repo_mapping() {
+  local filter=$1
+  # TODO: ${BAZEL}
+  bazel-dev mod dump_repo_mapping '' \
+      --noshow_progress 2>/dev/null |
+    tr '{},' '\n' |
+    grep "^\"${filter}" |
+    grep -v -F ":\"\""
+}
+
 _bazel__expand_repo_name() {
   local workspace=$1 current=$2
-  # TODO: ${BAZEL}
-  local result=$(bazel-dev mod dump_repo_mapping '' --noshow_progress  2>/dev/null |
-    tr '{},' '\n' |
-    grep "^\"${current#@}" | grep -v -F ":\"\"" | cut -d'"' -f2 | sed 's/^/@/')
+  local result=$(_bazel__filter_repo_mapping "${current#@}" |
+                     cut -d'"' -f2 | sed 's/^/@/')
   if [ "$result" == "$current" ]; then
     echo "$result//"
   else
@@ -295,10 +303,8 @@ _bazel__external_root() {
 
 _bazel__external_repo_root() {
   local workspace=$1 apparent_repo=$2
-  # TODO: ${BAZEL}
-  local canonical_repo=$(bazel-dev mod dump_repo_mapping '' --noshow_progress 2>/dev/null |
-    tr '{},' '\n' |
-    grep "^\"${apparent_repo}\"" | cut -d'"' -f4)
+  local canonical_repo=$(_bazel__filter_repo_mapping "${apparent_repo}\"" |
+                             cut -d'"' -f4)
   if [ -z "$canonical_repo" ]; then
     return
   fi
