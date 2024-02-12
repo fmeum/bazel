@@ -1967,7 +1967,7 @@ EOF
   expect_log "func(): 43"
 }
 
-function test_ifso_symbol_versioning() {
+function test_ifso_defined_versioned_symbol() {
   type -P llvm-ifs-14 || return 0
 
   mkdir pkg
@@ -2033,6 +2033,90 @@ EOF
   expect_log "action 'Linking pkg/liblib.so'"
   expect_log "action 'Linking pkg/test'"
   expect_log "func(): 43"
+}
+
+function test_ifso_undefined_versioned_symbol() {
+  type -P llvm-ifs-14 || return 0
+
+  mkdir pkg
+  cat > pkg/BUILD <<'EOF'
+cc_library(
+  name = "lib",
+  srcs = ["lib.c"],
+  hdrs = ["lib.h"],
+  additional_linker_inputs = ["version_script.lds"],
+  linkopts = ["-Wl,--version-script,$(execpath version_script.lds)"],
+)
+cc_library(
+  name = "intermediate",
+  srcs = ["intermediate.c"],
+  hdrs = ["intermediate.h"],
+  deps = [":lib"],
+)
+cc_test(
+  name = "test",
+  srcs = ["test.c"],
+  deps = [":intermediate"],
+)
+EOF
+  cat > pkg/version_script.lds <<'EOF'
+v1 {};
+v2 {};
+EOF
+  cat > pkg/lib.c <<'EOF'
+#include "lib.h"
+__asm__(".symver old_func, func@@v1, remove");
+int old_func() { return 42; }
+__asm__(".symver new_func, func@v2, remove");
+int new_func() { return 43; }
+EOF
+  cat > pkg/lib.h <<'EOF'
+int func();
+EOF
+  cat > pkg/intermediate.c <<'EOF'
+#include "intermediate.h"
+#include "lib.h"
+int intermediate() { return func(); }
+EOF
+  cat > pkg/intermediate.h <<'EOF'
+int intermediate();
+EOF
+  cat > pkg/test.c <<'EOF'
+#include "intermediate.h"
+#include "stdio.h"
+int main() {
+  printf("intermediate(): %d\n", intermediate());
+}
+EOF
+
+  bazel test //pkg:test -s --test_output=all \
+    --repo_env=BAZEL_LLVM_IFS=llvm-ifs-14 \
+    &> "$TEST_log" || fail "Build failed"
+  expect_log "action 'Compiling pkg/lib.c'"
+  expect_log "action 'Linking pkg/liblib.so'"
+  expect_log "action 'Linking pkg/libintermediate.so'"
+  expect_log "action 'Linking pkg/test'"
+  expect_log "intermediate(): 42"
+  [[ -f ${PRODUCT_NAME}-bin/pkg/liblib.ifso ]] || fail "liblib.ifso not found"
+
+  # Only modify the default symbol version of func(). This results in a
+  # different implementation being at runtime after a relink. Without the
+  # relink, the runtime behavior will be incorrect.
+  cat > pkg/lib.c <<'EOF'
+#include "lib.h"
+__asm__(".symver old_func, func@v1, remove");
+int old_func() { return 42; }
+__asm__(".symver new_func, func@@v2, remove");
+int new_func() { return 43; }
+EOF
+  bazel test //pkg:test -s --test_output=all \
+    --repo_env=BAZEL_LLVM_IFS=llvm-ifs-14 \
+    &> "$TEST_log" || fail "Build failed"
+  expect_log "action 'Compiling pkg/lib.c'"
+  expect_log "action 'Linking pkg/liblib.so'"
+  expect_not_log "action 'Linking pkg/libintermediate.so'"
+  expect_log "action 'Linking pkg/test'"
+  expect_log "intermediate(): 43"
 }
 
 run_suite "cc_integration_test"

@@ -8,7 +8,7 @@ if [ $# != 2 ]; then
 fi
 
 has_versioned_symbol() {
-  "$NM" --dynamic --format=just-symbols --no-sort "$1" \
+  "$NM" --defined-only --dynamic --format=just-symbols --no-sort "$1" \
     | grep --quiet --max-count=1 --fixed-strings @
 }
 
