@@ -299,4 +299,23 @@ public class LocalDiffAwarenessIntegrationTest extends SkyframeIntegrationTestBa
     assertContents("two", "//hello:target");
     assertThat(calledGetValues.getAndSet(0)).isEqualTo(1);
   }
+
+  @Test
+  public void manyChangedFiles_noOverflow() throws Exception {
+    write(
+        "hello/BUILD",
+        "genrule(",
+        "    name = 'hello',",
+        "    srcs = glob(['file*']),",
+        "    outs = ['out'],",
+        "    cmd = '/bin/cat $(SRCS) > $@',",
+        ")");
+    buildTarget("//hello");
+
+    for (int i = 0; i < 1000; i++) {
+      write("hello/file" + i, "content" + i);
+    }
+    buildTarget("//hello");
+    events.assertNoWarningsOrErrors();
+  }
 }
