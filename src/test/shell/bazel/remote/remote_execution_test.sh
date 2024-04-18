@@ -3236,12 +3236,58 @@ function test_external_cc_binary_tool_with_dynamic_deps_sibling_repository_layou
       @other_repo//pkg:rule >& $TEST_log || fail "Build should succeed"
 }
 
+function test_shard_status_file_checked() {
+  cat <<'EOF' > BUILD
+sh_test(
+    name = 'x',
+    srcs = ['x.sh'],
+    shard_count = 10,
+)
+EOF
+  touch x.sh
+  chmod +x x.sh
+
+  bazel test \
+      --remote_executor=grpc://localhost:${worker_port} \
+      --incompatible_check_sharding_support \
+      //:x  &> $TEST_log && fail "expected failure"
+  expect_log "Sharding requested, but the test runner did not advertise support for it by touching TEST_SHARD_STATUS_FILE."
+
+  echo 'touch "$TEST_SHARD_STATUS_FILE"' > x.sh
+  bazel test \
+      --remote_executor=grpc://localhost:${worker_port} \
+      --incompatible_check_sharding_support \
+      //:x  &> $TEST_log || fail "expected success"
+
+  bazel clean
+  bazel shutdown
+  bazel test \
+      --remote_executor=grpc://localhost:${worker_port} \
+      --incompatible_check_sharding_support \
+      //:x  &> $TEST_log || fail "expected success"
+
+  echo 'touch "$TEST_SHARD_STATUS_FILE"; sleep 10' > x.sh
+  bazel test \
+      --remote_executor=grpc://localhost:${worker_port} \
+      --incompatible_check_sharding_support \
+      --test_timeout=5 \
+      //:x  &> $TEST_log || fail "expected success"
+
+  bazel clean
+  bazel shutdown
+  bazel test \
+      --remote_executor=grpc://localhost:${worker_port} \
+      --incompatible_check_sharding_support \
+      --test_timeout=5 \
+      //:x  &> $TEST_log || fail "expected success"
+}
+
 function test_shard_status_file_checked_remote_download_minimal() {
   cat <<'EOF' > BUILD
 sh_test(
     name = 'x',
     srcs = ['x.sh'],
-    shard_count = 2,
+    shard_count = 10,
 )
 EOF
   touch x.sh
@@ -3255,6 +3301,14 @@ EOF
   expect_log "Sharding requested, but the test runner did not advertise support for it by touching TEST_SHARD_STATUS_FILE."
 
   echo 'touch "$TEST_SHARD_STATUS_FILE"' > x.sh
+  bazel test \
+      --remote_executor=grpc://localhost:${worker_port} \
+      --incompatible_check_sharding_support \
+      --remote_download_minimal \
+      //:x  &> $TEST_log || fail "expected success"
+
+  bazel clean
+  bazel shutdown
   bazel test \
       --remote_executor=grpc://localhost:${worker_port} \
       --incompatible_check_sharding_support \
