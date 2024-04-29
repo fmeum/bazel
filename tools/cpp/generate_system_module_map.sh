@@ -17,10 +17,10 @@ set -eu
 
 echo 'module "crosstool" [system] {'
 
-for dir in $@; do
-  find -L "${dir}" -type f 2>/dev/null | LANG=C sort | uniq | while read header; do
-    echo "  textual header \"${header}\""
-  done
+for dir in "$@"; do
+  echo "module \"$dir\" {"
+  echo "  umbrella \"$dir\""
+  echo "}"
 done
 
 echo "}"

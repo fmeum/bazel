@@ -295,9 +295,13 @@ def _init_cc_compilation_context(
     header_module = None
     if _enabled(feature_configuration, "module_maps"):
         if not module_map:
+            # Trim leading @s from main repository labels to make them more readable.
+            label_str = str(label)
+            if not label.repo_name:
+                label_str = label_str.lstrip("@")
             module_map = cc_common.create_module_map(
                 file = actions.declare_file(label.name + ".cppmap"),
-                name = label.workspace_name + "//" + label.package + ":" + label.name,
+                name = label_str,
             )
 
         # There are different modes for module compilation:

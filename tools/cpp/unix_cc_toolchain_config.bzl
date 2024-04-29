@@ -67,7 +67,38 @@ def layering_check_features(compiler):
         # for all c/c++ rules.
         # Note: not all C++ rules support module maps; thus, do not imply this
         # feature from other features - instead, require it.
-        feature(name = "module_maps", enabled = True),
+        feature(
+            name = "module_maps",
+            enabled = True,
+            implies = [
+                "module_map_home_cwd",
+                "module_map_without_extern_module",
+                "generate_submodules",
+            ],
+        ),
+        feature(
+            name = "module_map_home_cwd",
+            flag_sets = [
+                flag_set(
+                    actions = [
+                        ACTION_NAMES.c_compile,
+                        ACTION_NAMES.cpp_compile,
+                        ACTION_NAMES.cpp_header_parsing,
+                        ACTION_NAMES.cpp_module_compile,
+                    ],
+                    flag_groups = [
+                        flag_group(flags = [
+                            "-Xclang",
+                            "-fmodule-map-file-home-is-cwd",
+                        ]),
+                    ],
+                ),
+            ],
+        ),
+        feature(name = "module_map_without_extern_module"),
+
+        # Indicate that the crosstool supports submodules.
+        feature(name = "generate_submodules"),
         feature(
             name = "layering_check",
             implies = ["use_module_maps"],
@@ -136,6 +167,106 @@ def parse_headers_support(parse_headers_tool_path):
         feature(name = "parse_headers"),
     ]
     return action_configs, features
+
+def header_module_features(compiler):
+    """Returns features that control header modules."""
+
+    if compiler != "clang":
+        return []
+
+    # Configure header modules:
+    #
+    # We have different features for module consumers and producers:
+    # 'header_modules' is enabled for targets that support being compiled as a
+    # header module.
+    # 'use_header_modules' is enabled for targets that want to use the provided
+    # header modules from their transitive closure. We enable this globally and
+    # disable it for targets that do not support builds with header modules.
+
+    # Allow switching off header modules completely by specifying
+    # features=["-use_header_modules"] in a rule.
+    return [
+        feature(
+            name = "header_modules",
+            implies = ["header_module_compile"],
+            requires = [feature_set(features = ["use_header_modules"])],
+        ),
+        feature(
+            name = "header_module_codegen",
+            requires = [feature_set(features = ["header_modules"])],
+        ),
+        feature(
+            name = "header_modules_codegen_functions",
+            implies = ["header_module_codegen"],
+            flag_sets = [
+                flag_set(
+                    actions = [ACTION_NAMES.cpp_module_compile],
+                    flag_groups = [flag_group(flags = ["-fmodules-codegen"])],
+                ),
+            ],
+        ),
+        feature(
+            name = "header_modules_codegen_debuginfo",
+            implies = ["header_module_codegen"],
+            flag_sets = [
+                flag_set(
+                    actions = [ACTION_NAMES.cpp_module_compile],
+                    flag_groups = [
+                        flag_group(flags = ["-fmodules-debuginfo"]),
+                    ],
+                ),
+            ],
+        ),
+        feature(
+            name = "header_module_compile",
+            enabled = True,
+            flag_sets = [
+                flag_set(
+                    actions = [ACTION_NAMES.cpp_module_compile],
+                    flag_groups = [
+                        flag_group(flags = [
+                            "-xc++",
+                            "-Xclang",
+                            "-emit-module",
+                            "-Xclang",
+                            "-fmodules-embed-all-files",
+                            "-Xclang",
+                            "-fmodules-local-submodule-visibility",
+                        ]),
+                    ],
+                ),
+            ],
+        ),
+        feature(
+            name = "use_header_modules",
+            implies = ["use_module_maps"],
+            flag_sets = [
+                flag_set(
+                    actions = [
+                        ACTION_NAMES.cpp_compile,
+                        ACTION_NAMES.cpp_header_parsing,
+                        ACTION_NAMES.cpp_module_compile,
+                    ],
+                    flag_groups = [
+                        flag_group(flags = [
+                            "-fmodules",
+                            "-fno-implicit-modules",
+                            "-fno-implicit-module-maps",
+                            "-Wno-modules-ambiguous-internal-linkage",
+                            "-Wno-module-import-in-extern-c",
+                            "-Wno-modules-import-nested-redundant",
+                        ]),
+                        flag_group(
+                            flags = [
+                                "-fmodule-file=%{module_files}",
+                            ],
+                            iterate_over = "module_files",
+                        ),
+                    ],
+                ),
+            ],
+        ),
+    ]
 
 all_compile_actions = [
     ACTION_NAMES.c_compile,
@@ -1487,7 +1618,7 @@ def _impl(ctx):
             unfiltered_compile_flags_feature,
             treat_warnings_as_errors_feature,
             archive_param_file_feature,
-        ] + layering_check_features(ctx.attr.compiler)
+        ] + layering_check_features(ctx.attr.compiler) + header_module_features(ctx.attr.compiler)
     else:
         # macOS artifact name patterns differ from the defaults only for dynamic
         # libraries.
