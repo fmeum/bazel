@@ -632,5 +632,6 @@ platform(
         "OSFamily": "Linux",
         "dockerNetwork": "off",
         "container-image": "docker://gcr.io/flame-public/rbe-ubuntu20-04:latest",
+        "recycle-runner": "true",
     },
 )
