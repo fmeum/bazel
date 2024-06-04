@@ -8,6 +8,7 @@ import com.google.common.collect.ImmutableSet;
 import com.google.common.flogger.GoogleLogger;
 import com.google.devtools.build.lib.events.Event;
 import com.google.devtools.build.lib.events.EventHandler;
+import com.google.devtools.build.lib.util.OS;
 import com.google.devtools.build.lib.vfs.PathFragment;
 import com.google.devtools.common.options.OptionsProvider;
 import com.google.gson.Gson;
@@ -19,9 +20,12 @@ import java.io.BufferedReader;
 import java.io.BufferedWriter;
 import java.io.IOException;
 import java.net.UnixDomainSocketAddress;
+import java.nio.channels.ByteChannel;
 import java.nio.channels.Channels;
+import java.nio.channels.FileChannel;
 import java.nio.channels.SocketChannel;
 import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -43,7 +47,7 @@ public class WatchmanDiffAwareness extends LocalDiffAwareness {
 
   private final ImmutableSet<String> ignoredPaths;
   // The watchman channel is kept open for as long as watchfs is enabled.
-  @Nullable private SocketChannel watchmanChannel;
+  @Nullable private ByteChannel watchmanChannel;
   @Nullable private List<Object> nextQueryCommand;
 
   protected WatchmanDiffAwareness(String watchRoot, ImmutableSet<Path> ignoredPaths) {
@@ -77,7 +81,12 @@ public class WatchmanDiffAwareness extends LocalDiffAwareness {
       return;
     }
 
-    watchmanChannel = SocketChannel.open(UnixDomainSocketAddress.of(rawSockname));
+    if (OS.getCurrent() == OS.WINDOWS) {
+      watchmanChannel =
+          FileChannel.open(Path.of(rawSockname), StandardOpenOption.READ, StandardOpenOption.WRITE);
+    } else {
+      watchmanChannel = SocketChannel.open(UnixDomainSocketAddress.of(rawSockname));
+    }
   }
 
   @Override
@@ -196,6 +205,7 @@ public class WatchmanDiffAwareness extends LocalDiffAwareness {
     if (isFreshInstance) {
       return null;
     }
+    System.err.println("Modified paths: " + modifiedPaths.build());
     return modifiedPaths.build();
   }
 
