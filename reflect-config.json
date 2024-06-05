@@ -1,5 +1,9 @@
 [
   {
+    "name": "com.google.auto.value.processor.AutoOneOfTemplateVars",
+    "allDeclaredFields": true
+  },
+  {
     "name": "com.google.auto.value.processor.AutoValueTemplateVars",
     "allDeclaredFields": true
   },
@@ -16,7 +20,39 @@
     "allPublicMethods": true
   },
   {
+    "name": "java.util.Optional",
+    "allPublicMethods": true
+  },
+  {
     "name": "com.google.auto.value.processor.AutoValueishProcessor$GetterProperty",
+    "allPublicMethods": true
+  },
+  {
+    "name": "com.google.auto.value.processor.SimpleMethod",
+    "allPublicMethods": true
+  },
+  {
+    "name": "com.google.auto.value.processor.BuilderRequiredProperties",
+    "allPublicMethods": true
+  },
+  {
+    "name": "com.google.auto.value.processor.BuilderRequiredProperties$NoDefaults",
+    "allPublicMethods": true
+  },
+  {
+    "name": "com.google.auto.value.processor.BuilderRequiredProperties$WithDefaults",
+    "allPublicMethods": true
+  },
+  {
+    "name": "com.google.auto.value.processor.BuilderSpec$PropertyGetter",
+    "allPublicMethods": true
+  },
+  {
+    "name": "com.google.auto.value.processor.BuilderSpec$PropertySetter",
+    "allPublicMethods": true
+  },
+  {
+    "name": "com.google.auto.value.processor.PropertyBuilderClassifier$PropertyBuilder",
     "allPublicMethods": true
   },
   {
@@ -28,7 +64,59 @@
     "allPublicMethods": true
   },
   {
+    "name": "com.google.auto.value.processor.Optionalish",
+    "allPublicMethods": true
+  },
+  {
     "name": "autovalue.shaded.com.google.common.collect.RegularImmutableSet",
     "allPublicMethods": true
+  },
+  {
+    "name": "autovalue.shaded.com.google.common.collect.Iterators$SingletonIterator",
+    "allPublicMethods": true
+  },
+  {
+    "name": "java.util.Iterator",
+    "allPublicMethods": true
+  },
+  {
+    "name": "autovalue.shaded.com.google.common.collect.UnmodifiableIterators",
+    "allPublicMethods": true
+  },
+  {
+    "name": "autovalue.shaded.com.google.common.collect.SingletonImmutableSet",
+    "allPublicMethods": true
+  },
+  {
+    "name": "autovalue.shaded.com.google.common.collect.ImmutableListMultimap",
+    "allPublicMethods": true
+  },
+  {
+    "name": "autovalue.shaded.com.google.common.collect.ImmutableSet",
+    "allPublicMethods": true
+  },
+  {
+    "name": "net.starlark.java.annot.processor.StarlarkMethodProcessor",
+    "allPublicConstructors": true
+  },
+  {
+    "name": "com.google.auto.service.processor.AutoServiceProcessor",
+    "allPublicConstructors": true
+  },
+  {
+    "name": "com.google.devtools.common.options.processor.OptionProcessor",
+    "allPublicConstructors": true
+  },
+  {
+    "name": "com.google.devtools.build.lib.skyframe.serialization.autocodec.SerializationConstantProcessor",
+    "allPublicConstructors": true
+  },
+  {
+    "name": "com.google.devtools.build.lib.skyframe.serialization.autocodec.AutoCodecProcessor",
+    "allPublicConstructors": true
+  },
+  {
+    "name": "com.google.devtools.build.lib.analysis.starlark.annotations.processor.StarlarkConfigurationFieldProcessor",
+    "allPublicConstructors": true
   }
 ]

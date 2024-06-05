@@ -4,7 +4,7 @@ load("@rules_java//java:defs.bzl", "java_plugin")
 #   A preprocessor for Starlark annotations.
 package(
     default_applicable_licenses = ["//:license"],
-    default_visibility = ["//src:__subpackages__"],
+    default_visibility = ["//:__subpackages__"],
 )
 
 filegroup(

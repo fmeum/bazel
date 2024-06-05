@@ -1,0 +1,52 @@
+[
+  {
+    "interfaces": [
+      "net.starlark.java.annot.StarlarkMethod"
+    ]
+  },
+  {
+    "interfaces": [
+      "com.google.devtools.build.lib.analysis.starlark.annotations.StarlarkConfigurationField"
+    ]
+  },
+  {
+    "interfaces": [
+      "net.starlark.java.annot.ParamType"
+    ]
+  },
+  {
+    "interfaces": [
+      "com.ryanharter.auto.value.gson.GenerateTypeAdapter"
+    ]
+  },
+  {
+    "interfaces": [
+      "com.google.devtools.common.options.Option"
+    ]
+  },
+  {
+    "interfaces": [
+      "com.google.devtools.build.lib.skyframe.serialization.autocodec.AutoCodec"
+    ]
+  },
+  {
+    "interfaces": [
+      "com.google.devtools.build.lib.skyframe.serialization.autocodec.AutoCodec$Interner"
+    ]
+  },
+  {
+    "interfaces": [
+      "com.google.devtools.build.lib.skyframe.serialization.autocodec.AutoCodec$Instantiator"
+    ]
+  },
+  {
+    "interfaces": [
+      "com.google.auto.value.AutoValue"
+    ]
+  },
+  {
+    "interfaces": [
+      "com.google.auto.value.AutoOneOf"
+    ]
+  }
+]

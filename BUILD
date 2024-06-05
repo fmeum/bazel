@@ -331,9 +331,22 @@ REMOTE_PLATFORMS = ("rbe_ubuntu2004",)
 
 native_java_tools(
     name = "native_java_tools",
+    all_plugins = [
+        # keep sorted
+        "//src/main/java/com/google/devtools/build/lib/analysis/starlark/annotations/processor:annotation_preprocessor",
+        "//src/main/java/com/google/devtools/build/lib/skyframe/serialization/autocodec:autocodec-plugin",
+        "//src/main/java/com/google/devtools/build/lib/skyframe/serialization/autocodec:serialization-constant-plugin",
+        "//src/main/java/com/google/devtools/common/options/processor:options_preprocessor",
+        "//src/main/java/net/starlark/java/annot:annot",
+        "//third_party:auto_service",
+        "//third_party:auto_value",
+    ],
     # Include Auto* templates.
     include_resources = ".*\\.vm$",
+    javabuilder_extra_args = ["-march=native"],
+    proxy_configuration = "proxy-config.json",
     reflection_configuration = "reflect-config.json",
+    turbine_extra_args = ["-march=native"],
 )
 
 native_image_java_toolchain(
