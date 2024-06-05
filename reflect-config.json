@@ -1,0 +1,34 @@
+[
+  {
+    "name": "com.google.auto.value.processor.AutoValueTemplateVars",
+    "allDeclaredFields": true
+  },
+  {
+    "name": "com.google.auto.value.processor.AutoValueOrBuilderTemplateVars",
+    "allDeclaredFields": true
+  },
+  {
+    "name": "com.google.auto.value.processor.AutoValueishTemplateVars",
+    "allDeclaredFields": true
+  },
+  {
+    "name": "java.lang.String",
+    "allPublicMethods": true
+  },
+  {
+    "name": "com.google.auto.value.processor.AutoValueishProcessor$GetterProperty",
+    "allPublicMethods": true
+  },
+  {
+    "name": "autovalue.shaded.com.google.escapevelocity.DirectiveNode$ForEachNode$ForEachVar",
+    "allPublicMethods": true
+  },
+  {
+    "name": "javax.lang.model.type.TypeKind",
+    "allPublicMethods": true
+  },
+  {
+    "name": "autovalue.shaded.com.google.common.collect.RegularImmutableSet",
+    "allPublicMethods": true
+  }
+]

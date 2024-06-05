@@ -12,6 +12,12 @@ module(
 # Bazel module dependencies
 # =========================================
 
+bazel_dep(name = "native_image_java_toolchain")
+local_path_override(
+    module_name = "native_image_java_toolchain",
+    path = "../native-image-java-toolchain",
+)
+
 bazel_dep(name = "rules_license", version = "0.0.7")
 bazel_dep(name = "bazel_skylib", version = "1.6.1")
 bazel_dep(name = "protobuf", version = "21.7", repo_name = "com_google_protobuf")
@@ -308,7 +314,7 @@ use_repo(cc_configure, "local_config_cc")
 gvm = use_extension("@rules_graalvm//:extensions.bzl", "graalvm")
 gvm.graalvm(
     name = "graalvm",
-    distribution = "ce",
+    distribution = "oracle",
     java_version = "21",
     version = "21.0.2",
 )
@@ -381,3 +387,11 @@ use_repo(remote_android_extensions, "android_gmaven_r8", "android_tools")
 
 android_sdk_proxy_extensions = use_extension("//tools/android:android_extensions.bzl", "android_sdk_proxy_extensions")
 use_repo(android_sdk_proxy_extensions, "android_external")
+
+http_archive = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
+
+http_archive(
+    name = "native_java_tools",
+    urls = ["file:///Users/fmeum/git/bazel/native_java_tools.zip"],
+)
+

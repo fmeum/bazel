@@ -34,7 +34,7 @@ build:windows_arm64 --platforms=//:windows_arm64
 build:windows_arm64 --extra_toolchains=@local_config_cc//:cc-toolchain-arm64_windows
 
 # Check direct Bazel module dependencies are up-to-date
-common --check_direct_dependencies=error
+common --check_direct_dependencies=off
 
 # Add mirrors for certain download URLs
 common --experimental_downloader_config=bazel_downloader.cfg

@@ -6,6 +6,8 @@ load("@rules_pkg//pkg:tar.bzl", "pkg_tar")
 load("@rules_python//python:defs.bzl", "py_binary")
 load("//src/tools/bzlmod:utils.bzl", "get_canonical_repo_name")
 load("//tools/distributions:distribution_rules.bzl", "distrib_jar_filegroup")
+load("@native_image_java_toolchain//:native_java_tools.bzl", "native_java_tools")
+load("@native_java_tools//:toolchain.bzl", "native_image_java_toolchain")
 
 package(default_visibility = ["//scripts/release:__pkg__"])
 
@@ -326,3 +328,16 @@ REMOTE_PLATFORMS = ("rbe_ubuntu2004",)
     )
     for platform_name in REMOTE_PLATFORMS
 ]
+
+native_java_tools(
+    name = "native_java_tools",
+    # Include Auto* templates.
+    include_resources = ".*\\.vm$",
+    reflection_configuration = "reflect-config.json",
+)
+
+native_image_java_toolchain(
+    name = "native_image_toolchain",
+    source_version = "21",
+    target_version = "21",
+)
