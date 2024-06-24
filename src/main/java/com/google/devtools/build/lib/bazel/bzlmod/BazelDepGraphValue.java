@@ -122,7 +122,7 @@ public abstract class BazelDepGraphValue implements SkyValue {
         getExtensionUsagesTable().column(key).entrySet()) {
       ModuleExtensionId extensionId = extIdAndUsage.getKey();
       ModuleExtensionUsage usage = extIdAndUsage.getValue();
-      String repoNamePrefix = getExtensionUniqueNames().get(extensionId) + "~";
+      String repoNamePrefix = getExtensionUniqueNames().get(extensionId) + ".";
       for (ModuleExtensionUsage.Proxy proxy : usage.getProxies()) {
         for (Map.Entry<String, String> entry : proxy.getImports().entrySet()) {
           String canonicalRepoName = repoNamePrefix + entry.getValue();

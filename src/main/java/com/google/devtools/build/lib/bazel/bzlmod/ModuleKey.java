@@ -125,7 +125,7 @@ public abstract class ModuleKey {
       //   rarely used.
       suffix = "";
     }
-    return RepositoryName.createUnvalidated(String.format("%s~%s", getName(), suffix));
+    return RepositoryName.createUnvalidated(String.format("%s.%s", getName(), suffix));
   }
 
   public static ModuleKey fromString(String s) throws Version.ParseException {

@@ -118,7 +118,7 @@ public final class BzlmodRepoRuleFunction implements SkyFunction {
     // Step 3: look for the repo from module extension evaluation results.
     Optional<ModuleExtensionId> extensionId =
         bazelDepGraphValue.getExtensionUniqueNames().entrySet().stream()
-            .filter(e -> repositoryName.getName().startsWith(e.getValue() + "~"))
+            .filter(e -> repositoryName.getName().startsWith(e.getValue() + "."))
             .map(Entry::getKey)
             .findFirst();
 

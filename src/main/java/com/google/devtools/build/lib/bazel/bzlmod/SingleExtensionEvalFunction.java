@@ -486,7 +486,7 @@ public class SingleExtensionEvalFunction implements SkyFunction {
                 toImmutableBiMap(
                     e ->
                         RepositoryName.createUnvalidated(
-                            usagesValue.getExtensionUniqueName() + "~" + e),
+                            usagesValue.getExtensionUniqueName() + "." + e),
                     Function.identity())),
         lockFileInfo,
         fixup);
@@ -744,7 +744,7 @@ public class SingleExtensionEvalFunction implements SkyFunction {
         Dict<String, Object> kwargs = repo.tag().getAttributeValues().attributes();
         // This cast should be safe since it should have been verified at tag creation time.
         String name = (String) kwargs.get("name");
-        String prefixedName = usagesValue.getExtensionUniqueName() + "~" + name;
+        String prefixedName = usagesValue.getExtensionUniqueName() + "." + name;
         Rule ruleInstance;
         AttributeValues attributesValue;
         try {
@@ -886,7 +886,7 @@ public class SingleExtensionEvalFunction implements SkyFunction {
         throws InterruptedException, SingleExtensionEvalFunctionException {
       ModuleExtensionEvalStarlarkThreadContext threadContext =
           new ModuleExtensionEvalStarlarkThreadContext(
-              usagesValue.getExtensionUniqueName() + "~",
+              usagesValue.getExtensionUniqueName() + ".",
               extensionId.getBzlFileLabel().getPackageIdentifier(),
               BazelModuleContext.of(bzlLoadValue.getModule()).repoMapping(),
               directories,

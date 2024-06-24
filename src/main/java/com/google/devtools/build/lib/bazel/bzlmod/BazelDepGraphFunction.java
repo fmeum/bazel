@@ -191,14 +191,14 @@ public class BazelDepGraphFunction implements SkyFunction {
         .map(
             namespace ->
                 String.format(
-                    "%s~_%s%s~%s~%s~%s",
+                    "%s._%s%s.%s.%s.%s",
                     nonEmptyRepoPart,
                     id.getExtensionName(),
                     extensionNameDisambiguator,
                     namespace.getModule().getName(),
                     namespace.getModule().getVersion(),
                     namespace.getUsageExportedName()))
-        .orElse(nonEmptyRepoPart + "~" + id.getExtensionName() + extensionNameDisambiguator);
+        .orElse(nonEmptyRepoPart + "." + id.getExtensionName() + extensionNameDisambiguator);
   }
 
   static class BazelDepGraphFunctionException extends SkyFunctionException {
