@@ -174,6 +174,11 @@ public final class StrippingPathMapper {
         return MapFn.DEFAULT;
       }
 
+      @Override
+      public String mapHeuristically(String arg) {
+        return argStripper.strip(arg);
+      }
+
       private boolean isSupportedInputType(ActionInput artifact) {
         return artifact instanceof DerivedArtifact
             || artifact instanceof ParamFileActionInput

@@ -116,6 +116,10 @@ public interface PathMapper {
     return MapFn.DEFAULT;
   }
 
+  default String mapHeuristically(String arg) {
+    return arg;
+  }
+
   /**
    * Returns {@code true} if the mapper is known to map all paths identically.
    *

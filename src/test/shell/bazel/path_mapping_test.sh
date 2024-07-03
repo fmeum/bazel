@@ -366,14 +366,15 @@ EOF
 genrule(
     name = "gen_asan",
     outs = ["asan.txt"],
-    cmd = "touch $$@",
+    cmd = "touch \$@",
 )
 
 cc_library(
     name = "lib1",
     srcs = ["lib1.cc"],
     hdrs = ["lib1.h"],
-    copts = ["-fasan-blacklist=$$(execpath asan.txt)"],
+    copts = ["-fasan-blacklist=\$(execpath asan.txt)"],
+    additional_compiler_inputs = ["asan.txt"],
     deps = ["//$pkg/common/utils:utils"],
     visibility = ["//visibility:public"],
 )
@@ -532,6 +533,8 @@ EOF
     --modify_execution_info=CppCompile=+supports-path-mapping \
     --remote_executor=grpc://localhost:${worker_port} \
     --features=asan \
+    -s \
+    --repo_env=CC=clang \
     --features=-module_maps \
     "//$pkg:main" &>"$TEST_log" || fail "Expected success"
 
@@ -545,6 +548,8 @@ EOF
     --modify_execution_info=CppCompile=+supports-path-mapping \
     --remote_executor=grpc://localhost:${worker_port} \
     --features=asan \
+    -s \
+    --repo_env=CC=clang \
     --features=-module_maps \
     "//$pkg:transitioned_main" &>"$TEST_log" || fail "Expected success"
 

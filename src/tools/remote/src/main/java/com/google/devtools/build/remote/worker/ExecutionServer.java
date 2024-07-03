@@ -152,10 +152,7 @@ final class ExecutionServer extends ExecutionImplBase {
     }
     ((ServerCallStreamObserver<Operation>) responseObserver)
         .setOnCancelHandler(
-            () -> {
-              future.cancel(true);
-              operationsCache.remove(opName);
-            });
+            () -> operationsCache.remove(opName));
     waitExecution(opName, future, responseObserver);
   }
 
@@ -219,7 +216,6 @@ final class ExecutionServer extends ExecutionImplBase {
     ((ServerCallStreamObserver<Operation>) responseObserver)
         .setOnCancelHandler(
             () -> {
-              future.cancel(true);
               operationsCache.remove(opName);
             });
     // Send the first operation.
@@ -329,6 +325,9 @@ final class ExecutionServer extends ExecutionImplBase {
       if (futureCmdResult != null) {
         try {
           cmdResult = futureCmdResult.get();
+        } catch (InterruptedException e) {
+          e.printStackTrace();
+          Thread.currentThread().interrupt();
         } catch (AbnormalTerminationException e) {
           cmdResult = e.getResult();
         }
