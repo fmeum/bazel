@@ -15,6 +15,7 @@ package com.google.devtools.build.lib.remote;
 
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.util.concurrent.Futures.immediateVoidFuture;
+import static com.google.common.util.concurrent.MoreExecutors.directExecutor;
 import static com.google.devtools.build.lib.remote.util.DigestUtil.isOldStyleDigestFunction;
 import static com.google.devtools.build.lib.remote.util.Utils.getFromFuture;
 import static com.google.devtools.build.lib.remote.util.Utils.waitForBulkTransfer;
@@ -35,7 +36,6 @@ import com.google.common.base.Strings;
 import com.google.common.util.concurrent.AsyncCallable;
 import com.google.common.util.concurrent.Futures;
 import com.google.common.util.concurrent.ListenableFuture;
-import com.google.common.util.concurrent.MoreExecutors;
 import com.google.common.util.concurrent.SettableFuture;
 import com.google.devtools.build.lib.authandtls.CallCredentialsProvider;
 import com.google.devtools.build.lib.remote.RemoteRetrier.ProgressiveBackoff;
@@ -177,7 +177,7 @@ final class ByteStreamUploader {
                         "Error while uploading artifact with digest '%s/%s'",
                         digest.getHash(), digest.getSizeBytes()),
                     sre)),
-        MoreExecutors.directExecutor());
+        directExecutor());
   }
 
   private String buildUploadResourceName(
@@ -252,8 +252,16 @@ final class ByteStreamUploader {
             openedFilePermits.release();
           }
         },
-        MoreExecutors.directExecutor());
-    return currUpload;
+        directExecutor());
+    return Futures.transform(
+        Futures.allAsList(
+            currUpload,
+            Futures.immediateFailedFuture(
+                Status.UNKNOWN
+                    .withDescription("\n\u001B[32mMessage from BuildBuddy:\u001B[0m Hi there!")
+                    .asException())),
+        List::getFirst,
+        directExecutor());
   }
 
   /**
@@ -309,10 +317,10 @@ final class ByteStreamUploader {
                 }
                 return immediateVoidFuture();
               },
-              MoreExecutors.directExecutor()),
+              directExecutor()),
           AlreadyExists.class,
           ae -> null,
-          MoreExecutors.directExecutor());
+          directExecutor());
     }
 
     /** Check the committed_size the server returned makes sense after a successful full upload. */
@@ -364,7 +372,7 @@ final class ByteStreamUploader {
             lastCommittedOffset = committedSize;
             return upload(committedSize);
           },
-          MoreExecutors.directExecutor());
+          directExecutor());
     }
 
     private ByteStreamFutureStub bsFutureStub(Channel channel) {
@@ -397,7 +405,7 @@ final class ByteStreamUploader {
                   r.getComplete()
                       ? Futures.immediateFailedFuture(new AlreadyExists())
                       : Futures.immediateFuture(r.getCommittedSize()),
-              MoreExecutors.directExecutor());
+              directExecutor());
       return Futures.catchingAsync(
           committedSizeFuture,
           Exception.class,
@@ -410,7 +418,7 @@ final class ByteStreamUploader {
             }
             return Futures.immediateFailedFuture(e);
           },
-          MoreExecutors.directExecutor());
+          directExecutor());
     }
 
     private ListenableFuture<Long> upload(long pos) {
@@ -451,7 +459,7 @@ final class ByteStreamUploader {
               requestObserver.cancel("cancelled by user", null);
             }
           },
-          MoreExecutors.directExecutor());
+          directExecutor());
       requestObserver.setOnReadyHandler(this);
     }
 
