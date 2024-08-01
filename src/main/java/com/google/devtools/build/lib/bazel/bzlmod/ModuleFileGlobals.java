@@ -34,6 +34,7 @@ import com.google.devtools.build.lib.events.EventHandler;
 import com.google.devtools.build.lib.packages.StarlarkExportable;
 import com.google.devtools.build.lib.packages.semantics.BuildLanguageOptions;
 import com.google.devtools.build.lib.vfs.PathFragment;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.regex.Pattern;
 import javax.annotation.Nullable;
@@ -1109,5 +1110,43 @@ public class ModuleFileGlobals {
     context.setNonModuleCalled();
     validateModuleName(moduleName);
     context.addOverride(moduleName, LocalPathOverride.create(path));
+  }
+
+  @StarlarkMethod(
+      name = "repo_mapping_override",
+      doc = "foo",
+      parameters = {
+        @Param(name = "extension_proxy", doc = "foo"),
+      },
+      extraPositionals = @Param(name = "args", doc = "The names of the repos to import."),
+      extraKeywords =
+          @Param(
+              name = "kwargs",
+              doc =
+                  "Specifies certain repos to import into the scope of the current module with"
+                      + " different names. The keys should be the name to use in the current scope,"
+                      + " whereas the values should be the original names exported by the module"
+                      + " extension."),
+      useStarlarkThread = true)
+  public void repoMappingOverride(
+      String repoName, Tuple args, Dict<String, Object> kwargs, StarlarkThread thread)
+      throws EvalException {
+    ModuleThreadContext context = ModuleThreadContext.fromOrFail(thread, "repo_mapping_override()");
+    context.setNonModuleCalled();
+    Location location = thread.getCallerLocation();
+    LinkedHashMap<String, String> mapping = new LinkedHashMap<>();
+    for (String repo : Sequence.cast(args, String.class, "args")) {
+      if (mapping.put(repo, repo) != null) {
+        throw Starlark.errorf("Duplicate apparent repo name %s in repo_mapping_override()", repo);
+      }
+    }
+    for (Map.Entry<String, String> entry :
+        Dict.cast(kwargs, String.class, String.class, "kwargs").entrySet()) {
+      if (mapping.put(entry.getKey(), entry.getValue()) != null) {
+        throw Starlark.errorf(
+            "Duplicate apparent repo name %s in repo_mapping_override()", entry.getKey());
+      }
+    }
+    context.addRepoMappingOverride(repoName, ImmutableMap.copyOf(mapping), location);
   }
 }

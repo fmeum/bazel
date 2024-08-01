@@ -51,7 +51,8 @@ public class ModuleThreadContext extends StarlarkThreadContext {
   @Nullable private final ImmutableMap<String, CompiledModuleFile> includeLabelToCompiledModuleFile;
   private final Map<String, DepSpec> deps = new LinkedHashMap<>();
   private final List<ModuleExtensionUsageBuilder> extensionUsageBuilders = new ArrayList<>();
-  private final Map<String, ModuleOverride> overrides = new HashMap<>();
+  private final Map<String, ModuleOverride> overrides = new LinkedHashMap<>();
+  private final Map<String, RepoMappingOverride> repoMappingOverrides = new LinkedHashMap<>();
   private final Map<String, RepoNameUsage> repoNameUsages = new HashMap<>();
 
   public static ModuleThreadContext fromOrFail(StarlarkThread thread, String what)
@@ -83,6 +84,19 @@ public class ModuleThreadContext extends StarlarkThreadContext {
       throw Starlark.errorf(
           "The repo name '%s' is already being used %s at %s",
           repoName, collision.how(), collision.where());
+    }
+  }
+
+  record RepoMappingOverride(ImmutableMap<String, String> mapping, Location where) {}
+
+  public void addRepoMappingOverride(
+      String repoName, ImmutableMap<String, String> mapping, Location where) throws EvalException {
+    RepoMappingOverride collision =
+        repoMappingOverrides.put(repoName, new RepoMappingOverride(mapping, where));
+    if (collision != null) {
+      throw Starlark.errorf(
+          "The repo mapping for '%s' is already being overridden at %s",
+          repoName, collision.where());
     }
   }
 
@@ -269,7 +283,7 @@ public class ModuleThreadContext extends StarlarkThreadContext {
         .build();
   }
 
-  public ImmutableMap<String, ModuleOverride> buildOverrides() {
+  public ImmutableMap<String, ModuleOverride> buildModuleOverrides() {
     // Add overrides for builtin modules if there is no existing override for them.
     if (ModuleKey.ROOT.equals(module.getKey())) {
       for (String moduleName : builtinModules.keySet()) {
@@ -277,5 +291,26 @@ public class ModuleThreadContext extends StarlarkThreadContext {
       }
     }
     return ImmutableMap.copyOf(overrides);
+  }
+
+  public ImmutableMap<String, ImmutableMap<String, String>> buildRepoMappingOverrides()
+      throws EvalException {
+    for (var entry : repoMappingOverrides.entrySet()) {
+      String repo = entry.getKey();
+      if (repo.equals(module.getRepoName().orElseGet(module::getName))) {
+        throw Starlark.errorf(
+            "The repo mapping for '%s' cannot be overridden in the same module at %s",
+            repo, entry.getValue().where);
+      }
+      if (!repoNameUsages.containsKey(repo)) {
+        throw Starlark.errorf(
+            "The current module does not import a repo as '%s', but attempted to override its repo mapping at %s",
+            repo, entry.getValue().where);
+      }
+    }
+    return repoMappingOverrides.entrySet().stream()
+        .collect(
+            ImmutableMap.toImmutableMap(
+                Map.Entry::getKey, e -> ImmutableMap.copyOf(e.getValue().mapping)));
   }
 }

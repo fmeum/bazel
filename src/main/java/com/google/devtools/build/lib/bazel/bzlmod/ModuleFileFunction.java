@@ -460,7 +460,7 @@ public class ModuleFileFunction implements SkyFunction {
       }
     }
 
-    ImmutableMap<String, ModuleOverride> moduleOverrides = moduleThreadContext.buildOverrides();
+    ImmutableMap<String, ModuleOverride> moduleOverrides = moduleThreadContext.buildModuleOverrides();
     ImmutableMap<String, ModuleOverride> overrides =
         ImmutableMap.<String, ModuleOverride>builder()
             .putAll(moduleOverrides)
