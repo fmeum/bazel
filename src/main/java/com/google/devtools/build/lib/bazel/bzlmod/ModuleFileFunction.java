@@ -494,6 +494,7 @@ public class ModuleFileFunction implements SkyFunction {
         moduleFileHash,
         overrides,
         nonRegistryOverrideCanonicalRepoNameLookup,
+        moduleThreadContext.buildRepoMappingOverrides(),
         moduleFilePaths);
   }
 

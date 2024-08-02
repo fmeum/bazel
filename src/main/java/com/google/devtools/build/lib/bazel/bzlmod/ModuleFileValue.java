@@ -83,6 +83,8 @@ public abstract class ModuleFileValue implements SkyValue {
     public abstract ImmutableMap<RepositoryName, String>
         getNonRegistryOverrideCanonicalRepoNameLookup();
 
+    public abstract ImmutableMap<String, ImmutableMap<String, String>> getRepoMappingOverrides();
+
     /**
      * The set of relative paths to the root MODULE.bazel file itself and all its transitive
      * includes.
@@ -100,12 +102,14 @@ public abstract class ModuleFileValue implements SkyValue {
         String moduleFileHash,
         ImmutableMap<String, ModuleOverride> overrides,
         ImmutableMap<RepositoryName, String> nonRegistryOverrideCanonicalRepoNameLookup,
+        ImmutableMap<String, ImmutableMap<String, String>> repoMappingOverrides,
         ImmutableSet<PathFragment> moduleFilePaths) {
       return new AutoValue_ModuleFileValue_RootModuleFileValue(
           module,
           moduleFileHash,
           overrides,
           nonRegistryOverrideCanonicalRepoNameLookup,
+          repoMappingOverrides,
           moduleFilePaths);
     }
   }

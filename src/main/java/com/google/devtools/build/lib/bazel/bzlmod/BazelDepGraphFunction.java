@@ -28,6 +28,7 @@ import com.google.common.collect.ImmutableBiMap;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.ImmutableTable;
+import com.google.devtools.build.lib.bazel.bzlmod.ModuleFileValue.RootModuleFileValue;
 import com.google.devtools.build.lib.cmdline.LabelSyntaxException;
 import com.google.devtools.build.lib.cmdline.PackageIdentifier;
 import com.google.devtools.build.lib.cmdline.RepositoryMapping;
@@ -74,6 +75,9 @@ public class BazelDepGraphFunction implements SkyFunction {
 
     ImmutableBiMap<String, ModuleExtensionId> extensionUniqueNames =
         calculateUniqueNameForUsedExtensionId(extensionUsagesById);
+
+    RootModuleFileValue rootModuleFileValue =
+        (RootModuleFileValue) env.getValue(ModuleFileValue.KEY_FOR_ROOT_MODULE);
 
     return BazelDepGraphValue.create(
         depGraph,
@@ -196,6 +200,13 @@ public class BazelDepGraphFunction implements SkyFunction {
                 + "+"
                 + id.getExtensionName()
                 + extensionNameDisambiguator);
+  }
+
+  private static void resolveRepoMappingOverrides(
+      RootModuleFileValue rootModuleFileValue,
+      ImmutableMap<String, ImmutableMap<String, String>> repoMappingOverrides) {
+    rootModuleFileValue.
+
   }
 
   static class BazelDepGraphFunctionException extends SkyFunctionException {
