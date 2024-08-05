@@ -27,6 +27,7 @@ import com.google.devtools.build.lib.buildeventstream.BuildEventArtifactUploader
 import com.google.devtools.build.lib.buildeventstream.BuildEventProtocolOptions;
 import com.google.devtools.build.lib.buildeventstream.BuildEventTransport;
 import com.google.devtools.build.lib.clock.Clock;
+import com.google.devtools.build.lib.events.Reporter;
 import com.google.devtools.build.lib.util.JavaSleeper;
 import com.google.devtools.build.lib.util.Sleeper;
 import com.google.errorprone.annotations.CanIgnoreReturnValue;
@@ -49,6 +50,7 @@ public class BuildEventServiceTransport implements BuildEventTransport {
       boolean publishLifecycleEvents,
       ArtifactGroupNamer artifactGroupNamer,
       EventBus eventBus,
+      Reporter reporter,
       Duration closeTimeout,
       Sleeper sleeper,
       Timestamp commandStartTime,
@@ -65,6 +67,7 @@ public class BuildEventServiceTransport implements BuildEventTransport {
             .sleeper(sleeper)
             .artifactGroupNamer(artifactGroupNamer)
             .eventBus(eventBus)
+            .reporter(reporter)
             .commandStartTime(commandStartTime)
             .build();
     this.besUploadMode = besUploadMode;
@@ -120,6 +123,7 @@ public class BuildEventServiceTransport implements BuildEventTransport {
     private ArtifactGroupNamer artifactGroupNamer;
     private BuildEventServiceProtoUtil besProtoUtil;
     private EventBus eventBus;
+    private Reporter reporter;
     @Nullable private Sleeper sleeper;
     private Timestamp commandStartTime;
 
@@ -172,6 +176,12 @@ public class BuildEventServiceTransport implements BuildEventTransport {
     }
 
     @CanIgnoreReturnValue
+    public Builder reporter(Reporter reporter) {
+      this.reporter = reporter;
+      return this;
+    }
+
+    @CanIgnoreReturnValue
     @VisibleForTesting
     public Builder sleeper(Sleeper value) {
       this.sleeper = value;
@@ -195,6 +205,7 @@ public class BuildEventServiceTransport implements BuildEventTransport {
           besOptions.besLifecycleEvents,
           checkNotNull(artifactGroupNamer),
           checkNotNull(eventBus),
+          checkNotNull(reporter),
           (besOptions.besTimeout != null) ? besOptions.besTimeout : Duration.ZERO,
           sleeper != null ? sleeper : new JavaSleeper(),
           checkNotNull(commandStartTime),

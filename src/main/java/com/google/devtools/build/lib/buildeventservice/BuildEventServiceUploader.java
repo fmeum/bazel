@@ -50,6 +50,8 @@ import com.google.devtools.build.lib.buildeventstream.BuildEventStreamProtos;
 import com.google.devtools.build.lib.buildeventstream.LargeBuildEventSerializedEvent;
 import com.google.devtools.build.lib.buildeventstream.PathConverter;
 import com.google.devtools.build.lib.clock.Clock;
+import com.google.devtools.build.lib.events.Event;
+import com.google.devtools.build.lib.events.Reporter;
 import com.google.devtools.build.lib.profiler.AutoProfiler;
 import com.google.devtools.build.lib.profiler.GoogleAutoProfilerUtils;
 import com.google.devtools.build.lib.server.FailureDetails.BuildProgress;
@@ -102,6 +104,7 @@ public final class BuildEventServiceUploader implements Runnable {
   private final Clock clock;
   private final ArtifactGroupNamer namer;
   private final EventBus eventBus;
+  private final Reporter reporter;
   // `commandStartTime` is an instant in time determined by the build tool's native launcher and
   // matches `BuildStartingEvent.getRequest().getStartTime()`.
   private final Timestamp commandStartTime;
@@ -161,6 +164,7 @@ public final class BuildEventServiceUploader implements Runnable {
       Clock clock,
       ArtifactGroupNamer namer,
       EventBus eventBus,
+      Reporter reporter,
       Timestamp commandStartTime) {
     this.besClient = besClient;
     this.buildEventUploader = localFileUploader;
@@ -171,6 +175,7 @@ public final class BuildEventServiceUploader implements Runnable {
     this.clock = clock;
     this.namer = namer;
     this.eventBus = eventBus;
+    this.reporter = reporter;
     this.commandStartTime = commandStartTime;
     this.eventStreamStartTime = currentTime();
     // Ensure the half-close future is closed once the upload is complete. This is usually a no-op,
@@ -426,7 +431,9 @@ public final class BuildEventServiceUploader implements Runnable {
               logger.atInfo().log("Starting publishBuildEvents: eventQueue=%d", eventQueue.size());
               streamContext =
                   besClient.openStream(
-                      (ack) -> eventQueue.addLast(new AckReceivedCommand(ack.getSequenceNumber())));
+                      (ack) ->
+                          eventQueue.addLast(
+                              new AckReceivedCommand(ack.getSequenceNumber(), ack.getMessage())));
               addStreamStatusListener(
                   streamContext.getStatus(),
                   (status) -> eventQueue.addLast(new StreamCompleteCommand(status)));
@@ -479,6 +486,13 @@ public final class BuildEventServiceUploader implements Runnable {
                 long actualSeqNum = ackEvent.getSequenceNumber();
                 if (expected.getSequenceNumber() == actualSeqNum) {
                   acksReceived++;
+                  if (!ackEvent.getMessage().isEmpty()) {
+                    reporter.handle(
+                        Event.info(
+                            String.format(
+                                "Message from %s: %s",
+                                besClient.backendName(), ackEvent.getMessage())));
+                  }
                 } else {
                   ackQueue.addFirst(expected);
                   String message =
@@ -752,6 +766,7 @@ public final class BuildEventServiceUploader implements Runnable {
     private Clock clock;
     private ArtifactGroupNamer artifactGroupNamer;
     private EventBus eventBus;
+    private Reporter reporter;
     private Timestamp commandStartTime;
 
     @CanIgnoreReturnValue
@@ -809,6 +824,12 @@ public final class BuildEventServiceUploader implements Runnable {
     }
 
     @CanIgnoreReturnValue
+    Builder reporter(Reporter reporter) {
+      this.reporter = reporter;
+      return this;
+    }
+
+    @CanIgnoreReturnValue
     public Builder commandStartTime(Timestamp value) {
       this.commandStartTime = value;
       return this;
@@ -825,6 +846,7 @@ public final class BuildEventServiceUploader implements Runnable {
           checkNotNull(clock),
           checkNotNull(artifactGroupNamer),
           checkNotNull(eventBus),
+          checkNotNull(reporter),
           checkNotNull(commandStartTime));
     }
   }

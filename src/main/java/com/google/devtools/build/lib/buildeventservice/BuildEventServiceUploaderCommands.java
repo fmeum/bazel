@@ -14,6 +14,7 @@
 package com.google.devtools.build.lib.buildeventservice;
 
 import com.google.common.base.MoreObjects;
+import com.google.common.base.Preconditions;
 import com.google.common.util.concurrent.ListenableFuture;
 import com.google.devtools.build.lib.buildeventstream.BuildEvent;
 import com.google.devtools.build.lib.buildeventstream.PathConverter;
@@ -73,13 +74,19 @@ public class BuildEventServiceUploaderCommands {
   @Immutable
   static final class AckReceivedCommand implements EventLoopCommand {
     private final long sequenceNumber;
+    private final String message;
 
-    AckReceivedCommand(long sequenceNumber) {
+    AckReceivedCommand(long sequenceNumber, String message) {
       this.sequenceNumber = sequenceNumber;
+      this.message = Preconditions.checkNotNull(message);
     }
 
     public long getSequenceNumber() {
       return sequenceNumber;
+    }
+
+    public String getMessage() {
+      return message;
     }
 
     @Override
@@ -89,7 +96,10 @@ public class BuildEventServiceUploaderCommands {
 
     @Override
     public String toString() {
-      return MoreObjects.toStringHelper(this).add("seq_num", getSequenceNumber()).toString();
+      return MoreObjects.toStringHelper(this)
+          .add("seq_num", getSequenceNumber())
+          .add("message", getMessage())
+          .toString();
     }
   }
 

@@ -53,13 +53,15 @@ public class BuildEventServiceGrpcClient implements BuildEventServiceClient {
 
   private final String buildRequestId;
   private final UUID commandId;
+  private final String backendName;
 
   public BuildEventServiceGrpcClient(
       ManagedChannel channel,
       @Nullable CallCredentials callCredentials,
       ClientInterceptor interceptor,
       String buildRequestId,
-      UUID commandId) {
+      UUID commandId,
+      String backendName) {
     this.besAsync =
         configureStub(PublishBuildEventGrpc.newStub(channel), callCredentials, interceptor);
     this.besBlocking =
@@ -67,6 +69,7 @@ public class BuildEventServiceGrpcClient implements BuildEventServiceClient {
     this.channel = channel;
     this.buildRequestId = Preconditions.checkNotNull(buildRequestId);
     this.commandId = Preconditions.checkNotNull(commandId);
+    this.backendName = Preconditions.checkNotNull(backendName);
   }
 
   @VisibleForTesting
@@ -79,6 +82,7 @@ public class BuildEventServiceGrpcClient implements BuildEventServiceClient {
     this.channel = channel;
     this.buildRequestId = "testing/" + UUID.randomUUID();
     this.commandId = UUID.randomUUID();
+    this.backendName = "example.org";
   }
 
   private static <T extends AbstractStub<T>> T configureStub(
@@ -221,6 +225,11 @@ public class BuildEventServiceGrpcClient implements BuildEventServiceClient {
     } else {
       return t.getMessage();
     }
+  }
+
+  @Override
+  public String backendName() {
+    return backendName;
   }
 
   @Override

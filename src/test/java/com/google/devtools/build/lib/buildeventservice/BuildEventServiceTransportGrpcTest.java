@@ -65,7 +65,8 @@ public class BuildEventServiceTransportGrpcTest extends AbstractBuildEventServic
         /* callCredentials= */ null,
         /* interceptor= */ null,
         "testing/" + UUID.randomUUID(),
-        UUID.randomUUID());
+        UUID.randomUUID(),
+        "example.org");
   }
 
   @Override

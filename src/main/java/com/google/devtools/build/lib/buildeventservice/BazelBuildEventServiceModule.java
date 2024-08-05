@@ -38,6 +38,7 @@ import io.grpc.Metadata;
 import io.grpc.auth.MoreCallCredentials;
 import io.grpc.stub.MetadataUtils;
 import java.io.IOException;
+import java.net.URI;
 import java.util.Map;
 import java.util.Map.Entry;
 import java.util.Objects;
@@ -58,6 +59,10 @@ public class BazelBuildEventServiceModule
     abstract ImmutableList<Map.Entry<String, String>> besHeaders();
 
     abstract AuthAndTLSOptions authAndTLSOptions();
+
+    String besBackendHost() {
+      return URI.create(besBackend()).getHost();
+    }
 
     static BackendConfig create(
         BuildEventServiceOptions besOptions, AuthAndTLSOptions authAndTLSOptions) {
@@ -122,7 +127,8 @@ public class BazelBuildEventServiceModule
               credentials != null ? MoreCallCredentials.from(credentials) : null,
               makeGrpcInterceptor(config),
               env.getBuildRequestId(),
-              env.getCommandId());
+              env.getCommandId(),
+              config.besBackendHost());
     }
     return client;
   }

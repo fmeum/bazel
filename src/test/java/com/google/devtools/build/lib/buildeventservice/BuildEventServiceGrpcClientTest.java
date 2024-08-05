@@ -125,7 +125,8 @@ public class BuildEventServiceGrpcClientTest {
               null,
               interceptor,
               "testing/" + UUID.randomUUID(),
-              UUID.randomUUID());
+              UUID.randomUUID(),
+              "example.org");
       assertThat(grpcClient.openStream(ack -> {}).getStatus().get()).isEqualTo(Status.OK);
       assertThat(seenHeaders).hasSize(1);
       Metadata headers = seenHeaders.get(0);
@@ -143,7 +144,8 @@ public class BuildEventServiceGrpcClientTest {
                       null,
                       null,
                       "testing/" + UUID.randomUUID(),
-                      UUID.randomUUID())
+                      UUID.randomUUID(),
+                      "example.org")
                   .openStream(ack -> {})
                   .getStatus()
                   .get())
@@ -169,7 +171,8 @@ public class BuildEventServiceGrpcClientTest {
                       null,
                       null,
                       "testing/" + UUID.randomUUID(),
-                      UUID.randomUUID())
+                      UUID.randomUUID(),
+                      "example.org")
                   .openStream(ack -> {})
                   .getStatus()
                   .get())

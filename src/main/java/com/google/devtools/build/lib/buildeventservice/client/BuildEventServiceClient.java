@@ -91,4 +91,9 @@ public interface BuildEventServiceClient {
    * <p>As a last resort, it's valid to return {@link Throwable#getMessage()}.
    */
   String userReadableError(Throwable t);
+
+  /**
+   * Returns a user-readable name of the backend to be used in log messages.
+   */
+  String backendName();
 }

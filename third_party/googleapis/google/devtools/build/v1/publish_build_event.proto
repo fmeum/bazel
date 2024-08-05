@@ -144,6 +144,9 @@ message PublishBuildToolEventStreamResponse {
 
   // The sequence number of this event that has been committed.
   int64 sequence_number = 2;
+
+  // A message from the service to be displayed by the build tools.
+  string message = 3;
 }
 
 // Build event with contextual information about the stream it belongs to and
