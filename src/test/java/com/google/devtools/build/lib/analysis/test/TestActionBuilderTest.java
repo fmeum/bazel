@@ -723,6 +723,218 @@ public class TestActionBuilderTest extends BuildViewTestCase {
   }
 
   @Test
+  public void testTestExecutionOnTargetPlatformWithoutTestExecGroup() throws Exception {
+    scratch.file(
+        "some_test.bzl",
+        """
+        def _some_test_impl(ctx):
+            script = ctx.actions.declare_file(ctx.attr.name + ".sh")
+            ctx.actions.write(script, "shell script goes here", is_executable = True)
+            return [
+                DefaultInfo(executable = script),
+            ]
+
+        some_test = rule(
+            implementation = _some_test_impl,
+            test = True,
+        )
+        """);
+    scratch.file(
+        "BUILD",
+        """
+        load(':some_test.bzl', 'some_test')
+        platform(
+            name = 'windows_x86_exec',
+            constraint_values = [
+                '%constraints_root%os:windows',
+                '%constraints_root%cpu:x86_64',
+            ],
+            exec_properties = {'os': 'windows', 'cpu': 'x86_64', 'type': 'exec'},
+        )
+        platform(
+            name = 'windows_x86_target',
+            constraint_values = [
+                '%constraints_root%os:windows',
+                '%constraints_root%cpu:x86_64',
+            ],
+            exec_properties = {'os': 'windows', 'cpu': 'x86_64', 'type': 'target'},
+        )
+        platform(
+            name = 'linux_x86_exec',
+            constraint_values = [
+                '%constraints_root%os:linux',
+                '%constraints_root%cpu:x86_64',
+            ],
+            exec_properties = {'os': 'linux', 'cpu': 'x86_64', 'type': 'exec'},
+        )
+        platform(
+            name = 'linux_x86_target',
+            constraint_values = [
+                '%constraints_root%os:linux',
+                '%constraints_root%cpu:x86_64',
+            ],
+            exec_properties = {'os': 'linux', 'cpu': 'x86_64', 'type': 'target'},
+        )
+        platform(
+            name = 'macos_arm64_exec',
+            constraint_values = [
+                '%constraints_root%os:macos',
+                '%constraints_root%cpu:arm64',
+            ],
+            exec_properties = {'os': 'macos', 'cpu': 'arm64', 'type': 'exec'},
+        )
+        platform(
+            name = 'macos_arm64_target',
+            constraint_values = [
+                '%constraints_root%os:macos',
+                '%constraints_root%cpu:arm64',
+            ],
+            exec_properties = {'os': 'macos', 'cpu': 'arm64', 'type': 'target'},
+        )
+        some_test(
+            name = 'some_test',
+            exec_properties = {'extra_key': 'from_rule'},
+        )
+        """
+            .replaceAll("%constraints_root%", TestConstants.CONSTRAINTS_PACKAGE_ROOT));
+    useConfiguration(
+        "--platforms=//:macos_arm64_target",
+        "--host_platform=//:windows_x86_target",
+        "--extra_execution_platforms=//:windows_x86_exec,//:linux_x86_exec,//:macos_arm64_exec");
+    ImmutableList<Artifact.DerivedArtifact> testStatusList = getTestStatusArtifacts("//:some_test");
+    TestRunnerAction testAction = (TestRunnerAction) getGeneratingAction(testStatusList.getFirst());
+    assertThat(testAction.getExecutionPlatform().label().getName()).isEqualTo("macos_arm64_target");
+
+    ImmutableMap<String, String> executionInfo = testAction.getExecutionInfo();
+    assertThat(executionInfo)
+        .containsExactly("os", "macos", "cpu", "arm64", "type", "target", "extra_key", "from_rule");
+  }
+
+  @Test
+  public void testTestExecutionHonorsTestToolchainWithTestExecGroup() throws Exception {
+    scratch.file(
+        "toolchains/defs.bzl",
+        """
+        def _empty_toolchain_info_impl(ctx):
+            return [platform_common.ToolchainInfo()]
+        empty_toolchain_info = rule(
+            implementation = _empty_toolchain_info_impl,
+        )
+        """);
+    scratch.file(
+        "toolchains/BUILD",
+        """
+        load(":defs.bzl", "empty_toolchain_info")
+        toolchain_type(name = "some_test_toolchain_type")
+        empty_toolchain_info(name = "empty_toolchain_info")
+        toolchain(
+            name = "some_test_toolchain_mac_on_linux",
+            toolchain_type = ":some_test_toolchain_type",
+            target_compatible_with = [
+                "%constraints_root%os:macos",
+                "%constraints_root%cpu:arm64",
+            ],
+            exec_compatible_with = [
+                "%constraints_root%os:linux",
+                "%constraints_root%cpu:x86_64",
+            ],
+            toolchain = ":empty_toolchain_info",
+        )
+        """
+            .replaceAll("%constraints_root%", TestConstants.CONSTRAINTS_PACKAGE_ROOT));
+    scratch.file(
+        "some_test.bzl",
+        """
+        def _some_test_impl(ctx):
+            script = ctx.actions.declare_file(ctx.attr.name + ".sh")
+            ctx.actions.write(script, "shell script goes here", is_executable = True)
+            return [
+                DefaultInfo(executable = script),
+            ]
+
+        some_test = rule(
+            implementation = _some_test_impl,
+            test = True,
+            exec_groups = {
+                'test': exec_group(
+                    toolchains = ["//toolchains:some_test_toolchain_type"],
+                ),
+            },
+        )
+        """);
+    scratch.file(
+        "BUILD",
+        """
+        load(':some_test.bzl', 'some_test')
+        platform(
+            name = 'windows_x86_exec',
+            constraint_values = [
+                '%constraints_root%os:windows',
+                '%constraints_root%cpu:x86_64',
+            ],
+            exec_properties = {'os': 'windows', 'cpu': 'x86_64', 'type': 'exec'},
+        )
+        platform(
+            name = 'windows_x86_target',
+            constraint_values = [
+                '%constraints_root%os:windows',
+                '%constraints_root%cpu:x86_64',
+            ],
+            exec_properties = {'os': 'windows', 'cpu': 'x86_64', 'type': 'target'},
+        )
+        platform(
+            name = 'linux_x86_exec',
+            constraint_values = [
+                '%constraints_root%os:linux',
+                '%constraints_root%cpu:x86_64',
+            ],
+            exec_properties = {'os': 'linux', 'cpu': 'x86_64', 'type': 'exec'},
+        )
+        platform(
+            name = 'linux_x86_target',
+            constraint_values = [
+                '%constraints_root%os:linux',
+                '%constraints_root%cpu:x86_64',
+            ],
+            exec_properties = {'os': 'linux', 'cpu': 'x86_64', 'type': 'target'},
+        )
+        platform(
+            name = 'macos_arm64_exec',
+            constraint_values = [
+                '%constraints_root%os:macos',
+                '%constraints_root%cpu:arm64',
+            ],
+            exec_properties = {'os': 'macos', 'cpu': 'arm64', 'type': 'exec'},
+        )
+        platform(
+            name = 'macos_arm64_target',
+            constraint_values = [
+                '%constraints_root%os:macos',
+                '%constraints_root%cpu:arm64',
+            ],
+            exec_properties = {'os': 'macos', 'cpu': 'arm64', 'type': 'target'},
+        )
+        some_test(
+            name = 'some_test',
+            exec_properties = {'extra_key': 'from_rule'},
+        )
+        """
+            .replaceAll("%constraints_root%", TestConstants.CONSTRAINTS_PACKAGE_ROOT));
+    useConfiguration(
+        "--platforms=//:macos_arm64_target",
+        "--host_platform=//:windows_x86_target",
+        "--extra_execution_platforms=//:windows_x86_exec,//:linux_x86_exec,//:macos_arm64_exec",
+        "--extra_toolchains=//toolchains:some_test_toolchain_mac_on_linux");
+    ImmutableList<Artifact.DerivedArtifact> testStatusList = getTestStatusArtifacts("//:some_test");
+    TestRunnerAction testAction = (TestRunnerAction) getGeneratingAction(testStatusList.getFirst());
+    assertThat(testAction.getExecutionPlatform().label().getName()).isEqualTo("linux_x86_exec");
+
+    ImmutableMap<String, String> executionInfo = testAction.getExecutionInfo();
+    assertThat(executionInfo)
+        .containsExactly("os", "linux", "cpu", "x86_64", "type", "exec", "extra_key", "from_rule");
+  }
+
+  @Test
   public void testNonExecutableCoverageReportGenerator() throws Exception {
     useConfiguration(
         "--coverage_report_generator=//bad_gen:bad_cov_gen", "--collect_code_coverage");
