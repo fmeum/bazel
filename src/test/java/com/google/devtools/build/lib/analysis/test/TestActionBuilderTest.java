@@ -723,7 +723,7 @@ public class TestActionBuilderTest extends BuildViewTestCase {
   }
 
   @Test
-  public void testTestExecutionOnTargetPlatformWithoutTestExecGroup() throws Exception {
+  public void testTestExecutionOnExecPlatformMatchingTargetConstraintsByDefault() throws Exception {
     scratch.file(
         "some_test.bzl",
         """
@@ -803,11 +803,11 @@ public class TestActionBuilderTest extends BuildViewTestCase {
         "--extra_execution_platforms=//:windows_x86_exec,//:linux_x86_exec,//:macos_arm64_exec");
     ImmutableList<Artifact.DerivedArtifact> testStatusList = getTestStatusArtifacts("//:some_test");
     TestRunnerAction testAction = (TestRunnerAction) getGeneratingAction(testStatusList.getFirst());
-    assertThat(testAction.getExecutionPlatform().label().getName()).isEqualTo("macos_arm64_target");
+    assertThat(testAction.getExecutionPlatform().label().getName()).isEqualTo("macos_arm64_exec");
 
     ImmutableMap<String, String> executionInfo = testAction.getExecutionInfo();
     assertThat(executionInfo)
-        .containsExactly("os", "macos", "cpu", "arm64", "type", "target", "extra_key", "from_rule");
+        .containsExactly("os", "macos", "cpu", "arm64", "type", "exec", "extra_key", "from_rule");
   }
 
   @Test
