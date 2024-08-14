@@ -1253,7 +1253,16 @@ public final class BlazeRuntime implements BugReport.BlazeRuntimeInterface {
     }
     SubscriberExceptionHandler subscriberExceptionHandler = currentHandlerValue;
     Thread.setDefaultUncaughtExceptionHandler(
-        (thread, throwable) -> subscriberExceptionHandler.handleException(throwable, null));
+        (thread, throwable) -> {
+          try {
+            subscriberExceptionHandler.handleException(throwable, null);
+          } catch (Throwable handlerThrowable) {
+            System.err.println("UncaughtExceptionHandler threw exception:");
+            handlerThrowable.printStackTrace();
+            System.err.println("Original exception:");
+            throwable.printStackTrace();
+          }
+        });
 
     // Set the hook used to display Starlark source lines in a stack trace.
     EvalException.setSourceReaderSupplier(
@@ -1417,7 +1426,16 @@ public final class BlazeRuntime implements BugReport.BlazeRuntimeInterface {
    */
   private static void setupUncaughtHandlerAtStartup(final String[] args) {
     Thread.setDefaultUncaughtExceptionHandler(
-        (thread, throwable) -> BugReport.handleCrash(throwable, args));
+        (thread, throwable) -> {
+          try {
+            BugReport.handleCrash(throwable, args);
+          } catch (Throwable handlerThrowable) {
+            System.err.println("UncaughtExceptionHandler threw exception:");
+            handlerThrowable.printStackTrace();
+            System.err.println("Original exception:");
+            throwable.printStackTrace();
+          }
+        });
   }
 
   @Override
