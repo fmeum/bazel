@@ -28,13 +28,13 @@ import com.google.devtools.build.lib.vfs.Dirent;
 import com.google.devtools.build.lib.vfs.FileStatus;
 import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.build.lib.vfs.PathFragment;
-import java.io.File;
-import java.io.FileInputStream;
 import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.NoSuchFileException;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
@@ -43,6 +43,13 @@ import javax.annotation.Nullable;
 /** This class implements the FileSystem interface using direct calls to the UNIX filesystem. */
 @ThreadSafe
 public class UnixFileSystem extends AbstractFileSystemWithCustomStat {
+  // Paths returned from NativePosixFiles are Strings containing raw bytes from the filesystem.
+  // Java's IO subsystem expects paths to be encoded per the `sun.jnu.encoding` setting. This
+  // is usually set to be Latin-1 by the Bazel client, but the JDK may force it to be UTF-8 on
+  // certain platforms (e.g. macOS).
+  private static final boolean REENCODE_TO_UTF8 =
+      "UTF-8".equals(System.getProperty("sun.jnu.encoding"));
+
   protected final String hashAttributeName;
 
   public UnixFileSystem(DigestHashFunction hashFunction, String hashAttributeName) {
@@ -534,27 +541,26 @@ public class UnixFileSystem extends AbstractFileSystemWithCustomStat {
     }
   }
 
-  private static File createJavaIoFile(PathFragment path) {
-    final String pathStr = path.getPathString();
-    if (pathStr.chars().allMatch(c -> c < 128)) {
-      return new File(pathStr);
+  @Override
+  public java.nio.file.Path getNioPath(PathFragment path) {
+    String pathString = path.getPathString();
+    if (REENCODE_TO_UTF8 && pathString.chars().anyMatch(c -> c >= 128)) {
+      pathString =
+          new String(pathString.getBytes(StandardCharsets.ISO_8859_1), StandardCharsets.UTF_8);
     }
-
-    // Paths returned from NativePosixFiles are Strings containing raw bytes from the filesystem.
-    // Java's IO subsystem expects paths to be encoded per the `sun.jnu.encoding` setting. This
-    // is difficult to handle generically, but we can special-case the most common case (UTF-8).
-    if ("UTF-8".equals(System.getProperty("sun.jnu.encoding"))) {
-      final byte[] pathBytes = pathStr.getBytes(StandardCharsets.ISO_8859_1);
-      return new File(new String(pathBytes, StandardCharsets.UTF_8));
-    }
-
-    // This will probably fail but not much that can be done without migrating to `java.nio.Files`.
-    return new File(pathStr);
+    return java.nio.file.Path.of(pathString);
   }
 
   @Override
   protected InputStream createFileInputStream(PathFragment path) throws IOException {
-    return new FileInputStream(createJavaIoFile(path));
+    try {
+      return Files.newInputStream(getNioPath(path));
+    } catch (NoSuchFileException originalException) {
+      FileNotFoundException newException =
+          new FileNotFoundException(originalException.getMessage() + ERR_NO_SUCH_FILE_OR_DIR);
+      newException.initCause(originalException);
+      throw newException;
+    }
   }
 
   protected OutputStream createFileOutputStream(PathFragment path, boolean append)

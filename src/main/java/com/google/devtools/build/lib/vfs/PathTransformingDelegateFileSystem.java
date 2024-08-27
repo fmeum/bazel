@@ -284,6 +284,11 @@ public abstract class PathTransformingDelegateFileSystem extends FileSystem {
     delegateFs.prefetchPackageAsync(toDelegatePath(path), maxDirs);
   }
 
+  @Override
+  public java.nio.file.Path getNioPath(PathFragment path) {
+    return delegateFs.getNioPath(toDelegatePath(path));
+  }
+
   /** Transform original path to a different one to be used with the {@code delegateFs}. */
   protected abstract PathFragment toDelegatePath(PathFragment path);
 

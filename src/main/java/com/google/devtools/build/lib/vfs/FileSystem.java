@@ -16,6 +16,8 @@
 package com.google.devtools.build.lib.vfs;
 
 import static com.google.common.base.Preconditions.checkArgument;
+import static com.google.devtools.build.lib.vfs.JavaIoFileSystem.ERR_DIRECTORY_NOT_EMPTY;
+import static com.google.devtools.build.lib.vfs.JavaIoFileSystem.ERR_FILE_EXISTS;
 import static java.nio.charset.StandardCharsets.ISO_8859_1;
 
 import com.google.common.base.Preconditions;
@@ -29,7 +31,11 @@ import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.nio.channels.SeekableByteChannel;
+import java.nio.file.AccessDeniedException;
+import java.nio.file.DirectoryNotEmptyException;
 import java.nio.file.FileAlreadyExistsException;
+import java.nio.file.NoSuchFileException;
+import java.nio.file.NotLinkException;
 import java.util.Collection;
 import java.util.Iterator;
 import java.util.List;
@@ -42,6 +48,9 @@ public abstract class FileSystem {
   // The maximum number of symbolic links that may be traversed by resolveSymbolicLinks() while
   // canonicalizing a path before it gives up and throws a FileSymlinkLoopException.
   public static final int MAX_SYMLINKS = 32;
+
+  protected static final String ERR_NO_SUCH_FILE_OR_DIR = " (No such file or directory)";
+  protected static final String ERR_PERMISSION_DENIED = " (Permission denied)";
 
   private final DigestHashFunction digestFunction;
 
@@ -175,6 +184,10 @@ public abstract class FileSystem {
     return fileSystem;
   }
 
+  public java.nio.file.Path getNioPath(PathFragment path) {
+    return null;
+  }
+
   /**
    * Creates a directory with the name of the current path. See {@link Path#createDirectory} for
    * specification.
@@ -246,7 +259,7 @@ public abstract class FileSystem {
    * @throws IOException if the hierarchy cannot be removed successfully
    */
   protected void deleteTreesBelow(PathFragment dir) throws IOException {
-    if (isDirectory(dir, /*followSymlinks=*/ false)) {
+    if (isDirectory(dir, /* followSymlinks= */ false)) {
       Collection<String> entries;
       try {
         entries = getDirectoryEntries(dir);
@@ -824,4 +837,29 @@ public abstract class FileSystem {
    */
   protected void prefetchPackageAsync(PathFragment path, int maxDirs) {}
 
+  protected final void rethrowNIOAsIOException(PathFragment path, IOException e)
+      throws IOException {
+    if (e instanceof NoSuchFileException) {
+      FileNotFoundException newException =
+          new FileNotFoundException(e.getMessage() + ERR_NO_SUCH_FILE_OR_DIR);
+      newException.initCause(e);
+      throw newException;
+    }
+    if (e instanceof FileAlreadyExistsException) {
+      throw new IOException(e.getMessage() + ERR_FILE_EXISTS, e);
+    }
+    if (e instanceof DirectoryNotEmptyException) {
+      throw new IOException(e.getMessage() + ERR_DIRECTORY_NOT_EMPTY, e);
+    }
+    if (e instanceof AccessDeniedException) {
+      FileAccessException newException =
+          new FileAccessException(e.getMessage() + ERR_PERMISSION_DENIED);
+      newException.initCause(e);
+      throw newException;
+    }
+    if (e instanceof NotLinkException) {
+      throw new NotASymlinkException(path, e);
+    }
+    throw e;
+  }
 }

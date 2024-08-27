@@ -55,7 +55,6 @@ public class JavaIoFileSystem extends AbstractFileSystemWithCustomStat {
   protected static final String ERR_IS_DIRECTORY = " (Is a directory)";
   protected static final String ERR_DIRECTORY_NOT_EMPTY = " (Directory not empty)";
   protected static final String ERR_FILE_EXISTS = " (File exists)";
-  protected static final String ERR_NO_SUCH_FILE_OR_DIR = " (No such file or directory)";
   protected static final String ERR_NOT_A_DIRECTORY = " (Not a directory)";
 
   public JavaIoFileSystem(DigestHashFunction hashFunction) {
@@ -81,8 +80,9 @@ public class JavaIoFileSystem extends AbstractFileSystemWithCustomStat {
    * avoids extra allocations and does not lose track of the underlying Java filesystem, which is
    * useful for some in-memory filesystem implementations like JimFS.
    */
-  protected java.nio.file.Path getNioPath(PathFragment path) {
-    return Paths.get(path.toString());
+  @Override
+  public java.nio.file.Path getNioPath(PathFragment path) {
+    return java.nio.file.Path.of(path.toString());
   }
 
   private LinkOption[] linkOpts(boolean followSymlinks) {
@@ -263,7 +263,7 @@ public class JavaIoFileSystem extends AbstractFileSystemWithCustomStat {
     } catch (java.nio.file.FileAlreadyExistsException e) {
       // Files.createDirectories will handle this case normally, but if the existing
       // file is a symlink to a directory then it still throws. Swallow this.
-      if (!isDirectory(path, /*followSymlinks=*/ true)) {
+      if (!isDirectory(path, /* followSymlinks= */ true)) {
         throw e;
       }
     }

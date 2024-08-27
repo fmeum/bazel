@@ -867,6 +867,12 @@ public class Path implements Comparable<Path>, FileType.HasFileType {
     fileSystem.chmod(asFragment(), mode);
   }
 
+  /** Returns a {@link java.nio.file.Path} for the current path if possible, or null otherwise. */
+  @Nullable
+  public java.nio.file.Path getNioPath() {
+    return fileSystem.getNioPath(asFragment());
+  }
+
   public void prefetchPackageAsync(int maxDirs) {
     fileSystem.prefetchPackageAsync(asFragment(), maxDirs);
   }

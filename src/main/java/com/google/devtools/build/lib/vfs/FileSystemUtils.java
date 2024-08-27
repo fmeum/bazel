@@ -13,7 +13,10 @@
 // limitations under the License.
 package com.google.devtools.build.lib.vfs;
 
+import static com.google.devtools.build.lib.vfs.FileSystem.ERR_NO_SUCH_FILE_OR_DIR;
 import static java.nio.charset.StandardCharsets.ISO_8859_1;
+import static java.nio.file.StandardCopyOption.COPY_ATTRIBUTES;
+import static java.nio.file.StandardCopyOption.REPLACE_EXISTING;
 
 import com.google.common.base.Preconditions;
 import com.google.common.collect.ImmutableList;
@@ -23,10 +26,12 @@ import com.google.common.io.ByteStreams;
 import com.google.devtools.build.lib.concurrent.ThreadSafety.ConditionallyThreadSafe;
 import com.google.devtools.build.lib.concurrent.ThreadSafety.ThreadSafe;
 import com.google.errorprone.annotations.InlineMe;
+import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.charset.Charset;
+import java.nio.file.NoSuchFileException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
@@ -41,13 +46,13 @@ public class FileSystemUtils {
   private FileSystemUtils() {}
 
   /**
-   * Throws exceptions if {@code baseName} is not a valid base name. A valid
-   * base name:
+   * Throws exceptions if {@code baseName} is not a valid base name. A valid base name:
+   *
    * <ul>
-   * <li>Is not null
-   * <li>Is not an empty string
-   * <li>Is not "." or ".."
-   * <li>Does not contain a slash
+   *   <li>Is not null
+   *   <li>Is not an empty string
+   *   <li>Is not "." or ".."
+   *   <li>Does not contain a slash
    * </ul>
    */
   @ThreadSafe
@@ -64,12 +69,12 @@ public class FileSystemUtils {
   }
 
   /**
-   * Returns the common ancestor between two paths, or null if none (including
-   * if they are on different filesystems).
+   * Returns the common ancestor between two paths, or null if none (including if they are on
+   * different filesystems).
    */
   public static Path commonAncestor(Path a, Path b) {
     while (a != null && !b.startsWith(a)) {
-      a = a.getParentDirectory();  // returns null at root
+      a = a.getParentDirectory(); // returns null at root
     }
     return a;
   }
@@ -86,19 +91,17 @@ public class FileSystemUtils {
     return a;
   }
 
-  /**
-   * Returns a path fragment from a given from-dir to a given to-path.
-   */
+  /** Returns a path fragment from a given from-dir to a given to-path. */
   public static PathFragment relativePath(PathFragment fromDir, PathFragment to) {
     if (to.equals(fromDir)) {
       return PathFragment.EMPTY_FRAGMENT;
     }
     if (to.startsWith(fromDir)) {
-      return to.relativeTo(fromDir);  // easy case--it's a descendant
+      return to.relativeTo(fromDir); // easy case--it's a descendant
     }
     PathFragment ancestor = commonAncestor(fromDir, to);
     if (ancestor == null) {
-      return to;  // no common ancestor, use 'to'
+      return to; // no common ancestor, use 'to'
     }
     int levels = fromDir.relativeTo(ancestor).segmentCount();
     StringBuilder dotdots = new StringBuilder();
@@ -109,9 +112,8 @@ public class FileSystemUtils {
   }
 
   /**
-   * Removes the shortest suffix beginning with '.' from the basename of the
-   * filename string. If the basename contains no '.', the filename is returned
-   * unchanged.
+   * Removes the shortest suffix beginning with '.' from the basename of the filename string. If the
+   * basename contains no '.', the filename is returned unchanged.
    *
    * <p>e.g. "foo/bar.x" -> "foo/bar"
    *
@@ -121,7 +123,9 @@ public class FileSystemUtils {
   @ThreadSafe
   public static String removeExtension(String filename) {
     int lastDotIndex = filename.lastIndexOf('.');
-    if (lastDotIndex == -1) { return filename; }
+    if (lastDotIndex == -1) {
+      return filename;
+    }
     int lastSlashIndex = filename.lastIndexOf('/');
     if (lastSlashIndex > lastDotIndex) {
       return filename;
@@ -130,9 +134,8 @@ public class FileSystemUtils {
   }
 
   /**
-   * Removes the shortest suffix beginning with '.' from the basename of the
-   * PathFragment. If the basename contains no '.', the filename is returned
-   * unchanged.
+   * Removes the shortest suffix beginning with '.' from the basename of the PathFragment. If the
+   * basename contains no '.', the filename is returned unchanged.
    *
    * <p>e.g. "foo/bar.x" -> "foo/bar"
    *
@@ -145,9 +148,8 @@ public class FileSystemUtils {
   }
 
   /**
-   * Removes the shortest suffix beginning with '.' from the basename of the
-   * Path. If the basename contains no '.', the filename is returned
-   * unchanged.
+   * Removes the shortest suffix beginning with '.' from the basename of the Path. If the basename
+   * contains no '.', the filename is returned unchanged.
    *
    * <p>e.g. "foo/bar.x" -> "foo/bar"
    *
@@ -160,9 +162,8 @@ public class FileSystemUtils {
   }
 
   /**
-   * Returns a new {@code PathFragment} formed by replacing the extension of the
-   * last path segment of {@code path} with {@code newExtension}. Null is
-   * returned iff {@code path} has zero segments.
+   * Returns a new {@code PathFragment} formed by replacing the extension of the last path segment
+   * of {@code path} with {@code newExtension}. Null is returned iff {@code path} has zero segments.
    */
   public static PathFragment replaceExtension(PathFragment path, String newExtension) {
     return path.replaceName(removeExtension(path.getBaseName()) + newExtension);
@@ -204,22 +205,20 @@ public class FileSystemUtils {
 
   /**
    * Returns a new {@code PathFragment} formed by appending the given string to the last path
-   * segment of {@code path} without removing the extension.  Returns null if {@code path}
-   * has zero segments.
+   * segment of {@code path} without removing the extension. Returns null if {@code path} has zero
+   * segments.
    */
   public static PathFragment appendWithoutExtension(PathFragment path, String toAppend) {
     return path.replaceName(appendWithoutExtension(path.getBaseName(), toAppend));
   }
 
   /**
-   * Given a string that represents a file with an extension separated by a '.' and a string
-   * to append, return a string in which {@code toAppend} has been appended to {@code name}
-   * before the last '.' character.  If {@code name} does not include a '.', appends {@code
-   * toAppend} at the end.
+   * Given a string that represents a file with an extension separated by a '.' and a string to
+   * append, return a string in which {@code toAppend} has been appended to {@code name} before the
+   * last '.' character. If {@code name} does not include a '.', appends {@code toAppend} at the
+   * end.
    *
-   * <p>For example,
-   * ("libfoo.jar", "-src") ==> "libfoo-src.jar"
-   * ("libfoo", "-src") ==> "libfoo-src"
+   * <p>For example, ("libfoo.jar", "-src") ==> "libfoo-src.jar" ("libfoo", "-src") ==> "libfoo-src"
    */
   private static String appendWithoutExtension(String name, String toAppend) {
     int dotIndex = name.lastIndexOf('.');
@@ -232,26 +231,23 @@ public class FileSystemUtils {
     }
   }
 
-  /**
-   * Return the current working directory as expressed by the System property
-   * 'user.dir'.
-   */
+  /** Return the current working directory as expressed by the System property 'user.dir'. */
   public static Path getWorkingDirectory(FileSystem fs) {
     return fs.getPath(getWorkingDirectory());
   }
 
   /**
-   * Returns the current working directory as expressed by the System property
-   * 'user.dir'. This version does not require a {@link FileSystem}.
+   * Returns the current working directory as expressed by the System property 'user.dir'. This
+   * version does not require a {@link FileSystem}.
    */
   public static PathFragment getWorkingDirectory() {
     return PathFragment.create(System.getProperty("user.dir", "/"));
   }
 
   /**
-   * "Touches" the file or directory specified by the path, following symbolic
-   * links. If it does not exist, it is created as an empty file; otherwise, the
-   * time of last access is updated to the current time.
+   * "Touches" the file or directory specified by the path, following symbolic links. If it does not
+   * exist, it is created as an empty file; otherwise, the time of last access is updated to the
+   * current time.
    *
    * @throws IOException if there was an error while touching the file
    */
@@ -265,69 +261,59 @@ public class FileSystemUtils {
   }
 
   /**
-   * Creates an empty regular file with the name of the current path, following
-   * symbolic links.
+   * Creates an empty regular file with the name of the current path, following symbolic links.
    *
-   * @throws IOException if the file could not be created for any reason
-   *         (including that there was already a file at that location)
+   * @throws IOException if the file could not be created for any reason (including that there was
+   *     already a file at that location)
    */
   public static void createEmptyFile(Path path) throws IOException {
     path.getOutputStream().close();
   }
 
   /**
-   * Creates or updates a symbolic link from 'link' to 'target'. Replaces
-   * existing symbolic links with target, and skips the link creation if it is
-   * already present. Will also create any missing ancestor directories of the
-   * link. This method is non-atomic
+   * Creates or updates a symbolic link from 'link' to 'target'. Replaces existing symbolic links
+   * with target, and skips the link creation if it is already present. Will also create any missing
+   * ancestor directories of the link. This method is non-atomic
    *
-   * <p>Note: this method will throw an IOException if there is an unequal
-   * non-symlink at link.
+   * <p>Note: this method will throw an IOException if there is an unequal non-symlink at link.
    *
-   * @throws IOException if the creation of the symbolic link was unsuccessful
-   *         for any reason.
+   * @throws IOException if the creation of the symbolic link was unsuccessful for any reason.
    */
-  @ThreadSafe  // but not atomic
+  @ThreadSafe // but not atomic
   public static void ensureSymbolicLink(Path link, Path target) throws IOException {
     ensureSymbolicLink(link, target.asFragment());
   }
 
   /**
-   * Creates or updates a symbolic link from 'link' to 'target'. Replaces
-   * existing symbolic links with target, and skips the link creation if it is
-   * already present. Will also create any missing ancestor directories of the
-   * link. This method is non-atomic
+   * Creates or updates a symbolic link from 'link' to 'target'. Replaces existing symbolic links
+   * with target, and skips the link creation if it is already present. Will also create any missing
+   * ancestor directories of the link. This method is non-atomic
    *
-   * <p>Note: this method will throw an IOException if there is an unequal
-   * non-symlink at link.
+   * <p>Note: this method will throw an IOException if there is an unequal non-symlink at link.
    *
-   * @throws IOException if the creation of the symbolic link was unsuccessful
-   *         for any reason.
+   * @throws IOException if the creation of the symbolic link was unsuccessful for any reason.
    */
-  @ThreadSafe  // but not atomic
+  @ThreadSafe // but not atomic
   public static void ensureSymbolicLink(Path link, String target) throws IOException {
     ensureSymbolicLink(link, PathFragment.create(target));
   }
 
   /**
-   * Creates or updates a symbolic link from 'link' to 'target'. Replaces
-   * existing symbolic links with target, and skips the link creation if it is
-   * already present. Will also create any missing ancestor directories of the
-   * link. This method is non-atomic
+   * Creates or updates a symbolic link from 'link' to 'target'. Replaces existing symbolic links
+   * with target, and skips the link creation if it is already present. Will also create any missing
+   * ancestor directories of the link. This method is non-atomic
    *
-   * <p>Note: this method will throw an IOException if there is an unequal
-   * non-symlink at link.
+   * <p>Note: this method will throw an IOException if there is an unequal non-symlink at link.
    *
-   * @throws IOException if the creation of the symbolic link was unsuccessful
-   *         for any reason.
+   * @throws IOException if the creation of the symbolic link was unsuccessful for any reason.
    */
-  @ThreadSafe  // but not atomic
+  @ThreadSafe // but not atomic
   public static void ensureSymbolicLink(Path link, PathFragment target) throws IOException {
     // TODO(bazel-team): (2009) consider adding the logic for recovering from the case when
     // we have already created a parent directory symlink earlier.
     try {
       if (link.readSymbolicLink().equals(target)) {
-        return;  // Do nothing if the link is already there.
+        return; // Do nothing if the link is already there.
       }
     } catch (IOException e) { // link missing or broken
       /* fallthru and do the work below */
@@ -341,8 +327,7 @@ public class FileSystemUtils {
       link.createSymbolicLink(target);
     } catch (IOException e) {
       // Only pass on exceptions caused by a true link creation failure.
-      if (!link.isSymbolicLink() ||
-          !link.resolveSymbolicLinks().equals(link.getRelative(target))) {
+      if (!link.isSymbolicLink() || !link.resolveSymbolicLinks().equals(link.getRelative(target))) {
         throw e;
       }
     }
@@ -350,7 +335,8 @@ public class FileSystemUtils {
 
   public static ByteSource asByteSource(final Path path) {
     return new ByteSource() {
-      @Override public InputStream openStream() throws IOException {
+      @Override
+      public InputStream openStream() throws IOException {
         return path.getInputStream();
       }
     };
@@ -358,7 +344,8 @@ public class FileSystemUtils {
 
   public static ByteSink asByteSink(final Path path, final boolean append) {
     return new ByteSink() {
-      @Override public OutputStream openStream() throws IOException {
+      @Override
+      public OutputStream openStream() throws IOException {
         return path.getOutputStream(append);
       }
     };
@@ -379,6 +366,20 @@ public class FileSystemUtils {
    */
   @ThreadSafe  // but not atomic
   public static void copyFile(Path from, Path to) throws IOException {
+    var fromNio = from.getNioPath();
+    var toNio = to.getNioPath();
+    if (fromNio != null && toNio != null) {
+      // Fast path: NIO can usually copy files through an in-kernel buffer.
+      try {
+        java.nio.file.Files.copy(fromNio, toNio, REPLACE_EXISTING, COPY_ATTRIBUTES);
+      } catch (NoSuchFileException originalException) {
+        FileNotFoundException newException =
+            new FileNotFoundException(originalException.getMessage() + ERR_NO_SUCH_FILE_OR_DIR);
+        newException.initCause(originalException);
+        throw newException;
+      }
+      return;
+    }
     try {
       to.delete();
     } catch (IOException e) {
@@ -491,11 +492,10 @@ public class FileSystemUtils {
   }
 
   /**
-   * Copies a tool binary from one path to another, returning the target path.
-   * The directory of the target path must already exist. The target copy's time
-   * is set to match, as well as its read-only and executable flags. The
-   * operation is skipped if the target file has the same time and size as the
-   * source.
+   * Copies a tool binary from one path to another, returning the target path. The directory of the
+   * target path must already exist. The target copy's time is set to match, as well as its
+   * read-only and executable flags. The operation is skipped if the target file has the same time
+   * and size as the source.
    */
   public static Path copyTool(Path source, Path target) throws IOException {
     FileStatus sourceStat = null;
@@ -504,9 +504,9 @@ public class FileSystemUtils {
       // stat the source file only if we'll need the stat.
       sourceStat = source.stat(Symlinks.FOLLOW);
     }
-    if (targetStat == null ||
-        targetStat.getLastModifiedTime() != sourceStat.getLastModifiedTime() ||
-        targetStat.getSize() != sourceStat.getSize()) {
+    if (targetStat == null
+        || targetStat.getLastModifiedTime() != sourceStat.getLastModifiedTime()
+        || targetStat.getSize() != sourceStat.getSize()) {
       copyFile(source, target);
       target.setWritable(source.isWritable());
       target.setExecutable(source.isExecutable());
@@ -585,19 +585,19 @@ public class FileSystemUtils {
   }
 
   /**
-   * Moves all dir trees under a given 'from' dir to location 'to', while overwriting
-   * all files in the potentially existing 'to'. Doesn't resolve symbolic links.
+   * Moves all dir trees under a given 'from' dir to location 'to', while overwriting all files in
+   * the potentially existing 'to'. Doesn't resolve symbolic links.
    *
    * <p>The source and the destination must be non-overlapping, otherwise an
-   * IllegalArgumentException will be thrown. This method cannot be used to copy
-   * a dir tree to a sub tree of itself.
+   * IllegalArgumentException will be thrown. This method cannot be used to copy a dir tree to a sub
+   * tree of itself.
    *
-   * <p>If no error occurs, the method returns normally. If the given 'from' does
-   * not exist, a FileNotFoundException is thrown. An IOException is thrown when
-   * other erroneous situations occur. (e.g. read errors)
+   * <p>If no error occurs, the method returns normally. If the given 'from' does not exist, a
+   * FileNotFoundException is thrown. An IOException is thrown when other erroneous situations
+   * occur. (e.g. read errors)
    */
   @ThreadSafe
-  public static void moveTreesBelow(Path from , Path to) throws IOException {
+  public static void moveTreesBelow(Path from, Path to) throws IOException {
     if (to.startsWith(from)) {
       throw new IllegalArgumentException(to + " is a subdirectory of " + from);
     }
@@ -633,10 +633,9 @@ public class FileSystemUtils {
   }
 
   /**
-   * Attempts to remove a relative chain of directories under a given base.
-   * Returns {@code true} if the removal was successful, and returns {@code
-   * false} if the removal fails because a directory was not empty. An
-   * {@link IOException} is thrown for any other errors.
+   * Attempts to remove a relative chain of directories under a given base. Returns {@code true} if
+   * the removal was successful, and returns {@code false} if the removal fails because a directory
+   * was not empty. An {@link IOException} is thrown for any other errors.
    */
   @ThreadSafe
   public static boolean removeDirectoryAndParents(Path base, PathFragment toRemove) {
@@ -657,9 +656,7 @@ public class FileSystemUtils {
     return true;
   }
 
-  /**
-   * Decodes the given byte array assumed to be encoded with ISO-8859-1 encoding (isolatin1).
-   */
+  /** Decodes the given byte array assumed to be encoded with ISO-8859-1 encoding (isolatin1). */
   public static char[] convertFromLatin1(byte[] content) {
     char[] latin1 = new char[content.length];
     for (int i = 0; i < latin1.length; i++) { // yeah, latin1 is this easy! :-)
@@ -668,25 +665,21 @@ public class FileSystemUtils {
     return latin1;
   }
 
-  /**
-   * Writes lines to file using ISO-8859-1 encoding (isolatin1).
-   */
+  /** Writes lines to file using ISO-8859-1 encoding (isolatin1). */
   @ThreadSafe // but not atomic
   public static void writeIsoLatin1(Path file, String... lines) throws IOException {
     writeLinesAs(file, ISO_8859_1, lines);
   }
 
-  /**
-   * Append lines to file using ISO-8859-1 encoding (isolatin1).
-   */
+  /** Append lines to file using ISO-8859-1 encoding (isolatin1). */
   @ThreadSafe // but not atomic
   public static void appendIsoLatin1(Path file, String... lines) throws IOException {
     appendLinesAs(file, ISO_8859_1, lines);
   }
 
   /**
-   * Writes the specified String as ISO-8859-1 (latin1) encoded bytes to the
-   * file. Follows symbolic links.
+   * Writes the specified String as ISO-8859-1 (latin1) encoded bytes to the file. Follows symbolic
+   * links.
    *
    * @throws IOException if there was an error
    */
@@ -797,8 +790,8 @@ public class FileSystemUtils {
   }
 
   /**
-   * Returns the entirety of the specified input stream and returns it as a char
-   * array, decoding characters using ISO-8859-1 (Latin1).
+   * Returns the entirety of the specified input stream and returns it as a char array, decoding
+   * characters using ISO-8859-1 (Latin1).
    *
    * @throws IOException if there was an error
    */
@@ -807,8 +800,8 @@ public class FileSystemUtils {
   }
 
   /**
-   * Returns the entirety of the specified file and returns it as a char array,
-   * decoding characters using ISO-8859-1 (Latin1).
+   * Returns the entirety of the specified file and returns it as a char array, decoding characters
+   * using ISO-8859-1 (Latin1).
    *
    * @throws IOException if there was an error
    */
@@ -846,9 +839,7 @@ public class FileSystemUtils {
     return asByteSource(inputFile).read();
   }
 
-  /**
-   * Reads the entire file using the given charset and returns the contents as a string
-   */
+  /** Reads the entire file using the given charset and returns the contents as a string */
   public static String readContent(Path inputFile, Charset charset) throws IOException {
     return asByteSource(inputFile).asCharSource(charset).read();
   }
@@ -878,8 +869,14 @@ public class FileSystemUtils {
     public final int numBytesRead;
 
     private ShortReadIOException(Path path, int fileSize, int numBytesRead) {
-      super("Unexpected short read from file '" + path + "' (expected " + fileSize + ", got "
-          + numBytesRead + " bytes)");
+      super(
+          "Unexpected short read from file '"
+              + path
+              + "' (expected "
+              + fileSize
+              + ", got "
+              + numBytesRead
+              + " bytes)");
       this.path = path;
       this.fileSize = fileSize;
       this.numBytesRead = numBytesRead;
@@ -907,17 +904,12 @@ public class FileSystemUtils {
     return bytes;
   }
 
-  /**
-   * Returns the type of the file system path belongs to.
-   */
+  /** Returns the type of the file system path belongs to. */
   public static String getFileSystem(Path path) {
     return path.getFileSystem().getFileSystemType(path.asFragment());
   }
 
-  /**
-   * Returns whether the given path starts with any of the paths in the given
-   * list of prefixes.
-   */
+  /** Returns whether the given path starts with any of the paths in the given list of prefixes. */
   public static boolean startsWithAny(Path path, Iterable<Path> prefixes) {
     for (Path prefix : prefixes) {
       if (path.startsWith(prefix)) {
@@ -927,10 +919,7 @@ public class FileSystemUtils {
     return false;
   }
 
-  /**
-   * Returns whether the given path starts with any of the paths in the given
-   * list of prefixes.
-   */
+  /** Returns whether the given path starts with any of the paths in the given list of prefixes. */
   public static boolean startsWithAny(PathFragment path, Iterable<PathFragment> prefixes) {
     for (PathFragment prefix : prefixes) {
       if (path.startsWith(prefix)) {
@@ -939,7 +928,6 @@ public class FileSystemUtils {
     }
     return false;
   }
-
 
   /**
    * Create a new hard link file at "linkPath" for file at "originalPath". If "originalPath" is a
