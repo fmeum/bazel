@@ -62,7 +62,6 @@ public interface OptionsParsingResult extends OptionsProvider {
    * and the options it expanded to, and so blindly using this list for a new invocation will cause
    * double-application of these options.
    */
-  // TODO(b/150222792): make this aware of starlark options.
   List<ParsedOptionDescription> asCompleteListOfParsedOptions();
 
   /**

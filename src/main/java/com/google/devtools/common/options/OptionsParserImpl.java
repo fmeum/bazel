@@ -61,6 +61,7 @@ class OptionsParserImpl {
     private OptionsData optionsData;
     private ArgsPreProcessor argsPreProcessor = args -> args;
     private final ArrayList<String> skippedPrefixes = new ArrayList<>();
+    @Nullable private SkippedArgsConverter skippedArgsConverter;
     private boolean ignoreInternalOptions = true;
     @Nullable private String aliasFlag = null;
     @Nullable private Object conversionContext = null;
@@ -84,6 +85,12 @@ class OptionsParserImpl {
     @CanIgnoreReturnValue
     public Builder skippedPrefix(String skippedPrefix) {
       this.skippedPrefixes.add(skippedPrefix);
+      return this;
+    }
+
+    @CanIgnoreReturnValue
+    public Builder skippedArgsConverter(SkippedArgsConverter skippedArgsConverter) {
+      this.skippedArgsConverter = skippedArgsConverter;
       return this;
     }
 
@@ -123,10 +130,15 @@ class OptionsParserImpl {
 
     /** Returns a newly-initialized {@link OptionsParserImpl}. */
     public OptionsParserImpl build() {
+      if (!skippedPrefixes.isEmpty()) {
+        Preconditions.checkNotNull(
+            skippedArgsConverter, "Skipped args converter is required with skipped prefixes");
+      }
       return new OptionsParserImpl(
           this.optionsData,
           this.argsPreProcessor,
           this.skippedPrefixes,
+          this.skippedArgsConverter,
           this.ignoreInternalOptions,
           this.aliasFlag,
           this.conversionContext,
@@ -175,14 +187,13 @@ class OptionsParserImpl {
    */
   private final List<ParsedOptionDescription> parsedOptions = new ArrayList<>();
 
-  private final List<ParsedOptionDescription> skippedOptions = new ArrayList<>();
-
   private final Map<String, String> flagAliasMappings;
   // We want to keep the invariant that warnings are produced as they are encountered, but only
   // show each one once.
   private final Set<String> warnings = new LinkedHashSet<>();
   private final ArgsPreProcessor argsPreProcessor;
   private final List<String> skippedPrefixes;
+  private final SkippedArgsConverter skippedArgsConverter;
   private final boolean ignoreInternalOptions;
   @Nullable private final String aliasFlag;
   @Nullable private final Object conversionContext;
@@ -218,6 +229,7 @@ class OptionsParserImpl {
       OptionsData optionsData,
       ArgsPreProcessor argsPreProcessor,
       List<String> skippedPrefixes,
+      SkippedArgsConverter skippedArgsConverter,
       boolean ignoreInternalOptions,
       @Nullable String aliasFlag,
       @Nullable Object conversionContext,
@@ -229,6 +241,7 @@ class OptionsParserImpl {
     this.aliasFlag = aliasFlag;
     this.conversionContext = conversionContext;
     this.flagAliasMappings = aliases;
+    this.skippedArgsConverter = skippedArgsConverter;
   }
 
   /** Returns the {@link OptionsData} used in this instance. */
@@ -260,6 +273,7 @@ class OptionsParserImpl {
   /** Implements {@link OptionsParser#asCompleteListOfParsedOptions()}. */
   List<ParsedOptionDescription> asCompleteListOfParsedOptions() {
     return parsedOptions.stream()
+        .map(this::unwrapSkippedArgs)
         // It is vital that this sort is stable so that options on the same priority are not
         // reordered.
         .sorted(comparing(ParsedOptionDescription::getPriority))
@@ -270,16 +284,13 @@ class OptionsParserImpl {
   List<ParsedOptionDescription> asListOfExplicitOptions() {
     return parsedOptions.stream()
         .filter(ParsedOptionDescription::isExplicit)
+        .map(this::unwrapSkippedArgs)
         // It is vital that this sort is stable so that options on the same priority are not
         // reordered.
         .sorted(comparing(ParsedOptionDescription::getPriority))
         .collect(toCollection(ArrayList::new));
   }
-
-  List<ParsedOptionDescription> getSkippedOptions() {
-    return skippedOptions;
-  }
-
+  
   /** Implements {@link OptionsParser#canonicalize}. */
   List<String> asCanonicalizedList() {
     return asCanonicalizedListOfParsedOptions().stream()
@@ -290,9 +301,9 @@ class OptionsParserImpl {
   /** Implements {@link OptionsParser#canonicalize}. */
   List<ParsedOptionDescription> asCanonicalizedListOfParsedOptions() {
     return optionValues.keySet().stream()
-        .filter(k -> !Objects.equals(k, skippedArgsDefinition))
         .map(optionDefinition -> optionValues.get(optionDefinition).getCanonicalInstances())
         .flatMap(Collection::stream)
+        .map(this::unwrapSkippedArgs)
         // Return the effective (canonical) options in the order they were applied.
         .sorted(comparing(ParsedOptionDescription::getPriority))
         .collect(toImmutableList());
@@ -317,9 +328,23 @@ class OptionsParserImpl {
   List<OptionValueDescription> allOptionValues() {
     return optionsData.getAllOptionDefinitions().stream()
         .map(Map.Entry::getValue)
+        .filter(optionDefinition -> optionDefinition != skippedArgsDefinition)
         .map(optionValues::get)
-        .filter(optionValue -> optionValue != null)
+        .filter(Objects::nonNull)
         .collect(toImmutableList());
+  }
+
+  private ParsedOptionDescription unwrapSkippedArgs(ParsedOptionDescription option) {
+    if (option.getOptionDefinition() != skippedArgsDefinition) {
+      return option;
+    }
+    var definitionAndValue = skippedArgsConverter.convertSkippedArg(option.getCommandLineForm());
+    return ParsedOptionDescription.newParsedOptionDescription(
+        definitionAndValue.first,
+        option.getCommandLineForm(),
+        definitionAndValue.second,
+        option.getOrigin(),
+        conversionContext);
   }
 
   private void maybeAddDeprecationWarning(
@@ -705,16 +730,9 @@ class OptionsParserImpl {
     // identical, as this minimizes the number of edge cases, but we do not yet track these values
     // in the same way.
     if (parsedOption.getImplicitDependent() == null) {
-      if (Objects.equals(parsedOption.getOptionDefinition(), skippedArgsDefinition)) {
-        // This may be a Starlark option. Don't parse it here (save it for StarlarkOptionsParser)
-        // but keep the context so we can track if the option was explicitly set or not for BEP
-        // reporting.
-        skippedOptions.add(parsedOption);
-      } else {
-        // Log explicit options and expanded options in the order they are parsed (can be sorted
-        // later). This information is needed to correctly canonicalize flags.
-        parsedOptions.add(parsedOption);
-      }
+      // Log explicit options and expanded options in the order they are parsed (can be sorted
+      // later). This information is needed to correctly canonicalize flags.
+      parsedOptions.add(parsedOption);
 
       if (aliasFlag != null && parsedOption.getCommandLineForm().startsWith(aliasFlag)) {
         List<String> alias =

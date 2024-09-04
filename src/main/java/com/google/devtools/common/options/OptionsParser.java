@@ -15,7 +15,6 @@
 package com.google.devtools.common.options;
 
 import static com.google.common.collect.ImmutableList.toImmutableList;
-import static com.google.common.collect.ImmutableSet.toImmutableSet;
 
 import com.google.common.base.Joiner;
 import com.google.common.base.Preconditions;
@@ -24,9 +23,7 @@ import com.google.common.base.Throwables;
 import com.google.common.collect.ArrayListMultimap;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
-import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.ImmutableSortedMap;
-import com.google.common.collect.Iterables;
 import com.google.common.collect.ListMultimap;
 import com.google.common.collect.Lists;
 import com.google.common.collect.MoreCollectors;
@@ -73,7 +70,7 @@ import javax.annotation.Nullable;
  *
  * @see Options a simpler class which you can use if you only have one options specification class
  */
-public class OptionsParser implements OptionsParsingResult {
+public class OptionsParser implements OptionsParsingResult, SkippedArgsConverter {
 
   // TODO(b/65049598) make ConstructionException checked.
   /**
@@ -256,7 +253,7 @@ public class OptionsParser implements OptionsParsingResult {
 
     /** Returns a new {@link OptionsParser}. */
     public OptionsParser build() {
-      return new OptionsParser(implBuilder.build(), allowResidue);
+      return new OptionsParser(implBuilder, allowResidue);
     }
   }
 
@@ -277,8 +274,8 @@ public class OptionsParser implements OptionsParsingResult {
   private final Map<String, String> aliases = new HashMap<>();
   private boolean success = true;
 
-  private OptionsParser(OptionsParserImpl impl, boolean allowResidue) {
-    this.impl = impl;
+  private OptionsParser(OptionsParserImpl.Builder impl, boolean allowResidue) {
+    this.impl = impl.skippedArgsConverter(this).build();
     this.allowResidue = allowResidue;
   }
 
@@ -289,40 +286,6 @@ public class OptionsParser implements OptionsParsingResult {
   @Override
   public ImmutableSortedMap<String, Object> getStarlarkOptions() {
     return starlarkOptions;
-  }
-
-  @Override
-  public ImmutableSortedMap<String, Object> getExplicitStarlarkOptions(
-      Predicate<? super ParsedOptionDescription> filter) {
-    ImmutableSet<String> explicitOptions =
-        impl.getSkippedOptions().stream()
-            .filter(ParsedOptionDescription::isExplicit)
-            .filter(filter)
-            // Since this was passed from OptionsParserImpl unparsed, it still appears in its raw
-            // form "--//foo=bar". Do some more string manipulation to reduce it to "//foo". By
-            // contract, getStarlarkOptions(), which we compare against below, contains options that
-            // were fully parsed by StarlarkOptionsParser. So the keys of that method are already in
-            // "//foo" form.
-            // TODO(https://github.com/bazelbuild/bazel/issues/17414): integrate Starlark and native
-            // options parsing more tightly together in the options parsing logic. The complication
-            // is that getSkippedOptions, which comes from OptionsParserImpl, has the
-            // ParsedOptionsDescription structure which includes where the option comes from (i.e.
-            // from a blazerc). But it doesn't have the <String, Object> map of the actually parsed
-            // Starlark option. StarlarkOptionsParser is the exact converse. It'd be nice to have
-            // common logic that could store both pieces of information so we don't have to
-            // awkwardly synthesize the data we need from both sources here.
-            .map(d -> Iterables.get(Splitter.on('=').split(d.getCommandLineForm().substring(2)), 0))
-            .collect(toImmutableSet());
-    ImmutableSortedMap.Builder<String, Object> result =
-        ImmutableSortedMap.<String, Object>naturalOrder();
-    for (Map.Entry<String, Object> entry : getStarlarkOptions().entrySet()) {
-      // getSkippedOptions() doesn't necessarily *only* have Starlark options. By comparing here we
-      // filter to just Starlark options.
-      if (explicitOptions.contains(entry.getKey())) {
-        result.put(entry);
-      }
-    }
-    return result.buildOrThrow();
   }
 
   public void setStarlarkOptions(Map<String, Object> starlarkOptions) {
@@ -894,6 +857,11 @@ public class OptionsParser implements OptionsParsingResult {
   public static boolean getUsesOnlyCoreTypes(Class<? extends OptionsBase> optionsClass) {
     OptionsData data = OptionsParser.getOptionsDataInternal(optionsClass);
     return data.getUsesOnlyCoreTypes(optionsClass);
+  }
+
+  @Override
+  public Pair<OptionDefinition, String> convertSkippedArg(String commandLineArg) {
+    st
   }
 
   /**

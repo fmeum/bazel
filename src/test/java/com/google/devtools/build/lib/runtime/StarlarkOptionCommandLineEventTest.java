@@ -16,9 +16,11 @@ package com.google.devtools.build.lib.runtime;
 import static com.google.common.truth.Truth.assertThat;
 
 import com.google.devtools.build.lib.bazel.BazelStartupOptionsModule.Options;
+import com.google.devtools.build.lib.buildeventstream.BuildEventStreamProtos;
 import com.google.devtools.build.lib.runtime.CommandLineEvent.CanonicalCommandLineEvent;
 import com.google.devtools.build.lib.runtime.CommandLineEvent.OriginalCommandLineEvent;
 import com.google.devtools.build.lib.runtime.proto.CommandLineOuterClass.CommandLine;
+import com.google.devtools.build.lib.runtime.proto.InvocationPolicyOuterClass;
 import com.google.devtools.build.lib.starlark.util.StarlarkOptionsTestCase;
 import com.google.devtools.common.options.OptionsParser;
 import java.util.Optional;
@@ -111,6 +113,58 @@ public class StarlarkOptionCommandLineEventTest extends StarlarkOptionsTestCase 
     assertThat(line.getSections(3).getOptionList().getOptionCount()).isEqualTo(1);
     assertThat(line.getSections(3).getOptionList().getOption(0).getCombinedForm())
         .isEqualTo("--//test:cmdflag=666");
+    assertThat(line.getSections(3).getOptionList().getOption(0).getOptionName())
+        .isEqualTo("//test:cmdflag");
+    assertThat(line.getSections(3).getOptionList().getOption(0).getOptionValue()).isEqualTo("666");
+  }
+
+  /** {@link GotOptionsEvent} contains the raw explicit and full command line options. */
+  @Test
+  public void testStarlarkOptionsFromCommandLineAndBazelRc_gotOptionsEvent() throws Exception {
+    OptionsParser fakeStartupOptions =
+        OptionsParser.builder()
+            .optionsClasses(BlazeServerStartupOptions.class, Options.class)
+            .build();
+    scratch.file(
+        "test/build_setting.bzl",
+        """
+        def _build_setting_impl(ctx):
+            return []
+
+        int_flag = rule(
+            implementation = _build_setting_impl,
+            build_setting = config.int(flag = True),
+        )
+        """);
+    scratch.file(
+        "test/BUILD",
+        """
+        load("//test:build_setting.bzl", "int_flag")
+
+        int_flag(
+            name = "cmdflag",
+            build_setting_default = 10,
+        )
+
+        int_flag(
+            name = "bazelrcflag",
+            build_setting_default = 20,
+        )
+        """);
+
+    var unused =
+        parseStarlarkOptions(
+            /* commandLineOptions= */ "--//test:cmdflag=666",
+            /* bazelrcOptions= */ "--//test:bazelrcflag=777");
+    BuildEventStreamProtos.OptionsParsed line =
+        new GotOptionsEvent(
+                fakeStartupOptions,
+                optionsParser,
+                InvocationPolicyOuterClass.InvocationPolicy.getDefaultInstance())
+            .asStreamProto(null)
+            .getOptionsParsed();
+
+    assertThat(line).isNull();
   }
 
   @Test

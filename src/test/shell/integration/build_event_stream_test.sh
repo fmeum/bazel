@@ -108,6 +108,10 @@ genrule(
   outs = ["not_a_test.txt"],
   cmd = "touch $@",
 )
+label_flag(
+  name = "label_flag",
+  build_setting_default = ":innergroup",
+)
 EOF
 cat > simpleaspect.bzl <<'EOF'
 def _simple_aspect_impl(target, ctx):
@@ -327,7 +331,8 @@ function test_basic() {
   # - the target_kind is reported
   # - for single-configuration builds, there is precisely one configuration
   #   event reported; also make variables are shown
-  bazel test -k --build_event_text_file=$TEST_log --tool_tag=MyFancyTool pkg:true \
+  bazel test -k --build_event_text_file=$TEST_log --tool_tag=MyFancyTool \
+    --//pkg:label_flag=//pkg:outergroup pkg:true \
     || fail "bazel test failed"
   expect_log 'pkg:true'
   # Command line
@@ -341,8 +346,10 @@ function test_basic() {
   # explicit_cmd_line lines, we expect 2 instances for these.
   expect_log_n 'cmd_line: "--tool_tag=MyFancyTool"' 2
   expect_log_n 'cmd_line: "--keep_going"' 2
+  expect_log_n 'cmd_line: "--//pkg:label_flag=//pkg:outergroup"' 2
   expect_log_once 'explicit_cmd_line: "--keep_going"'
   expect_log_once 'explicit_cmd_line: "--tool_tag=MyFancyTool"'
+  expect_log_once 'explicit_cmd_line: "--//pkg:label_flag=//pkg:outergroup"' 2
   expect_log_once 'tool_tag: "MyFancyTool"'
 
   # Structured command line. Expect the explicit flags to appear twice,

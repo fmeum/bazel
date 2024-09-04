@@ -15,7 +15,6 @@ package com.google.devtools.common.options;
 
 import com.google.common.collect.ImmutableMap;
 import java.util.Map;
-import java.util.function.Predicate;
 import javax.annotation.Nullable;
 
 /**
@@ -33,12 +32,6 @@ public interface OptionsProvider {
 
         @Override
         public Map<String, Object> getStarlarkOptions() {
-          return ImmutableMap.of();
-        }
-
-        @Override
-        public ImmutableMap<String, Object> getExplicitStarlarkOptions(
-            Predicate<? super ParsedOptionDescription> filter) {
           return ImmutableMap.of();
         }
       };
@@ -62,10 +55,4 @@ public interface OptionsProvider {
    * names for starlark options, this will need to change.
    */
   Map<String, Object> getStarlarkOptions();
-
-  /**
-   * Variant of {@link #getStarlarkOptions()} that only returns explicitly set Starlark options with
-   * the given filter criteria.
-   */
-  Map<String, Object> getExplicitStarlarkOptions(Predicate<? super ParsedOptionDescription> filter);
 }

@@ -44,7 +44,6 @@ import com.google.protobuf.InvalidProtocolBufferException;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
-import java.util.Map.Entry;
 import java.util.Optional;
 import java.util.stream.Collectors;
 import javax.annotation.Nullable;
@@ -277,19 +276,11 @@ public abstract class CommandLineEvent implements BuildEventWithOrderConstraint 
           commandOptions.asListOfExplicitOptions().stream()
               .filter(OriginalCommandLineEvent::commandLinePriority)
               .collect(Collectors.toList());
-      List<Option> starlarkOptions =
-          commandOptions
-              .getExplicitStarlarkOptions(OriginalCommandLineEvent::commandLinePriority)
-              .entrySet()
-              .stream()
-              .map(e -> createStarlarkOption(e.getKey(), e.getValue()))
-              .collect(Collectors.toList());
       return CommandLineSection.newBuilder()
           .setSectionLabel("command options")
           .setOptionList(
               OptionList.newBuilder()
-                  .addAllOption(getOptionListFromParsedOptionDescriptions(explicitOptions))
-                  .addAllOption(starlarkOptions))
+                  .addAllOption(getOptionListFromParsedOptionDescriptions(explicitOptions)))
           .build();
     }
 
@@ -386,18 +377,13 @@ public abstract class CommandLineEvent implements BuildEventWithOrderConstraint 
 
     /** Returns the canonical command options, overridden and default values are not listed. */
     private CommandLineSection getCanonicalCommandOptions() {
-      List<Option> starlarkOptions =
-          commandOptions.getStarlarkOptions().entrySet().stream()
-              .map(e -> createStarlarkOption(e.getKey(), e.getValue()))
-              .collect(Collectors.toList());
       return CommandLineSection.newBuilder()
           .setSectionLabel("command options")
           .setOptionList(
               OptionList.newBuilder()
                   .addAllOption(
                       getOptionListFromParsedOptionDescriptions(
-                          commandOptions.asListOfCanonicalOptions()))
-                  .addAllOption(starlarkOptions))
+                          commandOptions.asListOfCanonicalOptions())))
           .build();
     }
 
@@ -406,9 +392,6 @@ public abstract class CommandLineEvent implements BuildEventWithOrderConstraint 
      */
     public long getExplicitCommandLineHash() {
       long hash = 0;
-      for (Entry<String, Object> starlarkOption : commandOptions.getStarlarkOptions().entrySet()) {
-        hash = hash * 31 + starlarkOption.toString().hashCode();
-      }
       for (ParsedOptionDescription canonicalOptionDesc :
           commandOptions.asListOfCanonicalOptions()) {
         if (canonicalOptionDesc == null

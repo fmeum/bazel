@@ -18,10 +18,7 @@ import com.google.common.collect.ImmutableMap;
 import com.google.devtools.common.options.Options;
 import com.google.devtools.common.options.OptionsBase;
 import com.google.devtools.common.options.OptionsProvider;
-import com.google.devtools.common.options.ParsedOptionDescription;
 import com.google.errorprone.annotations.CanIgnoreReturnValue;
-import java.util.Map;
-import java.util.function.Predicate;
 import javax.annotation.Nullable;
 
 /**
@@ -106,12 +103,6 @@ public final class FakeOptions implements OptionsProvider {
 
   @Override
   public ImmutableMap<String, Object> getStarlarkOptions() {
-    return ImmutableMap.of();
-  }
-
-  @Override
-  public Map<String, Object> getExplicitStarlarkOptions(
-      Predicate<? super ParsedOptionDescription> filter) {
     return ImmutableMap.of();
   }
 }
