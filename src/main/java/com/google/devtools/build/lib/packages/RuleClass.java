@@ -236,6 +236,11 @@ public class RuleClass implements RuleClassData {
   public static final String EXEC_COMPATIBLE_WITH_ATTR = "exec_compatible_with";
 
   /**
+   * TODO
+   */
+  public static final String EXEC_GROUP_COMPATIBLE_WITH_ATTR = "exec_group_compatible_with";
+
+  /**
    * The attribute that declares execution properties that should be added to actions created by
    * this target.
    */

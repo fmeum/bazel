@@ -535,6 +535,14 @@ public class BaseRuleClasses {
                       "exec_compatible_with exists for constraint checking, not to create an"
                           + " actual dependency")
                   .value(ImmutableList.of()))
+          .add(
+              attr(RuleClass.EXEC_GROUP_COMPATIBLE_WITH_ATTR, BuildType.LABEL_LIST_DICT)
+                  .allowedFileTypes()
+                  .nonconfigurable("Used in toolchain resolution")
+                  .tool(
+                      "exec_group_compatible_with exists for constraint checking, not to create an"
+                          + " actual dependency")
+                  .value(ImmutableMap.of()))
           .build();
     }
 

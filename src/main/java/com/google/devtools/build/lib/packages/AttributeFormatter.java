@@ -22,6 +22,7 @@ import static com.google.devtools.build.lib.packages.BuildType.LABEL;
 import static com.google.devtools.build.lib.packages.BuildType.LABEL_DICT_UNARY;
 import static com.google.devtools.build.lib.packages.BuildType.LABEL_KEYED_STRING_DICT;
 import static com.google.devtools.build.lib.packages.BuildType.LABEL_LIST;
+import static com.google.devtools.build.lib.packages.BuildType.LABEL_LIST_DICT;
 import static com.google.devtools.build.lib.packages.BuildType.LICENSE;
 import static com.google.devtools.build.lib.packages.BuildType.NODEP_LABEL;
 import static com.google.devtools.build.lib.packages.BuildType.NODEP_LABEL_LIST;
@@ -257,9 +258,9 @@ public class AttributeFormatter {
                 .setValue(keyValueList.getValue());
         builder.addStringDictValue(entry);
       }
-    } else if (type == STRING_LIST_DICT) {
-      Map<String, List<String>> dict = (Map<String, List<String>>) value;
-      for (Map.Entry<String, List<String>> dictEntry : dict.entrySet()) {
+    } else if (type == STRING_LIST_DICT || type == LABEL_LIST_DICT) {
+      Map<String, List<Object>> dict = (Map<String, List<Object>>) value;
+      for (Map.Entry<String, List<Object>> dictEntry : dict.entrySet()) {
         StringListDictEntry.Builder entry =
             StringListDictEntry.newBuilder().setKey(dictEntry.getKey());
         for (Object dictEntryValue : dictEntry.getValue()) {

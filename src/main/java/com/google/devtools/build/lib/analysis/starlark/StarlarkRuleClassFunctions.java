@@ -170,6 +170,14 @@ public class StarlarkRuleClassFunctions implements StarlarkRuleFunctionsApi {
                           + " actual dependency")
                   .value(ImmutableList.of()))
           .add(
+              attr(RuleClass.EXEC_GROUP_COMPATIBLE_WITH_ATTR, BuildType.LABEL_LIST_DICT)
+                  .allowedFileTypes()
+                  .nonconfigurable("Used in toolchain resolution")
+                  .tool(
+                      "exec_group_compatible_with exists for constraint checking, not to create an"
+                          + " actual dependency")
+                  .value(ImmutableMap.of()))
+          .add(
               attr(RuleClass.TARGET_COMPATIBLE_WITH_ATTR, LABEL_LIST)
                   .mandatoryProviders(ConstraintValueInfo.PROVIDER.id())
                   // This should be configurable to allow for complex types of restrictions.
@@ -528,9 +536,10 @@ public class StarlarkRuleClassFunctions implements StarlarkRuleFunctionsApi {
   /**
    * Returns a new callable representing a Starlark-defined rule.
    *
-   * <p>This is public for the benefit of {@link StarlarkTestingModule}, which has the unusual use
-   * case of creating new rule types to house analysis-time test assertions ({@code analysis_test}).
-   * It's probably not a good idea to add new callers of this method.
+   * <p>This is public for the benefit of {@link
+   * com.google.devtools.build.lib.rules.test.StarlarkTestingModule}, which has the unusual use case
+   * of creating new rule types to house analysis-time test assertions ({@code analysis_test}). It's
+   * probably not a good idea to add new callers of this method.
    *
    * <p>Note that the bzlFile and transitiveDigest params correspond to the outermost .bzl file
    * being evaluated, not the one in which rule() is called.
