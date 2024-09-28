@@ -29,7 +29,7 @@ public abstract class ExecGroup implements ExecGroupApi {
 
   // This is intentionally a string that would fail {@code Identifier.isValid} so that
   // users can't create a group with the same name.
-  public static final String DEFAULT_EXEC_GROUP_NAME = "default-exec-group";
+  public static final String DEFAULT_EXEC_GROUP_NAME = "default";
 
   /** Returns a builder for a new ExecGroup. */
   public static Builder builder() {

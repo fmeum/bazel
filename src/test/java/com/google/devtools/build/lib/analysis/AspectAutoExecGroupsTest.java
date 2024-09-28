@@ -356,7 +356,7 @@ public class AspectAutoExecGroupsTest extends BuildViewTestCase {
         getExecGroupsFromAspectProvider(configuredAspect);
 
     assertThat(aspectExecGroups.getToolchainCollectionForTesting().keySet())
-        .containsExactly("default-exec-group");
+        .containsExactly("default");
   }
 
   @Test
@@ -379,7 +379,7 @@ public class AspectAutoExecGroupsTest extends BuildViewTestCase {
         getExecGroupsFromAspectProvider(configuredAspect);
 
     assertThat(aspectExecGroups.getToolchainCollectionForTesting().keySet())
-        .containsExactly("default-exec-group", "//rule:toolchain_type_1");
+        .containsExactly("default", "//rule:toolchain_type_1");
   }
 
   @Test
@@ -403,7 +403,7 @@ public class AspectAutoExecGroupsTest extends BuildViewTestCase {
         getExecGroupsFromAspectProvider(configuredAspect);
 
     assertThat(aspectExecGroups.getToolchainCollectionForTesting().keySet())
-        .containsExactly("default-exec-group");
+        .containsExactly("default");
   }
 
   @Test
@@ -427,7 +427,7 @@ public class AspectAutoExecGroupsTest extends BuildViewTestCase {
         getExecGroupsFromAspectProvider(configuredAspect);
 
     assertThat(aspectExecGroups.getToolchainCollectionForTesting().keySet())
-        .containsExactly("default-exec-group");
+        .containsExactly("default");
   }
 
   @Test
@@ -451,7 +451,7 @@ public class AspectAutoExecGroupsTest extends BuildViewTestCase {
         getExecGroupsFromAspectProvider(configuredAspect);
 
     assertThat(aspectExecGroups.getToolchainCollectionForTesting().keySet())
-        .containsExactly("default-exec-group", "//rule:toolchain_type_1");
+        .containsExactly("default", "//rule:toolchain_type_1");
   }
 
   @Test
@@ -475,7 +475,7 @@ public class AspectAutoExecGroupsTest extends BuildViewTestCase {
         getExecGroupsFromAspectProvider(configuredAspect);
 
     assertThat(aspectExecGroups.getToolchainCollectionForTesting().keySet())
-        .containsExactly("default-exec-group", "//rule:toolchain_type_1");
+        .containsExactly("default", "//rule:toolchain_type_1");
   }
 
   @Test
@@ -515,7 +515,7 @@ public class AspectAutoExecGroupsTest extends BuildViewTestCase {
         .containsExactly("//rule:toolchain_type_1");
     assertThat(aspectExecGroups.getToolchainCollectionForTesting().keySet())
         .containsExactly(
-            "//rule:toolchain_type_2", "default-exec-group", "aspect_custom_exec_group");
+            "//rule:toolchain_type_2", "default", "aspect_custom_exec_group");
   }
 
   @Test
