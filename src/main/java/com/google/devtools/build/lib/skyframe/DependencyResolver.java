@@ -24,6 +24,7 @@ import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
 import com.google.devtools.build.lib.analysis.AnalysisRootCauseEvent;
 import com.google.devtools.build.lib.analysis.ConfiguredRuleClassProvider;
+import com.google.devtools.build.lib.analysis.ConfiguredTargetValue;
 import com.google.devtools.build.lib.analysis.DependencyKind;
 import com.google.devtools.build.lib.analysis.DependencyResolutionHelpers;
 import com.google.devtools.build.lib.analysis.ExecGroupCollection;
@@ -37,6 +38,7 @@ import com.google.devtools.build.lib.analysis.config.BuildConfigurationValue;
 import com.google.devtools.build.lib.analysis.config.BuildOptions;
 import com.google.devtools.build.lib.analysis.config.BuildOptionsView;
 import com.google.devtools.build.lib.analysis.config.ConfigConditions;
+import com.google.devtools.build.lib.analysis.config.CoreOptions;
 import com.google.devtools.build.lib.analysis.config.DependencyEvaluationException;
 import com.google.devtools.build.lib.analysis.config.StarlarkExecTransitionLoader;
 import com.google.devtools.build.lib.analysis.config.StarlarkExecTransitionLoader.StarlarkExecTransitionLoadingException;
@@ -46,6 +48,7 @@ import com.google.devtools.build.lib.analysis.config.transitions.ConfigurationTr
 import com.google.devtools.build.lib.analysis.config.transitions.PatchTransition;
 import com.google.devtools.build.lib.analysis.config.transitions.TransitionCollector;
 import com.google.devtools.build.lib.analysis.config.transitions.TransitionFactory.TransitionCreationException;
+import com.google.devtools.build.lib.analysis.constraints.IncompatibleTargetChecker;
 import com.google.devtools.build.lib.analysis.constraints.IncompatibleTargetChecker.IncompatibleTargetException;
 import com.google.devtools.build.lib.analysis.platform.PlatformInfo;
 import com.google.devtools.build.lib.analysis.producers.DependencyContext;
@@ -57,6 +60,7 @@ import com.google.devtools.build.lib.analysis.producers.DependencyMapProducer;
 import com.google.devtools.build.lib.analysis.producers.DependencyMapProducer.MaterializerException;
 import com.google.devtools.build.lib.analysis.producers.MissingEdgeError;
 import com.google.devtools.build.lib.analysis.producers.PrerequisiteParameters;
+import com.google.devtools.build.lib.analysis.producers.TargetAndConfigurationProducer;
 import com.google.devtools.build.lib.analysis.producers.UnloadedToolchainContextsInputs;
 import com.google.devtools.build.lib.analysis.starlark.StarlarkAttributeTransitionProvider;
 import com.google.devtools.build.lib.analysis.starlark.StarlarkTransition.TransitionException;
@@ -778,25 +782,39 @@ public final class DependencyResolver {
     return toolchainContextKeyBuilder.build();
   }
 
-  @VisibleForTesting // private
   public static UnloadedToolchainContextsInputs getUnloadedToolchainContextsInputs(
       TargetAndConfiguration targetAndConfiguration,
       @Nullable Label parentExecutionPlatformLabel,
       RuleClassProvider ruleClassProvider,
       ExtendedEventHandler listener)
       throws InterruptedException {
-    var target = targetAndConfiguration.getTarget();
+    return getUnloadedToolchainContextsInputs(
+        targetAndConfiguration.getTarget(),
+        targetAndConfiguration.getConfiguration().getOptions().get(CoreOptions.class),
+        targetAndConfiguration.getConfiguration().getFragment(PlatformConfiguration.class),
+        parentExecutionPlatformLabel,
+        computeToolchainConfigurationKey(
+            targetAndConfiguration.getConfiguration(),
+            ((ConfiguredRuleClassProvider) ruleClassProvider)
+                .getToolchainTaggedTrimmingTransition(),
+            listener));
+  }
+
+  public static UnloadedToolchainContextsInputs getUnloadedToolchainContextsInputs(
+      Target target,
+      CoreOptions coreOptions,
+      PlatformConfiguration platformConfig,
+      @Nullable Label parentExecutionPlatformLabel,
+      BuildConfigurationKey toolchainConfigurationKey) {
     Rule rule = target.getAssociatedRule();
     if (rule == null) {
       return UnloadedToolchainContextsInputs.empty();
     }
 
-    var configuration = targetAndConfiguration.getConfiguration();
     boolean useAutoExecGroups =
         rule.isAttrDefined("$use_auto_exec_groups", Type.BOOLEAN)
             ? (boolean) rule.getAttr("$use_auto_exec_groups")
-            : configuration.useAutoExecGroups();
-    var platformConfig = configuration.getFragment(PlatformConfiguration.class);
+            : coreOptions.useAutoExecGroups;
     var defaultExecConstraintLabels = getExecutionPlatformConstraints(rule, platformConfig);
     var ruleClass = rule.getRuleClassObject();
     var processedExecGroups =
@@ -814,11 +832,7 @@ public final class DependencyResolver {
     return UnloadedToolchainContextsInputs.create(
         processedExecGroups,
         createDefaultToolchainContextKey(
-            computeToolchainConfigurationKey(
-                configuration,
-                ((ConfiguredRuleClassProvider) ruleClassProvider)
-                    .getToolchainTaggedTrimmingTransition(),
-                listener),
+            toolchainConfigurationKey,
             defaultExecConstraintLabels,
             /* debugTarget= */ platformConfig.debugToolchainResolution(rule.getLabel()),
             /* useAutoExecGroups= */ useAutoExecGroups,
