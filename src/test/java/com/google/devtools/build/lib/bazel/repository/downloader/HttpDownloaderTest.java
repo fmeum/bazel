@@ -798,7 +798,8 @@ public class HttpDownloaderTest {
               output,
               eventHandler,
               clientEnv,
-              context);
+              context,
+              activeAsyncTasks);
       return downloadManager.finalizeDownload(future);
     }
   }
