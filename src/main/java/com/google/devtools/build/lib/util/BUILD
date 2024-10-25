@@ -241,6 +241,7 @@ java_library(
     deps = [
         ":os",
         ":shell_escaper",
+        ":string",
         "//src/main/java/com/google/devtools/build/lib/bugreport",
         "//src/main/java/com/google/devtools/build/lib/concurrent",
         "//src/main/java/com/google/devtools/build/lib/vfs",
@@ -325,7 +326,9 @@ java_library(
         "StringUtil.java",
         "StringUtilities.java",
     ],
-    deps = ["//third_party:guava"],
+    deps = [
+        "//third_party:guava",
+    ],
 )
 
 java_library(
