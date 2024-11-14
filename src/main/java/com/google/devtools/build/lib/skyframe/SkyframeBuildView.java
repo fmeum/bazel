@@ -30,7 +30,6 @@ import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Iterables;
 import com.google.common.collect.Sets;
-import com.google.common.collect.Streams;
 import com.google.common.eventbus.EventBus;
 import com.google.common.flogger.GoogleLogger;
 import com.google.devtools.build.lib.actions.ActionAnalysisMetadata;
@@ -234,8 +233,7 @@ public final class SkyframeBuildView {
 
     ImmutableSet<OptionDefinition> nativeCacheInvalidatingDifferences =
         getNativeCacheInvalidatingDifferences(configuration, diff);
-    if (nativeCacheInvalidatingDifferences.isEmpty()
-        && diff.getChangedStarlarkOptions().isEmpty()) {
+    if (nativeCacheInvalidatingDifferences.isEmpty()) {
       // The configuration may have changed, but none of the changes required a cache reset. For
       // example, test trimming was turned on and a test option changed. In this case, nothing needs
       // to be done.
@@ -247,9 +245,8 @@ public final class SkyframeBuildView {
     }
 
     ImmutableList<String> relevantDifferences =
-        Streams.concat(
-                diff.getChangedStarlarkOptions().stream().map(Label::getCanonicalForm),
-                nativeCacheInvalidatingDifferences.stream().map(OptionDefinition::getOptionName))
+        nativeCacheInvalidatingDifferences.stream()
+            .map(OptionDefinition::getOptionName)
             .map(s -> "--" + s)
             // Sorting the list to ensure that (if truncated through maxDifferencesToShow) the
             // options in the message remain stable.
