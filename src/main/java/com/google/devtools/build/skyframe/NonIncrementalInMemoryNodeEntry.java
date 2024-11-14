@@ -26,6 +26,7 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
 import java.util.Set;
+import java.util.function.UnaryOperator;
 import javax.annotation.Nullable;
 
 /**
@@ -223,6 +224,11 @@ public class NonIncrementalInMemoryNodeEntry
 
   @Override
   public void forceRebuild() {
+    throw unsupported();
+  }
+
+  @Override
+  public void rewriteDeps(UnaryOperator<SkyKey> rewriter) {
     throw unsupported();
   }
 

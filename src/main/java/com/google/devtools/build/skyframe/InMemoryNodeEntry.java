@@ -14,6 +14,7 @@
 package com.google.devtools.build.skyframe;
 
 import java.util.Collection;
+import java.util.function.UnaryOperator;
 import javax.annotation.Nullable;
 
 /**
@@ -70,4 +71,6 @@ public interface InMemoryNodeEntry extends NodeEntry {
   @Override // Remove InterruptedException.
   @Nullable
   MarkedDirtyResult markDirty(DirtyType dirtyType);
+
+  void rewriteDeps(UnaryOperator<SkyKey> rewriter);
 }

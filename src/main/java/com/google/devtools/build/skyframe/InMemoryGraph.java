@@ -13,10 +13,15 @@
 // limitations under the License.
 package com.google.devtools.build.skyframe;
 
+import com.google.common.collect.ImmutableList;
+import com.google.common.collect.Sets;
 import com.google.devtools.build.skyframe.InMemoryGraphImpl.EdgelessInMemoryGraphImpl;
 import com.google.errorprone.annotations.CanIgnoreReturnValue;
 import java.util.Collection;
 import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.BiFunction;
 import java.util.function.Consumer;
 import javax.annotation.Nullable;
 
@@ -118,4 +123,30 @@ public interface InMemoryGraph extends ProcessableGraph {
    * replaced by a new one (e.g. functions that close over the data structure).
    */
   void shrinkNodeMap();
+
+  default void transformKeys(BiFunction<SkyKey, SkyValue, SkyKey> mapping) {
+    ConcurrentHashMap<SkyKey, SkyKey> appliedMapping = new ConcurrentHashMap<>();
+    parallelForEach(
+        node -> {
+          SkyKey oldKey = node.getKey();
+          SkyKey newKey = mapping.apply(oldKey, node.getValue());
+          if (newKey == null) {
+            remove(oldKey);
+            return;
+          }
+          if (newKey.equals(oldKey)) {
+            return;
+          }
+          keyMapping.put(oldKey, newKey);
+          NodeBatch batch =
+              createIfAbsentBatch(/* requestor= */ null, Reason.OTHER, ImmutableList.of(newKey));
+          batch.get(newKey).setValue()
+        });
+
+    Set<SkyKey> processed = Sets.newConcurrentHashSet();
+    appliedMapping.forEachValue(1024, newKey -> {
+      NodeEntry entry = get(null, Reason.OTHER, newKey);
+      entry.getReverseDepsForDoneEntry()
+    });
+  }
 }

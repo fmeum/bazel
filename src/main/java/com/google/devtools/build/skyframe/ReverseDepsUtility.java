@@ -29,6 +29,7 @@ import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.function.UnaryOperator;
 
 /**
  * A utility class that allows us to store reverse dependencies in a memory-efficient way. At the
@@ -398,6 +399,16 @@ abstract class ReverseDepsUtility {
             + duplicates
             + " for "
             + entry);
+  }
+
+  static void rewriteReverseDeps(
+      IncrementalInMemoryNodeEntry entry, UnaryOperator<SkyKey> mapping) {
+    writeReverseDepsSet(
+        entry,
+        ImmutableSet.copyOf(
+            Iterables.transform(
+                consolidateAndGetReverseDeps(entry, /* checkConsistency= */ false),
+                mapping::apply)));
   }
 
   static String toString(IncrementalInMemoryNodeEntry entry) {
