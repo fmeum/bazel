@@ -425,7 +425,8 @@ public final class ConfiguredTargetFactory {
                 rawProviders,
                 ruleClass.getAdvertisedProviders(),
                 isDefaultExecutableCreated,
-                requiredConfigFragmentsProvider); // may be null
+                requiredConfigFragmentsProvider,
+                configConditions); // may be null
         return target != null
             ? target
             : erroredConfiguredTarget(ruleContext, requiredConfigFragmentsProvider);

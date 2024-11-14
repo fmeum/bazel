@@ -202,6 +202,7 @@ java_library(
         "TargetCompleteEvent.java",
         "TargetContext.java",
         "TopLevelArtifactHelper.java",
+        "UsedStarlarkOptionsInfo.java",
         "Util.java",
         "WindowsBatchCommandConstructor.java",
         "WindowsPowershellCommandConstructor.java",

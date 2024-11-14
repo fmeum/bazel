@@ -30,11 +30,14 @@ import com.google.devtools.build.lib.analysis.Runfiles;
 import com.google.devtools.build.lib.analysis.RunfilesProvider;
 import com.google.devtools.build.lib.analysis.RunfilesSupport;
 import com.google.devtools.build.lib.analysis.StarlarkProviderValidationUtil;
+import com.google.devtools.build.lib.analysis.UsedStarlarkOptionsInfo;
+import com.google.devtools.build.lib.analysis.config.ConfigConditions;
 import com.google.devtools.build.lib.analysis.test.CoverageCommon;
 import com.google.devtools.build.lib.analysis.test.InstrumentedFilesInfo;
 import com.google.devtools.build.lib.collect.nestedset.Depset;
 import com.google.devtools.build.lib.collect.nestedset.NestedSet;
 import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
+import com.google.devtools.build.lib.collect.nestedset.Order;
 import com.google.devtools.build.lib.packages.AdvertisedProviderSet;
 import com.google.devtools.build.lib.packages.BuiltinProvider;
 import com.google.devtools.build.lib.packages.Info;
@@ -47,12 +50,14 @@ import com.google.devtools.build.lib.packages.StructProvider;
 import com.google.devtools.build.lib.packages.TargetUtils;
 import com.google.devtools.build.lib.packages.Type;
 import com.google.devtools.build.lib.packages.semantics.BuildLanguageOptions;
+import com.google.devtools.build.lib.skyframe.ConfiguredTargetAndData;
 import com.google.devtools.build.lib.vfs.PathFragment;
 import com.google.errorprone.annotations.FormatMethod;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.Stream;
 import javax.annotation.Nullable;
 import net.starlark.java.eval.Dict;
 import net.starlark.java.eval.EvalException;
@@ -175,7 +180,8 @@ public final class StarlarkRuleConfiguredTargetUtil {
       Object rawProviders,
       AdvertisedProviderSet advertisedProviders,
       boolean isDefaultExecutableCreated,
-      @Nullable RequiredConfigFragmentsProvider requiredConfigFragmentsProvider)
+      @Nullable RequiredConfigFragmentsProvider requiredConfigFragmentsProvider,
+      ConfigConditions configConditions)
       throws InterruptedException, ActionConflictException {
     RuleConfiguredTargetBuilder builder = new RuleConfiguredTargetBuilder(context);
 
@@ -205,6 +211,19 @@ public final class StarlarkRuleConfiguredTargetUtil {
     // RequiredConfigFragmentsProvider may be removed with removal of Android feature flags.
     if (requiredConfigFragmentsProvider != null) {
       builder.addProvider(requiredConfigFragmentsProvider);
+    }
+
+    if (context.getRule().isBuildSetting()) {
+      builder.addProvider(
+          new UsedStarlarkOptionsInfo(
+              NestedSetBuilder.create(Order.STABLE_ORDER, context.getLabel())));
+    } else {
+      UsedStarlarkOptionsInfo.collect(
+              Stream.concat(
+                  context.getAllPrerequisites().stream(),
+                  configConditions.asConfiguredTargets().values().stream()
+                      .map(ConfiguredTargetAndData::getConfiguredTarget)))
+          .ifPresent(builder::addProvider);
     }
 
     ConfiguredTarget ct;

@@ -154,6 +154,10 @@ public final class RuleConfiguredTargetBuilder {
       propagateTransitiveValidationOutputGroups();
     }
 
+    if (!ruleContext.getRule().getRuleClassObject().isStarlark()) {
+      UsedStarlarkOptionsInfo.collect(ruleContext.getAllPrerequisites().stream())
+          .ifPresent(this::addProvider);
+    }
     // Add a default provider that forwards InstrumentedFilesInfo from dependencies, even if this
     // rule doesn't configure InstrumentedFilesInfo. This needs to be done for non-test rules
     // as well, but should be done before initializeTestProvider, which uses that.

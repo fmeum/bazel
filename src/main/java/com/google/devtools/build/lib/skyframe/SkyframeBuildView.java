@@ -63,6 +63,7 @@ import com.google.devtools.build.lib.analysis.ResolvedToolchainContext;
 import com.google.devtools.build.lib.analysis.TargetAndConfiguration;
 import com.google.devtools.build.lib.analysis.ToolchainCollection;
 import com.google.devtools.build.lib.analysis.TopLevelArtifactContext;
+import com.google.devtools.build.lib.analysis.UsedStarlarkOptionsInfo;
 import com.google.devtools.build.lib.analysis.ViewCreationFailedException;
 import com.google.devtools.build.lib.analysis.config.AdditionalConfigurationChangeEvent;
 import com.google.devtools.build.lib.analysis.config.BuildConfigurationValue;
@@ -836,6 +837,16 @@ public final class SkyframeBuildView {
                 labelTargetMap,
                 targetsWithConfiguration,
                 /* topLevelActionConflictReport= */ null);
+        successfulConfiguredTargets.forEach(
+            target ->
+                System.err.println(
+                    target.getLabel()
+                        + " "
+                        + (target.getProvider(UsedStarlarkOptionsInfo.class) != null
+                            ? target
+                                .getProvider(UsedStarlarkOptionsInfo.class)
+                                .usedStarlarkOptions()
+                            : "<none>")));
 
         return SkyframeAnalysisAndExecutionResult.success(
             successfulConfiguredTargets,
