@@ -438,6 +438,7 @@ public abstract class InvalidatingNodeVisitor<GraphT extends QueryableGraph> {
 
     @Override
     void visit(Collection<SkyKey> keys, InvalidationType invalidationType) {
+      System.err.println("DIRTYING: " + keys);
       Preconditions.checkState(invalidationType != InvalidationType.DELETED, keys);
       visit(keys, invalidationType, /* depthForOverflowCheck= */ 0, null);
     }

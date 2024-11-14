@@ -51,6 +51,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.BiPredicate;
 import java.util.function.Consumer;
 import java.util.function.Predicate;
+import java.util.stream.Collectors;
 import javax.annotation.Nullable;
 
 /**
@@ -211,14 +212,23 @@ public abstract class AbstractInMemoryMemoizingEvaluator implements MemoizingEva
     try (AutoProfiler ignored =
         GoogleAutoProfilerUtils.logged("deletion marking", MIN_TIME_TO_LOG_DELETION)) {
       Set<SkyKey> toDelete = Sets.newConcurrentHashSet();
+      Set<SkyKey> extra = Sets.newConcurrentHashSet();
       getInMemoryGraph()
           .parallelForEach(
               e -> {
+                if (e.isDirty()
+                    && !deletePredicate.test(e.getKey(), e.isDirty() ? null : e.getValue())) {
+                  extra.add(e.getKey());
+                }
                 if (e.isDirty() || deletePredicate.test(e.getKey(), e.getValue())) {
                   toDelete.add(e.getKey());
                 }
               });
       valuesToDelete.addAll(toDelete);
+      System.err.printf(
+          "EXTRA: %s%n",
+          extra.stream()
+              .collect(Collectors.groupingBy(SkyKey::functionName, Collectors.counting())));
     }
   }
 
