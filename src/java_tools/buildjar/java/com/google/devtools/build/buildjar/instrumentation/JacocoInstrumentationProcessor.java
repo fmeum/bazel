@@ -19,11 +19,7 @@ import com.google.common.io.RecursiveDeleteOption;
 import com.google.devtools.build.buildjar.InvalidCommandLineException;
 import com.google.devtools.build.buildjar.JavaLibraryBuildRequest;
 import com.google.devtools.build.buildjar.jarhelper.JarCreator;
-import java.io.BufferedInputStream;
-import java.io.BufferedOutputStream;
 import java.io.IOException;
-import java.io.InputStream;
-import java.io.OutputStream;
 import java.nio.file.FileVisitResult;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -31,8 +27,17 @@ import java.nio.file.Paths;
 import java.nio.file.SimpleFileVisitor;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.util.List;
-import org.jacoco.core.instr.Instrumenter;
+import org.jacoco.core.internal.data.CRC64;
+import org.jacoco.core.internal.flow.ClassProbesAdapter;
+import org.jacoco.core.internal.instr.ClassInstrumenter;
+import org.jacoco.core.internal.instr.IProbeArrayStrategy;
+import org.jacoco.core.internal.instr.InstrSupport;
+import org.jacoco.core.internal.instr.ProbeArrayStrategyFactory;
+import org.jacoco.core.runtime.IExecutionDataAccessorGenerator;
 import org.jacoco.core.runtime.OfflineInstrumentationAccessGenerator;
+import org.objectweb.asm.ClassReader;
+import org.objectweb.asm.ClassVisitor;
+import org.objectweb.asm.ClassWriter;
 
 /** Instruments compiled java classes using Jacoco instrumentation library. */
 public final class JacocoInstrumentationProcessor {
@@ -81,8 +86,7 @@ public final class JacocoInstrumentationProcessor {
     }
     jar.setNormalize(true);
     jar.setCompression(build.compressJar());
-    Instrumenter instr = new Instrumenter(new OfflineInstrumentationAccessGenerator());
-    instrumentRecursively(instr, build.getClassDir());
+    instrumentRecursively(new OfflineInstrumentationAccessGenerator(), build.getClassDir());
     jar.addDirectory(instrumentedClassesDirectory);
     if (isNewCoverageImplementation) {
       jar.addEntry(coverageInformation, coverageInformation);
@@ -107,7 +111,8 @@ public final class JacocoInstrumentationProcessor {
   /**
    * Runs Jacoco instrumentation processor over all .class files recursively, starting with root.
    */
-  private void instrumentRecursively(Instrumenter instr, Path root) throws IOException {
+  private void instrumentRecursively(IExecutionDataAccessorGenerator accessorGenerator, Path root)
+      throws IOException {
     Files.walkFileTree(
         root,
         new SimpleFileVisitor<Path>() {
@@ -134,14 +139,33 @@ public final class JacocoInstrumentationProcessor {
             }
             Files.createDirectories(uninstrumentedCopy.getParent());
             Files.move(file, uninstrumentedCopy);
-            try (InputStream input =
-                    new BufferedInputStream(Files.newInputStream(uninstrumentedCopy));
-                OutputStream output =
-                    new BufferedOutputStream(Files.newOutputStream(instrumentedCopy))) {
-              instr.instrument(input, output, file.toString());
-            }
+            Files.write(
+                instrumentedCopy,
+                instrument(Files.readAllBytes(uninstrumentedCopy), accessorGenerator));
             return FileVisitResult.CONTINUE;
           }
         });
+  }
+
+  private byte[] instrument(byte[] source, IExecutionDataAccessorGenerator accessorGenerator) {
+    // Modified from
+    // https://github.com/jacoco/jacoco/blob/20f076cb921588b80e6bb0b397b9aaf4dde910b5/org.jacoco.core/src/org/jacoco/core/instr/Instrumenter.java#L76C1-L92C31
+    final long classId = CRC64.classId(source);
+    final ClassReader reader = InstrSupport.classReaderFor(source);
+    final ClassWriter writer =
+        new ClassWriter(reader, 0) {
+          @Override
+          protected String getCommonSuperClass(final String type1, final String type2) {
+            throw new IllegalStateException();
+          }
+        };
+    final IProbeArrayStrategy strategy =
+        ProbeArrayStrategyFactory.createFor(classId, reader, accessorGenerator);
+    final int version = InstrSupport.getMajorVersion(reader);
+    final ClassVisitor visitor =
+        new ClassProbesAdapter(
+            new ClassInstrumenter(strategy, writer), InstrSupport.needsFrames(version));
+    reader.accept(visitor, ClassReader.EXPAND_FRAMES);
+    return writer.toByteArray();
   }
 }
