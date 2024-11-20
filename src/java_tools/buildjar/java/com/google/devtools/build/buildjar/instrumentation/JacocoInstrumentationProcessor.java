@@ -19,11 +19,7 @@ import com.google.common.io.RecursiveDeleteOption;
 import com.google.devtools.build.buildjar.InvalidCommandLineException;
 import com.google.devtools.build.buildjar.JavaLibraryBuildRequest;
 import com.google.devtools.build.buildjar.jarhelper.JarCreator;
-import java.io.BufferedInputStream;
-import java.io.BufferedOutputStream;
 import java.io.IOException;
-import java.io.InputStream;
-import java.io.OutputStream;
 import java.nio.file.FileVisitResult;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -31,32 +27,35 @@ import java.nio.file.Paths;
 import java.nio.file.SimpleFileVisitor;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.util.List;
+import javax.annotation.Nullable;
 import org.jacoco.core.instr.Instrumenter;
 import org.jacoco.core.runtime.OfflineInstrumentationAccessGenerator;
 
 /** Instruments compiled java classes using Jacoco instrumentation library. */
 public final class JacocoInstrumentationProcessor {
 
-  public static JacocoInstrumentationProcessor create(List<String> args)
+  public static JacocoInstrumentationProcessor create(List<String> args, Path workDir)
       throws InvalidCommandLineException {
-    if (args.size() < 1) {
+    if (args.size() < 2) {
       throw new InvalidCommandLineException(
-          "Number of arguments for Jacoco instrumentation should be 1+ (given "
+          "Number of arguments for Jacoco instrumentation should be 2+ (given "
               + args.size()
-              + ": metadataOutput [filters*].");
+              + ": metadataOutput baselineCoverageOutput [filters*].");
     }
 
     // ignoring filters, they weren't used in the previous implementation
     // TODO(bazel-team): filters should be correctly handled
-    return new JacocoInstrumentationProcessor(args.get(0));
+    return new JacocoInstrumentationProcessor(args.get(0), workDir.resolve(args.get(1)));
   }
 
   private Path instrumentedClassesDirectory;
+  private final Path baselineCoverageOutput;
   private final String coverageInformation;
   private final boolean isNewCoverageImplementation;
 
-  private JacocoInstrumentationProcessor(String coverageInfo) {
+  private JacocoInstrumentationProcessor(String coverageInfo, Path baselineCoverageOutput) {
     this.coverageInformation = coverageInfo;
+    this.baselineCoverageOutput = baselineCoverageOutput;
     // This is part of the new Java coverage implementation where JacocoInstrumentationProcessor
     // receives a file that includes the relative paths of the uninstrumented Java files, instead
     // of the metadata jar.
@@ -82,7 +81,7 @@ public final class JacocoInstrumentationProcessor {
     jar.setNormalize(true);
     jar.setCompression(build.compressJar());
     Instrumenter instr = new Instrumenter(new OfflineInstrumentationAccessGenerator());
-    instrumentRecursively(instr, build.getClassDir());
+    instrumentRecursively(instr, build.getClassDir(), baselineCoverageOutput);
     jar.addDirectory(instrumentedClassesDirectory);
     if (isNewCoverageImplementation) {
       jar.addEntry(coverageInformation, coverageInformation);
@@ -107,7 +106,13 @@ public final class JacocoInstrumentationProcessor {
   /**
    * Runs Jacoco instrumentation processor over all .class files recursively, starting with root.
    */
-  private void instrumentRecursively(Instrumenter instr, Path root) throws IOException {
+  private void instrumentRecursively(Instrumenter instr, Path root, @Nullable Path baselineCoverage)
+      throws IOException {
+    BaselineCoverageCollector baselineCoverageCollector =
+        isNewCoverageImplementation && baselineCoverage != null
+            ? BaselineCoverageCollector.create(Paths.get(coverageInformation))
+            : null;
+
     Files.walkFileTree(
         root,
         new SimpleFileVisitor<Path>() {
@@ -134,14 +139,19 @@ public final class JacocoInstrumentationProcessor {
             }
             Files.createDirectories(uninstrumentedCopy.getParent());
             Files.move(file, uninstrumentedCopy);
-            try (InputStream input =
-                    new BufferedInputStream(Files.newInputStream(uninstrumentedCopy));
-                OutputStream output =
-                    new BufferedOutputStream(Files.newOutputStream(instrumentedCopy))) {
-              instr.instrument(input, output, file.toString());
+            byte[] uninstrumentedCode = Files.readAllBytes(uninstrumentedCopy);
+            Files.write(instrumentedCopy, instr.instrument(uninstrumentedCode, file.toString()));
+
+            if (baselineCoverageCollector != null) {
+              baselineCoverageCollector.collect(uninstrumentedCode);
             }
+
             return FileVisitResult.CONTINUE;
           }
         });
+
+    if (baselineCoverageCollector != null) {
+      baselineCoverageCollector.writeTo(Files.newOutputStream(baselineCoverage));
+    }
   }
 }

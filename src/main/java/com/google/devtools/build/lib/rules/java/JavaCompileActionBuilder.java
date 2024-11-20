@@ -137,6 +137,7 @@ public final class JavaCompileActionBuilder {
   private final String execGroup;
   private ImmutableSet<Artifact> additionalOutputs = ImmutableSet.of();
   private Artifact coverageArtifact;
+  private Artifact baselineCoverageArtifact;
   private ImmutableSet<Artifact> sourceFiles = ImmutableSet.of();
   private ImmutableList<Artifact> sourceJars = ImmutableList.of();
   private StrictDepsMode strictJavaDeps = StrictDepsMode.ERROR;
@@ -271,7 +272,12 @@ public final class JavaCompileActionBuilder {
         ImmutableSet.<Artifact>builder()
             .add(outputs.output())
             .addAll(additionalOutputs);
-    Stream.of(outputs.depsProto(), outputs.nativeHeader(), genSourceOutput, manifestOutput)
+    Stream.of(
+            outputs.depsProto(),
+            outputs.nativeHeader(),
+            genSourceOutput,
+            manifestOutput,
+            baselineCoverageArtifact)
         .filter(Objects::nonNull)
         .forEachOrdered(result::add);
     return result.build();
@@ -457,6 +463,12 @@ public final class JavaCompileActionBuilder {
   @CanIgnoreReturnValue
   public JavaCompileActionBuilder setCoverageArtifact(Artifact coverageArtifact) {
     this.coverageArtifact = coverageArtifact;
+    return this;
+  }
+
+  @CanIgnoreReturnValue
+  public JavaCompileActionBuilder setBaselineCoverageArtifact(Artifact baselineCoverageArtifact) {
+    this.baselineCoverageArtifact = baselineCoverageArtifact;
     return this;
   }
 
