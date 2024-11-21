@@ -131,7 +131,8 @@ public final class JavaCompilationHelper {
     return ruleContext.getFragment(JavaConfiguration.class);
   }
 
-  public void createCompileAction(JavaCompileOutputs<Artifact> outputs)
+  @Nullable
+  public Artifact createCompileAction(JavaCompileOutputs<Artifact> outputs)
       throws RuleErrorException, InterruptedException {
     if (outputs.genClass() != null) {
       createGenJarAction(
@@ -247,6 +248,10 @@ public final class JavaCompilationHelper {
     builder.setTargetLabel(label);
     Artifact coverageArtifact = maybeCreateCoverageArtifact(outputs.output());
     builder.setCoverageArtifact(coverageArtifact);
+    Artifact baselineCoverageArtifact = null;
+    if (coverageArtifact != null) {
+      builder.setBaselineCoverageArtifact(baselineCoverageArtifact);
+    }
     BootClassPathInfo bootClassPathInfo = getBootclasspathOrDefault();
     builder.setBootClassPath(bootClassPathInfo);
     NestedSet<Artifact> classpath =
@@ -326,6 +331,8 @@ public final class JavaCompilationHelper {
           javaToolchain.getBytecodeOptimizer().tool(),
           optimizerLabel.name());
     }
+
+    return baselineCoverageArtifact;
   }
 
   /**

@@ -257,7 +257,7 @@ public class JavaStarlarkCommon
         Depset.cast(javaBuilderJvmFlags, String.class, "javabuilder_jvm_flags"));
     compilationHelper.enableJspecify(enableJSpecify);
     compilationHelper.enableDirectClasspath(enableDirectClasspath);
-    compilationHelper.createCompileAction(outputs);
+    Artifact baselineCoverageArtifact = compilationHelper.createCompileAction(outputs);
   }
 
   @Override

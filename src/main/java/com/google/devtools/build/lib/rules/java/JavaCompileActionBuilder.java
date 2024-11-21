@@ -334,6 +334,11 @@ public final class JavaCompileActionBuilder {
     if (coverageArtifact != null) {
       result.add("--post_processor");
       result.addExecPath(JACOCO_INSTRUMENTATION_PROCESSOR, coverageArtifact);
+      if (baselineCoverageArtifact != null) {
+        result.addExecPath(baselineCoverageArtifact);
+      } else {
+        result.add("");
+      }
       result.addPath(ruleContext.getCoverageMetadataDirectory().getExecPath());
       result.add("-*Test");
       result.add("-*TestCase");

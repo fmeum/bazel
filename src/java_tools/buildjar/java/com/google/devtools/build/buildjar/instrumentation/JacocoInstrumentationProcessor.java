@@ -43,17 +43,22 @@ public final class JacocoInstrumentationProcessor {
               + ": metadataOutput baselineCoverageOutput [filters*].");
     }
 
+    Path baselineCoverageOutput = null;
+    if (!args.get(1).isEmpty()) {
+      baselineCoverageOutput = workDir.resolve(args.get(1));
+    }
     // ignoring filters, they weren't used in the previous implementation
     // TODO(bazel-team): filters should be correctly handled
-    return new JacocoInstrumentationProcessor(args.get(0), workDir.resolve(args.get(1)));
+    return new JacocoInstrumentationProcessor(args.get(0), baselineCoverageOutput);
   }
 
   private Path instrumentedClassesDirectory;
-  private final Path baselineCoverageOutput;
+  @Nullable private final Path baselineCoverageOutput;
   private final String coverageInformation;
   private final boolean isNewCoverageImplementation;
 
-  private JacocoInstrumentationProcessor(String coverageInfo, Path baselineCoverageOutput) {
+  private JacocoInstrumentationProcessor(
+      String coverageInfo, @Nullable Path baselineCoverageOutput) {
     this.coverageInformation = coverageInfo;
     this.baselineCoverageOutput = baselineCoverageOutput;
     // This is part of the new Java coverage implementation where JacocoInstrumentationProcessor
@@ -106,10 +111,10 @@ public final class JacocoInstrumentationProcessor {
   /**
    * Runs Jacoco instrumentation processor over all .class files recursively, starting with root.
    */
-  private void instrumentRecursively(Instrumenter instr, Path root, @Nullable Path baselineCoverage)
-      throws IOException {
+  private void instrumentRecursively(
+      Instrumenter instr, Path root, @Nullable Path baselineCoverageOutput) throws IOException {
     BaselineCoverageCollector baselineCoverageCollector =
-        isNewCoverageImplementation && baselineCoverage != null
+        isNewCoverageImplementation && baselineCoverageOutput != null
             ? BaselineCoverageCollector.create(Paths.get(coverageInformation))
             : null;
 
@@ -151,7 +156,7 @@ public final class JacocoInstrumentationProcessor {
         });
 
     if (baselineCoverageCollector != null) {
-      baselineCoverageCollector.writeTo(Files.newOutputStream(baselineCoverage));
+      baselineCoverageCollector.writeTo(Files.newOutputStream(baselineCoverageOutput));
     }
   }
 }
