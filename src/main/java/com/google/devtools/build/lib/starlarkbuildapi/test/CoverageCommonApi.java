@@ -17,6 +17,7 @@ package com.google.devtools.build.lib.starlarkbuildapi.test;
 import com.google.devtools.build.docgen.annot.DocCategory;
 import com.google.devtools.build.lib.collect.nestedset.Depset;
 import com.google.devtools.build.lib.collect.nestedset.Depset.TypeException;
+import com.google.devtools.build.lib.packages.semantics.BuildLanguageOptions;
 import com.google.devtools.build.lib.starlarkbuildapi.FileApi;
 import com.google.devtools.build.lib.starlarkbuildapi.StarlarkRuleContextApi;
 import com.google.devtools.build.lib.starlarkbuildapi.platform.ConstraintValueInfoApi;
@@ -117,7 +118,17 @@ public interface CoverageCommonApi<
             allowedTypes = {
               @ParamType(type = Depset.class),
               @ParamType(type = NoneType.class),
-            })
+            }),
+        @Param(
+            name = "baseline_coverage",
+            positional = false,
+            named = true,
+            defaultValue = "None",
+            allowedTypes = {
+              @ParamType(type = FileApi.class),
+              @ParamType(type = NoneType.class),
+            },
+            enableOnlyWithFlag = BuildLanguageOptions.EXPERIMENTAL_STARLARK_BASELINE_COVERAGE)
       },
       useStarlarkThread = true)
   InstrumentedFilesInfoApi instrumentedFilesInfo(
@@ -129,6 +140,7 @@ public interface CoverageCommonApi<
       Object extensions,
       Sequence<?> metadataFiles,
       Object reportedToActualSourcesObject,
+      Object baselineCoverage,
       StarlarkThread thread)
       throws EvalException, TypeException;
 }

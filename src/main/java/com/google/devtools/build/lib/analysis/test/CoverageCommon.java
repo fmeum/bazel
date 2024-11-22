@@ -22,7 +22,6 @@ import com.google.devtools.build.lib.analysis.platform.ConstraintValueInfo;
 import com.google.devtools.build.lib.analysis.starlark.StarlarkRuleContext;
 import com.google.devtools.build.lib.analysis.test.InstrumentedFilesCollector.InstrumentationSpec;
 import com.google.devtools.build.lib.collect.nestedset.Depset;
-import com.google.devtools.build.lib.collect.nestedset.Depset.TypeException;
 import com.google.devtools.build.lib.collect.nestedset.NestedSet;
 import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
 import com.google.devtools.build.lib.collect.nestedset.Order;
@@ -57,8 +56,9 @@ public class CoverageCommon implements CoverageCommonApi<ConstraintValueInfo, St
       Object extensions,
       Sequence<?> metadataFiles, // Sequence<Artifact>
       Object reportedToActualSourcesObject,
+      Object baselineCoverageArtifact,
       StarlarkThread thread)
-      throws EvalException, TypeException {
+      throws EvalException {
     List<String> extensionsList =
         extensions == Starlark.NONE ? null : Sequence.cast(extensions, String.class, "extensions");
     NestedSet<Tuple> reportedToActualSources =

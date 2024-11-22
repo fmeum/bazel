@@ -826,6 +826,15 @@ public final class BuildLanguageOptions extends OptionsBase {
       help = "If true, enable the set data type and set() constructor in Starlark.")
   public boolean experimentalEnableStarlarkSet;
 
+  @Option(
+      name = "experimental_starlark_baseline_coverage",
+      defaultValue = "false",
+      documentationCategory = OptionDocumentationCategory.STARLARK_SEMANTICS,
+      effectTags = {OptionEffectTag.BUILD_FILE_SEMANTICS},
+      metadataTags = {OptionMetadataTag.EXPERIMENTAL},
+      help = "foo")
+  public boolean experimentalStarlarkBaselineCoverage;
+
   /**
    * An interner to reduce the number of StarlarkSemantics instances. A single Blaze instance should
    * never accumulate a large number of these and being able to shortcut on object identity makes a
@@ -941,6 +950,7 @@ public final class BuildLanguageOptions extends OptionsBase {
                 incompatibleSimplifyUnconditionalSelectsInRuleAttrs)
             .setBool(
                 StarlarkSemantics.EXPERIMENTAL_ENABLE_STARLARK_SET, experimentalEnableStarlarkSet)
+            .setBool(EXPERIMENTAL_STARLARK_BASELINE_COVERAGE, experimentalStarlarkBaselineCoverage)
             .build();
     return INTERNER.intern(semantics);
   }
@@ -1048,6 +1058,8 @@ public final class BuildLanguageOptions extends OptionsBase {
       "+incompatible_disallow_ctx_resolve_tools";
   public static final String INCOMPATIBLE_SIMPLIFY_UNCONDITIONAL_SELECTS_IN_RULE_ATTRS =
       "+incompatible_simplify_unconditional_selects_in_rule_attrs";
+  public static final String EXPERIMENTAL_STARLARK_BASELINE_COVERAGE =
+      "-experimental_starlark_baseline_coverage";
   // non-booleans
   public static final StarlarkSemantics.Key<String> EXPERIMENTAL_BUILTINS_BZL_PATH =
       new StarlarkSemantics.Key<>("experimental_builtins_bzl_path", "%bundled%");
