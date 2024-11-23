@@ -143,4 +143,12 @@ public interface CoverageCommonApi<
       Object baselineCoverage,
       StarlarkThread thread)
       throws EvalException, TypeException;
+
+  @StarlarkMethod(
+      name = "declare_baseline_coverage_file",
+      parameters = {
+        @Param(name = "ctx", positional = true, named = true, doc = "The rule context.")
+      },
+      enableOnlyWithFlag = BuildLanguageOptions.EXPERIMENTAL_STARLARK_BASELINE_COVERAGE)
+  FileApi declareBaselineCoverageFile(RuleContextT starlarkRuleContext);
 }

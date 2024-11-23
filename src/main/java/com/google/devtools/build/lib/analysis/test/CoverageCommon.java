@@ -27,10 +27,12 @@ import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
 import com.google.devtools.build.lib.collect.nestedset.Order;
 import com.google.devtools.build.lib.packages.BuiltinRestriction;
 import com.google.devtools.build.lib.packages.TargetUtils;
+import com.google.devtools.build.lib.starlarkbuildapi.FileApi;
 import com.google.devtools.build.lib.starlarkbuildapi.test.CoverageCommonApi;
 import com.google.devtools.build.lib.starlarkbuildapi.test.InstrumentedFilesInfoApi;
 import com.google.devtools.build.lib.util.FileType;
 import com.google.devtools.build.lib.util.FileTypeSet;
+import com.google.devtools.build.lib.vfs.PathFragment;
 import java.util.Arrays;
 import java.util.List;
 import javax.annotation.Nullable;
@@ -90,6 +92,9 @@ public class CoverageCommon implements CoverageCommonApi<ConstraintValueInfo, St
       // Should have been verified by Starlark before this function is called
       throw new IllegalStateException();
     }
+    if (baselineCoverageArtifact != Starlark.NONE) {
+      Artifact baselineCoverage = (Artifact) baselineCoverageArtifact;
+    }
     if (!supportFilesBuilder.isEmpty()
         || !reportedToActualSources.isEmpty()
         || !environmentDict.isEmpty()) {
@@ -103,7 +108,26 @@ public class CoverageCommon implements CoverageCommonApi<ConstraintValueInfo, St
         ImmutableMap.copyOf(environmentDict),
         extensionsList,
         Sequence.cast(metadataFiles, Artifact.class, "metadata_files"),
-        reportedToActualSources);
+        reportedToActualSources,
+        baselineCoverageArtifact == Starlark.NONE ? null : (Artifact) baselineCoverageArtifact);
+  }
+
+  @Override
+  public FileApi declareBaselineCoverageFile(StarlarkRuleContext starlarkRuleContext) {
+    RuleContext ruleContext = starlarkRuleContext.getRuleContext();
+    // Baseline coverage artifacts will still go into "testlogs" directory.
+    return ruleContext.getPackageRelativeArtifact(
+        PathFragment.create(ruleContext.getTarget().getName()).getChild("baseline_coverage.dat"),
+        ruleContext.getTestLogsDirectory());
+  }
+
+  private static void validateBaselineCoverageArtifact(
+      RuleContext ruleContext, Artifact baselineCoverageArtifact) throws EvalException {
+    if (!baselineCoverageArtifact.getRoot().equals(ruleContext.getTestLogsDirectory())
+        || !baselineCoverageArtifact.getExecPath().getBaseName().equals("baseline_coverage.dat")) {
+      throw Starlark.errorf(
+          "baseline_coverage must be a file in the testlogs directory with the name 'baseline_coverage.dat'");
+    }
   }
 
   /**
@@ -132,8 +156,9 @@ public class CoverageCommon implements CoverageCommonApi<ConstraintValueInfo, St
         NestedSetBuilder.emptySet(Order.STABLE_ORDER),
         ImmutableMap.of(),
         extensions,
-        null,
-        NestedSetBuilder.emptySet(Order.STABLE_ORDER));
+        /* metadataFiles= */ null,
+        NestedSetBuilder.emptySet(Order.STABLE_ORDER),
+        /* baselineCoverageArtifact= */ null);
   }
 
   private static InstrumentedFilesInfo createInstrumentedFilesInfo(
@@ -144,7 +169,8 @@ public class CoverageCommon implements CoverageCommonApi<ConstraintValueInfo, St
       ImmutableMap<String, String> environment,
       @Nullable List<String> extensions,
       @Nullable List<Artifact> metadataFiles,
-      NestedSet<Tuple> reportedToActualSources) {
+      NestedSet<Tuple> reportedToActualSources,
+      @Nullable Artifact baselineCoverageArtifact) {
     FileTypeSet fileTypeSet = FileTypeSet.ANY_FILE;
     if (extensions != null) {
       if (extensions.isEmpty()) {
@@ -168,7 +194,8 @@ public class CoverageCommon implements CoverageCommonApi<ConstraintValueInfo, St
         /* coverageEnvironment= */ environment,
         /* withBaselineCoverage= */ !TargetUtils.isTestRule(ruleContext.getTarget()),
         /* reportedToActualSources= */ reportedToActualSources,
-        /* additionalMetadata= */ metadataFiles);
+        /* additionalMetadata= */ metadataFiles,
+        baselineCoverageArtifact);
   }
 
   @Override

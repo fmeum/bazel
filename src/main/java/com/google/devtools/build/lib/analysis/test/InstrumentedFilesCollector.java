@@ -170,7 +170,8 @@ public final class InstrumentedFilesCollector {
         coverageEnvironment,
         withBaselineCoverage,
         reportedToActualSources,
-        /* additionalMetadata= */ null);
+        /* additionalMetadata= */ null,
+        /* baselineCoverageArtifact= */ null);
   }
 
   public static InstrumentedFilesInfo collect(
@@ -182,7 +183,8 @@ public final class InstrumentedFilesCollector {
       ImmutableMap<String, String> coverageEnvironment,
       boolean withBaselineCoverage,
       NestedSet<Tuple> reportedToActualSources,
-      @Nullable Iterable<Artifact> additionalMetadata) {
+      @Nullable Iterable<Artifact> additionalMetadata,
+      @Nullable Artifact baselineCoverageArtifact) {
     Preconditions.checkNotNull(ruleContext);
     Preconditions.checkNotNull(spec);
 
@@ -234,6 +236,10 @@ public final class InstrumentedFilesCollector {
 
     if (additionalMetadata != null) {
       instrumentedFilesInfoBuilder.addMetadataFiles(additionalMetadata);
+    }
+
+    if (baselineCoverageArtifact != null) {
+      instrumentedFilesInfoBuilder.setBaselineCoverageArtifact(baselineCoverageArtifact);
     }
 
     return instrumentedFilesInfoBuilder.build();
@@ -372,6 +378,7 @@ public final class InstrumentedFilesCollector {
     NestedSetBuilder<Artifact> metadataFilesBuilder;
     NestedSetBuilder<Artifact> baselineCoverageInstrumentedFilesBuilder;
     NestedSetBuilder<Artifact> coverageSupportFilesBuilder;
+    @Nullable Artifact baselineCoverageArtifact;
     final ImmutableMap.Builder<String, String> coverageEnvironmentBuilder;
     final NestedSet<Tuple> reportedToActualSources;
 
@@ -426,14 +433,23 @@ public final class InstrumentedFilesCollector {
       metadataFilesBuilder.addAll(files);
     }
 
+    public void setBaselineCoverageArtifact(Artifact baselineCoverageArtifact) {
+      this.baselineCoverageArtifact = Preconditions.checkNotNull(baselineCoverageArtifact);
+    }
+
     InstrumentedFilesInfo build() {
       NestedSet<Artifact> baselineCoverageFiles = baselineCoverageInstrumentedFilesBuilder.build();
 
-      // Create one baseline coverage action per target, for the transitive closure of files.
-      var baselineCoverageAction =
-          BaselineCoverageAction.create(ruleContext, baselineCoverageFiles);
-      ruleContext.registerAction(baselineCoverageAction);
-      Artifact baselineCoverageArtifact = baselineCoverageAction.getPrimaryOutput();
+      Artifact baselineCoverageArtifact;
+      if (this.baselineCoverageArtifact != null) {
+        baselineCoverageArtifact = this.baselineCoverageArtifact;
+      } else {
+        // Create one baseline coverage action per target, for the transitive closure of files.
+        var baselineCoverageAction =
+            BaselineCoverageAction.create(ruleContext, baselineCoverageFiles);
+        ruleContext.registerAction(baselineCoverageAction);
+        baselineCoverageArtifact = baselineCoverageAction.getPrimaryOutput();
+      }
 
       return new InstrumentedFilesInfo(
           instrumentedFilesBuilder.build(),
