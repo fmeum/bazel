@@ -2234,7 +2234,7 @@ public abstract class BuildViewTestCase extends FoundationTestCase {
   protected ImmutableList<String> baselineCoverageArtifactBasenames(ConfiguredTarget target)
       throws Exception {
     Artifact baselineCoverage =
-        target.get(InstrumentedFilesInfo.STARLARK_CONSTRUCTOR).getBaselineCoverageArtifact();
+        target.get(InstrumentedFilesInfo.STARLARK_CONSTRUCTOR).getBaselineCoverageArtifacts();
     if (baselineCoverage == null) {
       return ImmutableList.of();
     }

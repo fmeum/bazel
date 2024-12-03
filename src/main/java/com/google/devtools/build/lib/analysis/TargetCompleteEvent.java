@@ -169,7 +169,7 @@ public final class TargetCompleteEvent
         isTest
             ? targetAndData.getConfiguredTarget().getProvider(TestProvider.class).getTestParams()
             : null;
-    this.baselineCoverageArtifact = baselineCoverageArtifact(targetAndData);
+    this.baselineCoverageArtifacts = baselineCoverageArtifact(targetAndData);
     this.baselineCoverage =
         baselineCoverageArtifact == null
             ? null
@@ -182,13 +182,13 @@ public final class TargetCompleteEvent
   }
 
   @Nullable
-  private static Artifact baselineCoverageArtifact(ConfiguredTargetAndData targetAndData) {
+  private static NestedSet<Artifact> baselineCoverageArtifact(ConfiguredTargetAndData targetAndData) {
     InstrumentedFilesInfo instrumentedFilesProvider =
         targetAndData.getConfiguredTarget().get(InstrumentedFilesInfo.STARLARK_CONSTRUCTOR);
     if (instrumentedFilesProvider == null) {
       return null;
     }
-    return instrumentedFilesProvider.getBaselineCoverageArtifact();
+    return instrumentedFilesProvider.getBaselineCoverageArtifacts();
   }
 
   /** Construct a successful target completion event. */

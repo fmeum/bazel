@@ -193,7 +193,7 @@ public final class CompletionFunction<
     Artifact baselineCoverage = null;
     FileArtifactValue baselineCoverageValue = null;
     if (value.getConfiguredObject() instanceof ConfiguredTarget && instrumentedFilesInfo != null) {
-      baselineCoverage = instrumentedFilesInfo.getBaselineCoverageArtifact();
+      baselineCoverage = instrumentedFilesInfo.getBaselineCoverageArtifacts();
       if (baselineCoverage != null) {
         artifactsToRequest =
             Iterables.concat(artifactsToRequest, ImmutableList.of(baselineCoverage));

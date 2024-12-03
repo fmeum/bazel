@@ -751,7 +751,7 @@ public class BuildView {
     for (ConfiguredTarget target : configuredTargets) {
       InstrumentedFilesInfo provider = target.get(InstrumentedFilesInfo.STARLARK_CONSTRUCTOR);
       if (provider != null) {
-        Artifact baselineCoverage = provider.getBaselineCoverageArtifact();
+        Artifact baselineCoverage = provider.getBaselineCoverageArtifacts();
         if (baselineCoverage != null) {
           baselineCoverageArtifacts.add(baselineCoverage);
         }

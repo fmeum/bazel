@@ -250,7 +250,7 @@ public class TargetCompleteEventTest extends AnalysisTestCase {
         ctAndData
             .getConfiguredTarget()
             .get(InstrumentedFilesInfo.STARLARK_CONSTRUCTOR)
-            .getBaselineCoverageArtifact();
+            .getBaselineCoverageArtifacts();
     FileArtifactValue baselineCoverageMetadata =
         FileArtifactValue.createForNormalFile(new byte[] {1, 2, 3}, null, 10);
     CompletionContext completionContext =
