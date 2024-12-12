@@ -46,6 +46,7 @@ import com.google.devtools.build.lib.analysis.DefaultInfo;
 import com.google.devtools.build.lib.analysis.FileProvider;
 import com.google.devtools.build.lib.analysis.FilesToRunProvider;
 import com.google.devtools.build.lib.analysis.Runfiles;
+import com.google.devtools.build.lib.analysis.TransitiveInfoCollection;
 import com.google.devtools.build.lib.analysis.actions.FileWriteAction;
 import com.google.devtools.build.lib.analysis.actions.ParameterFileWriteAction;
 import com.google.devtools.build.lib.analysis.actions.SpawnAction;
@@ -701,6 +702,101 @@ public final class StarlarkRuleImplementationFunctionsTest extends BuildViewTest
     setRuleContext(ruleContext);
     assertThat((String) ev.eval("ruleContext.expand_location('${abc} $(echo) $$ $')"))
         .isEqualTo("${abc} $(echo) $$ $");
+  }
+
+  @Test
+  public void testExpandedLocationWithSingleFileDifferentFromExecutable() throws Exception {
+    scratch.file(
+        "test/defs.bzl",
+        "def _my_binary_impl(ctx):",
+        "  executable = ctx.actions.declare_file(ctx.attr.name + '_executable')",
+        "  ctx.actions.write(executable, '', is_executable = True)",
+        "  file = ctx.actions.declare_file(ctx.attr.name + '_file')",
+        "  ctx.actions.write(file, '')",
+        "  return [DefaultInfo(executable = executable, files = depset([file]))]",
+        "my_binary = rule(",
+        "    implementation = _my_binary_impl,",
+        "    executable = True,",
+        ")",
+        "def _expand_location_rule_impl(ctx):",
+        "  expansions = []",
+        "  for data in ctx.attr.data:",
+        "    expansions.append(ctx.expand_location('$(location ' + str(data.label) + ')', ctx.attr.data))",
+        "  file = ctx.actions.declare_file(ctx.attr.name)",
+        "  ctx.actions.write(file, '\\n'.join(expansions))",
+        "  return [DefaultInfo(files = depset([file]))]",
+        "expand_location_rule = rule(",
+        "    implementation = _expand_location_rule_impl,",
+        "    attrs = {",
+        "       'data': attr.label_list(),",
+        "    },",
+        ")");
+
+    scratch.file(
+        "test/BUILD",
+        "load('//test:defs.bzl', 'expand_location_rule', 'my_binary')",
+        "my_binary(name = 'main')",
+        "expand_location_rule(",
+        "  name = 'expand',",
+        "  data = [':main'],",
+        ")");
+
+    TransitiveInfoCollection expandTarget = getConfiguredTarget("//test:expand");
+    Artifact artifact =
+        Iterables.getOnlyElement(
+            expandTarget.getProvider(FileProvider.class).getFilesToBuild().toList());
+    FileWriteAction action = (FileWriteAction) getGeneratingAction(artifact);
+    assertThat(action.getFileContents())
+        .matches("^(bazel|blaze)-out/darwin_arm64-fastbuild/bin/test/main_file$");
+  }
+
+  @Test
+  public void testExpandedLocationsWithMultipleFiles() throws Exception {
+    scratch.file(
+        "test/defs.bzl",
+        "def _my_binary_impl(ctx):",
+        "  executable = ctx.actions.declare_file(ctx.attr.name + '_executable')",
+        "  ctx.actions.write(executable, '', is_executable = True)",
+        "  file1 = ctx.actions.declare_file(ctx.attr.name + '_file1')",
+        "  file2 = ctx.actions.declare_file(ctx.attr.name + '_file2')",
+        "  ctx.actions.write(file1, '')",
+        "  ctx.actions.write(file2, '')",
+        "  return [DefaultInfo(executable = executable, files = depset([file1, file2]))]",
+        "my_binary = rule(",
+        "    implementation = _my_binary_impl,",
+        "    executable = True,",
+        ")",
+        "def _expand_location_rule_impl(ctx):",
+        "  expansions = []",
+        "  for data in ctx.attr.data:",
+        "    expansions.append(ctx.expand_location('$(locations ' + str(data.label) + ')', ctx.attr.data))",
+        "  file = ctx.actions.declare_file(ctx.attr.name)",
+        "  ctx.actions.write(file, '\\n'.join(expansions))",
+        "  return [DefaultInfo(files = depset([file]))]",
+        "expand_location_rule = rule(",
+        "    implementation = _expand_location_rule_impl,",
+        "    attrs = {",
+        "       'data': attr.label_list(),",
+        "    },",
+        ")");
+
+    scratch.file(
+        "test/BUILD",
+        "load('//test:defs.bzl', 'expand_location_rule', 'my_binary')",
+        "my_binary(name = 'main')",
+        "expand_location_rule(",
+        "  name = 'expand',",
+        "  data = [':main'],",
+        ")");
+
+    TransitiveInfoCollection expandTarget = getConfiguredTarget("//test:expand");
+    Artifact artifact =
+        Iterables.getOnlyElement(
+            expandTarget.getProvider(FileProvider.class).getFilesToBuild().toList());
+    FileWriteAction action = (FileWriteAction) getGeneratingAction(artifact);
+    assertThat(action.getFileContents())
+        .matches(
+            "^(bazel|blaze)-out/darwin_arm64-fastbuild/bin/test/main_file1 (bazel|blaze)-out/darwin_arm64-fastbuild/bin/test/main_file2$");
   }
 
   /**
