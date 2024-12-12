@@ -721,55 +721,12 @@ public final class StarlarkRuleImplementationFunctionsTest extends BuildViewTest
         "def _expand_location_rule_impl(ctx):",
         "  expansions = []",
         "  for data in ctx.attr.data:",
-        "    expansions.append(ctx.expand_location('$(location ' + str(data.label) + ')', ctx.attr.data))",
-        "  file = ctx.actions.declare_file(ctx.attr.name)",
-        "  ctx.actions.write(file, '\\n'.join(expansions))",
-        "  return [DefaultInfo(files = depset([file]))]",
-        "expand_location_rule = rule(",
-        "    implementation = _expand_location_rule_impl,",
-        "    attrs = {",
-        "       'data': attr.label_list(),",
-        "    },",
-        ")");
-
-    scratch.file(
-        "test/BUILD",
-        "load('//test:defs.bzl', 'expand_location_rule', 'my_binary')",
-        "my_binary(name = 'main')",
-        "expand_location_rule(",
-        "  name = 'expand',",
-        "  data = [':main'],",
-        ")");
-
-    TransitiveInfoCollection expandTarget = getConfiguredTarget("//test:expand");
-    Artifact artifact =
-        Iterables.getOnlyElement(
-            expandTarget.getProvider(FileProvider.class).getFilesToBuild().toList());
-    FileWriteAction action = (FileWriteAction) getGeneratingAction(artifact);
-    assertThat(action.getFileContents())
-        .matches("^(bazel|blaze)-out/darwin_arm64-fastbuild/bin/test/main_file$");
-  }
-
-  @Test
-  public void testExpandedLocationsWithMultipleFiles() throws Exception {
-    scratch.file(
-        "test/defs.bzl",
-        "def _my_binary_impl(ctx):",
-        "  executable = ctx.actions.declare_file(ctx.attr.name + '_executable')",
-        "  ctx.actions.write(executable, '', is_executable = True)",
-        "  file1 = ctx.actions.declare_file(ctx.attr.name + '_file1')",
-        "  file2 = ctx.actions.declare_file(ctx.attr.name + '_file2')",
-        "  ctx.actions.write(file1, '')",
-        "  ctx.actions.write(file2, '')",
-        "  return [DefaultInfo(executable = executable, files = depset([file1, file2]))]",
-        "my_binary = rule(",
-        "    implementation = _my_binary_impl,",
-        "    executable = True,",
-        ")",
-        "def _expand_location_rule_impl(ctx):",
-        "  expansions = []",
-        "  for data in ctx.attr.data:",
-        "    expansions.append(ctx.expand_location('$(locations ' + str(data.label) + ')', ctx.attr.data))",
+        "    expansions.append(",
+        "        ctx.expand_location('$(location ' + str(data.label) + ')', ctx.attr.data),",
+        "    )",
+        "    expansions.append(",
+        "        ctx.expand_location('$(locations ' + str(data.label) + ')', ctx.attr.data)",
+        "    )",
         "  file = ctx.actions.declare_file(ctx.attr.name)",
         "  ctx.actions.write(file, '\\n'.join(expansions))",
         "  return [DefaultInfo(files = depset([file]))]",
@@ -796,7 +753,67 @@ public final class StarlarkRuleImplementationFunctionsTest extends BuildViewTest
     FileWriteAction action = (FileWriteAction) getGeneratingAction(artifact);
     assertThat(action.getFileContents())
         .matches(
-            "^(bazel|blaze)-out/darwin_arm64-fastbuild/bin/test/main_file1 (bazel|blaze)-out/darwin_arm64-fastbuild/bin/test/main_file2$");
+            """
+            ^(bazel|blaze)-out/darwin_arm64-fastbuild/bin/test/main_file
+            (bazel|blaze)-out/darwin_arm64-fastbuild/bin/test/main_file$\
+            """);
+  }
+
+  @Test
+  public void testExpandedLocationsWithMultipleFiles() throws Exception {
+    scratch.file(
+        "test/defs.bzl",
+        "def _my_binary_impl(ctx):",
+        "  executable = ctx.actions.declare_file(ctx.attr.name + '_executable')",
+        "  ctx.actions.write(executable, '', is_executable = True)",
+        "  file1 = ctx.actions.declare_file(ctx.attr.name + '_file1')",
+        "  file2 = ctx.actions.declare_file(ctx.attr.name + '_file2')",
+        "  ctx.actions.write(file1, '')",
+        "  ctx.actions.write(file2, '')",
+        "  return [DefaultInfo(executable = executable, files = depset([file1, file2]))]",
+        "my_binary = rule(",
+        "    implementation = _my_binary_impl,",
+        "    executable = True,",
+        ")",
+        "def _expand_location_rule_impl(ctx):",
+        "  expansions = []",
+        "  for data in ctx.attr.data:",
+        "    expansions.append(",
+        "        ctx.expand_location('$(location ' + str(data.label) + ')', ctx.attr.data),",
+        "    )",
+        "    expansions.append(",
+        "        ctx.expand_location('$(locations ' + str(data.label) + ')', ctx.attr.data)",
+        "    )",
+        "  file = ctx.actions.declare_file(ctx.attr.name)",
+        "  ctx.actions.write(file, '\\n'.join(expansions))",
+        "  return [DefaultInfo(files = depset([file]))]",
+        "expand_location_rule = rule(",
+        "    implementation = _expand_location_rule_impl,",
+        "    attrs = {",
+        "       'data': attr.label_list(),",
+        "    },",
+        ")");
+
+    scratch.file(
+        "test/BUILD",
+        "load('//test:defs.bzl', 'expand_location_rule', 'my_binary')",
+        "my_binary(name = 'main')",
+        "expand_location_rule(",
+        "  name = 'expand',",
+        "  data = [':main'],",
+        ")");
+
+    TransitiveInfoCollection expandTarget = getConfiguredTarget("//test:expand");
+    Artifact artifact =
+        Iterables.getOnlyElement(
+            expandTarget.getProvider(FileProvider.class).getFilesToBuild().toList());
+    FileWriteAction action = (FileWriteAction) getGeneratingAction(artifact);
+    assertThat(action.getFileContents())
+        .matches(
+            """
+^(bazel|blaze)-out/darwin_arm64-fastbuild/bin/test/main_executable
+(bazel|blaze)-out/darwin_arm64-fastbuild/bin/test/main_file1 (bazel|blaze)-out/darwin_arm64-fastbuild/bin/test/main_file2$\
+""");
   }
 
   /**
