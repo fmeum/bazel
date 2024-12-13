@@ -510,7 +510,9 @@ public final class LocationExpander {
               : fileProvider.getFilesToBuild().toList();
 
       for (Label label : labels) {
-        mapGet(locationMap, label).addAll(values);
+        if (mapGet(locationMap, label).isEmpty()) {
+          mapGet(locationMap, label).addAll(values);
+        }
       }
     }
     return locationMap;
