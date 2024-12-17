@@ -3573,45 +3573,60 @@ EOF
     @repo//... &> $TEST_log || fail "expected Bazel to succeed"
 }
 
-function test_cross_repo_dep_no_watch() {
+function test_cross_repo_path() {
   cat >> $(setup_module_dot_bazel) <<'EOF'
-my_repo_1 = use_repo_rule("//:repo.bzl", "my_repo_1")
-my_repo_1(name="repo_1")
-my_repo_2 = use_repo_rule("//:repo.bzl", "my_repo_2")
-my_repo_2(name="repo_2")
+data_repo = use_repo_rule("//:repo.bzl", "data_repo")
+data_repo(name="data1", data="hello")
+data_repo(name="data2", data="world")
+consuming_repo = use_repo_rule("//:repo.bzl", "consuming_repo")
+consuming_repo(name="repo", data="@data1//:data.bzl")
 EOF
   cat > repo.bzl <<'EOF'
-def _my_repo_1_impl(ctx):
+def _data_repo_impl(ctx):
   ctx.file("BUILD")
-  ctx.execute(["sleep", "3"])
-  ctx.file("data.bzl", "pi=3.14")
+  ctx.file("data.bzl", "data = " + repr(ctx.attr.data))
 
-my_repo_1 = repository_rule(_my_repo_1_impl)
+data_repo = repository_rule(
+  _data_repo_impl,
+  attrs = {
+    "data": attr.string(),
+  },
+)
 
-def _my_repo_2_impl(ctx):
+def _consuming_repo_impl(ctx):
   ctx.file("BUILD")
-  ctx.symlink(ctx.path("@repo_1//:data.bzl"), "data.bzl")
+  ctx.symlink(ctx.path(ctx.attr.data), "data1.bzl")
+  ctx.symlink(ctx.path("@data2//:data.bzl"), "data2.bzl")
 
-my_repo_2 = repository_rule(
-  _my_repo_2_impl,
+consuming_repo = repository_rule(
+  _consuming_repo_impl,
+  attrs = {
+    "data": attr.label(),
+  },
 )
 EOF
   cat > BUILD <<'EOF'
-load("@repo_2//:data.bzl", "pi")
-print("pi is", pi)
+load("@repo//:data1.bzl", data1 = "data")
+load("@repo//:data2.bzl", data2 = "data")
+print("data1: " + data1)
+print("data2: " + data2)
 EOF
 
   bazel build //:all >& $TEST_log || fail "expected Bazel to succeed"
-  expect_log "pi is 3.14"
+  expect_log "data1: hello"
+  expect_log "data2: world"
 
   bazel shutdown
   bazel build //:all >& $TEST_log || fail "expected Bazel to succeed"
-  expect_log "pi is 3.14"
+  expect_log "data1: hello"
+  expect_log "data2: world"
 
   bazel shutdown
   rm -r "$(bazel info output_base)/external/+_repo_rules+repo_1"
+  rm -r "$(bazel info output_base)/external/+_repo_rules+repo_2"
   bazel build //:all >& $TEST_log || fail "expected Bazel to succeed"
-  expect_log "pi is 3.14"
+  expect_log "data1: hello"
+  expect_log "data2: world"
 }
 
 run_suite "local repository tests"
