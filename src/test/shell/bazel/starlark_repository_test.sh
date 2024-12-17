@@ -3608,25 +3608,26 @@ EOF
   cat > BUILD <<'EOF'
 load("@repo//:data1.bzl", data1 = "data")
 load("@repo//:data2.bzl", data2 = "data")
-print("data1: " + data1)
-print("data2: " + data2)
+
+genrule(
+  name = "gen",
+  outs = ["out.txt"],
+  cmd = "echo '{} {}' > $@".format(data1, data2),
+)
 EOF
 
-  bazel build //:all >& $TEST_log || fail "expected Bazel to succeed"
-  expect_log "data1: hello"
-  expect_log "data2: world"
+  bazel build //:gen >& $TEST_log || fail "expected Bazel to succeed"
+  assert_contains "hello world" bazel-bin/out.txt
 
   bazel shutdown
-  bazel build //:all >& $TEST_log || fail "expected Bazel to succeed"
-  expect_log "data1: hello"
-  expect_log "data2: world"
+  bazel build //:gen >& $TEST_log || fail "expected Bazel to succeed"
+  assert_contains "hello world" bazel-bin/out.txt
 
   bazel shutdown
   rm -r "$(bazel info output_base)/external/+_repo_rules+repo_1"
   rm -r "$(bazel info output_base)/external/+_repo_rules+repo_2"
-  bazel build //:all >& $TEST_log || fail "expected Bazel to succeed"
-  expect_log "data1: hello"
-  expect_log "data2: world"
+  bazel build //:gen >& $TEST_log || fail "expected Bazel to succeed"
+  assert_contains "hello world" bazel-bin/out.txt
 }
 
 run_suite "local repository tests"
