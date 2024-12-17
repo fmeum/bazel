@@ -3573,4 +3573,45 @@ EOF
     @repo//... &> $TEST_log || fail "expected Bazel to succeed"
 }
 
+function test_cross_repo_dep_no_watch() {
+  cat >> $(setup_module_dot_bazel) <<'EOF'
+my_repo_1 = use_repo_rule("//:repo.bzl", "my_repo_1")
+my_repo_1(name="repo_1")
+my_repo_2 = use_repo_rule("//:repo.bzl", "my_repo_2")
+my_repo_2(name="repo_2")
+EOF
+  cat > repo.bzl <<'EOF'
+def _my_repo_1_impl(ctx):
+  ctx.file("BUILD")
+  ctx.execute(["sleep", "3"])
+  ctx.file("data.bzl", "pi=3.14")
+
+my_repo_1 = repository_rule(_my_repo_1_impl)
+
+def _my_repo_2_impl(ctx):
+  ctx.file("BUILD")
+  ctx.symlink(ctx.path("@repo_1//:data.bzl"), "data.bzl")
+
+my_repo_2 = repository_rule(
+  _my_repo_2_impl,
+)
+EOF
+  cat > BUILD <<'EOF'
+load("@repo_2//:data.bzl", "pi")
+print("pi is", pi)
+EOF
+
+  bazel build //:all >& $TEST_log || fail "expected Bazel to succeed"
+  expect_log "pi is 3.14"
+
+  bazel shutdown
+  bazel build //:all >& $TEST_log || fail "expected Bazel to succeed"
+  expect_log "pi is 3.14"
+
+  bazel shutdown
+  rm -r "$(bazel info output_base)/external/+_repo_rules+repo_1"
+  bazel build //:all >& $TEST_log || fail "expected Bazel to succeed"
+  expect_log "pi is 3.14"
+}
+
 run_suite "local repository tests"
