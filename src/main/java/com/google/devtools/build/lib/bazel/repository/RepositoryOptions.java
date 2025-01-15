@@ -18,6 +18,7 @@ import com.google.devtools.build.lib.cmdline.LabelSyntaxException;
 import com.google.devtools.build.lib.cmdline.RepositoryName;
 import com.google.devtools.build.lib.util.OptionsUtils;
 import com.google.devtools.build.lib.vfs.PathFragment;
+import com.google.devtools.common.options.BoolOrEnumConverter;
 import com.google.devtools.common.options.Converter;
 import com.google.devtools.common.options.EnumConverter;
 import com.google.devtools.common.options.Option;
@@ -245,14 +246,14 @@ public class RepositoryOptions extends OptionsBase {
 
   @Option(
       name = "ignore_dev_dependency",
-      defaultValue = "false",
+      defaultValue = "auto",
       documentationCategory = OptionDocumentationCategory.BZLMOD,
+      converter = DevDependencyConverter.class,
       effectTags = {OptionEffectTag.LOADING_AND_ANALYSIS},
       help =
-          "If true, Bazel ignores `bazel_dep` and `use_extension` declared as `dev_dependency` in "
-              + "the MODULE.bazel of the root module. Note that, those dev dependencies are always "
-              + "ignored in the MODULE.bazel if it's not the root module regardless of the value "
-              + "of this flag.")
+          "If `yes`, Bazel ignores `bazel_dep` and `use_extension` declared as `dev_dependency` in "
+              + "the MODULE.bazel of the root module. If `auto`, those dev dependencies are always "
+              + "ignored in the MODULE.bazel if it's not the root module. If `no`, all dev ")
   public boolean ignoreDevDependency;
 
   @Option(
@@ -360,6 +361,30 @@ public class RepositoryOptions extends OptionsBase {
       public Converter() {
         super(LockfileMode.class, "Lockfile mode");
       }
+    }
+  }
+
+  /** An enum for specifying whether dev dependencies will be available. */
+  public enum DevDependencyMode {
+    /** All dev dependencies of all modules are available. */
+    NO,
+    /** Only the dev dependencies of the root module are available. */
+    AUTO,
+    /** No dev dependencies are available. */
+    YES,
+  }
+
+  /**
+   * The {@link BoolOrEnumConverter} for the {@link DevDependencyMode} where YES is true and AUTO is
+   * false.
+   */
+  public static class DevDependencyConverter extends BoolOrEnumConverter<DevDependencyMode> {
+    public DevDependencyConverter() {
+      super(
+          DevDependencyMode.class,
+          "dev dependency mode",
+          DevDependencyMode.YES,
+          DevDependencyMode.AUTO);
     }
   }
 
