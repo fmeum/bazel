@@ -15,6 +15,7 @@
 package com.google.devtools.build.lib.analysis;
 
 import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableMultimap;
 import com.google.devtools.build.lib.analysis.config.BuildOptions;
 import com.google.devtools.build.lib.analysis.config.Fragment;
 import com.google.devtools.build.lib.analysis.config.RequiresOptions;
@@ -27,6 +28,7 @@ import com.google.devtools.build.lib.util.RegexFilter;
 import java.util.Collection;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 /** A configuration fragment describing the current platform configuration. */
 @ThreadSafety.Immutable
@@ -36,7 +38,8 @@ public class PlatformConfiguration extends Fragment implements PlatformConfigura
   private final ImmutableList<String> extraExecutionPlatforms;
   private final Label targetPlatform;
   private final ImmutableList<String> extraToolchains;
-  private final List<Map.Entry<RegexFilter, List<Label>>> targetFilterToAdditionalExecConstraints;
+  private final List<Map.Entry<RegexFilter, List<PlatformOptions.LabelAndExecGroup>>>
+      targetFilterToAdditionalExecConstraints;
   private final RegexFilter toolchainResolutionDebugRegexFilter;
 
   public PlatformConfiguration(BuildOptions options) {
@@ -103,15 +106,19 @@ public class PlatformConfiguration extends Fragment implements PlatformConfigura
   }
 
   /**
-   * Returns a list of labels referring to additional constraint value targets which should be taken
-   * into account when resolving the toolchains/execution platform for the target with the given
-   * label.
+   * Returns a list of labels per exec group referring to additional constraint value targets which
+   * should be taken into account when resolving the toolchains/execution platform for the target
+   * with the given label.
    */
-  public List<Label> getAdditionalExecutionConstraintsFor(Label label) {
-    ImmutableList.Builder<Label> constraints = ImmutableList.builder();
-    for (Map.Entry<RegexFilter, List<Label>> filter : targetFilterToAdditionalExecConstraints) {
+  public ImmutableMultimap<Optional<String>, Label> getAdditionalExecutionConstraintsFor(
+      Label label) {
+    ImmutableMultimap.Builder<Optional<String>, Label> constraints = ImmutableMultimap.builder();
+    for (Map.Entry<RegexFilter, List<PlatformOptions.LabelAndExecGroup>> filter :
+        targetFilterToAdditionalExecConstraints) {
       if (filter.getKey().isIncluded(label.getCanonicalForm())) {
-        constraints.addAll(filter.getValue());
+        for (PlatformOptions.LabelAndExecGroup constraint : filter.getValue()) {
+          constraints.put(Optional.ofNullable(constraint.execGroup()), constraint.label());
+        }
       }
     }
     return constraints.build();

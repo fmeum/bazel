@@ -255,7 +255,7 @@ public class CoreOptionConverters {
     }
   }
 
-  private static Label convertOptionsLabel(String input, @Nullable Object conversionContext)
+  public static Label convertOptionsLabel(String input, @Nullable Object conversionContext)
       throws OptionsParsingException {
     try {
       if (conversionContext instanceof Label.PackageContext) {

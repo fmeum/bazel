@@ -16,6 +16,7 @@ package com.google.devtools.build.lib.analysis;
 
 import static com.google.common.collect.ImmutableList.toImmutableList;
 
+import com.google.common.base.Splitter;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Iterables;
@@ -39,6 +40,7 @@ import com.google.devtools.common.options.OptionsParsingException;
 import java.util.List;
 import java.util.Map;
 import javax.annotation.Nullable;
+import net.starlark.java.syntax.Identifier;
 
 /** Command-line options for platform-related configuration. */
 public class PlatformOptions extends FragmentOptions {
@@ -156,9 +158,12 @@ public class PlatformOptions extends FragmentOptions {
               + "workspace root).")
   public PlatformMappingKey platformMappingKey;
 
+  /** A {@link Label}, possibly with an exec group name. */
+  record LabelAndExecGroup(Label label, @Nullable String execGroup) {}
+
   @Option(
       name = "experimental_add_exec_constraints_to_targets",
-      converter = RegexFilterToLabelListConverter.class,
+      converter = RegexFilterToLabelAndExecGroupListConverter.class,
       defaultValue = "null",
       documentationCategory = OptionDocumentationCategory.TOOLCHAIN,
       effectTags = OptionEffectTag.LOADING_AND_ANALYSIS,
@@ -168,10 +173,14 @@ public class PlatformOptions extends FragmentOptions {
               + " expression), assigned (=) to a list of comma-separated constraint value targets."
               + " If a target matches no negative expression and at least one positive expression"
               + " its toolchain resolution will be performed as if it had declared the constraint"
-              + " values as execution constraints. Example: //demo,-test=@platforms//cpus:x86_64"
-              + " will add 'x86_64' to any target under //demo except for those whose name contains"
-              + " 'test'.")
-  public List<Map.Entry<RegexFilter, List<Label>>> targetFilterToAdditionalExecConstraints;
+              + " values as execution constraints. Constraints that are prefixed with the name of"
+              + " an exec group and a period apply to that exec group (if it exists), otherwise to"
+              + " the default exec group. Example: //demo,-test=@platforms//cpus:x86_64 will add"
+              + " 'x86_64' to the default exec group of any target under //demo except for those"
+              + " whose name contains 'test', whereas //win=test.@platforms//os:windows will add"
+              + " the 'windows' constraint to the 'test' exec group of any target under //win.")
+  public List<Map.Entry<RegexFilter, List<LabelAndExecGroup>>>
+      targetFilterToAdditionalExecConstraints;
 
   /**
    * Deduplicate the given list, keeping the last copy of any duplicates.
@@ -262,20 +271,47 @@ public class PlatformOptions extends FragmentOptions {
     }
   }
 
-  /** Converter of filter to label list valued flags. */
-  public static final class RegexFilterToLabelListConverter
-      extends Converters.AssignmentToListOfValuesConverter<RegexFilter, Label> {
+  /** Converter for a build target label optionally prefixed with an exec group name. */
+  public static final class LabelAndExecGroupConverter implements Converter<LabelAndExecGroup> {
+    @Override
+    public LabelAndExecGroup convert(String input, @Nullable Object conversionContext)
+        throws OptionsParsingException {
+      if (input.startsWith("//") || input.startsWith("@")) {
+        return new LabelAndExecGroup(
+            CoreOptionConverters.convertOptionsLabel(input, conversionContext),
+            /* execGroup= */ null);
+      }
+      List<String> parts = Splitter.on('.').limit(2).splitToList(input);
+      if (parts.size() != 2 || !Identifier.isValid(parts.getFirst())) {
+        throw new OptionsParsingException(
+            "Expected either an absolute label or an absolute label prefixed with an exec group name and a period, got '%s'."
+                .formatted(input));
+      }
+      return new LabelAndExecGroup(
+          CoreOptionConverters.convertOptionsLabel(parts.getLast(), conversionContext),
+          parts.getFirst());
+    }
 
-    public RegexFilterToLabelListConverter() {
+    @Override
+    public String getTypeDescription() {
+      return "a build target label, optionally prefixed with '<exec group>.'";
+    }
+  }
+
+  /** Converter of filter to label (perhaps prefixed with an exec group) list valued flags. */
+  public static final class RegexFilterToLabelAndExecGroupListConverter
+      extends Converters.AssignmentToListOfValuesConverter<RegexFilter, LabelAndExecGroup> {
+
+    public RegexFilterToLabelAndExecGroupListConverter() {
       super(
           new RegexFilter.RegexFilterConverter(),
-          new CoreOptionConverters.LabelConverter(),
+          new LabelAndExecGroupConverter(),
           AllowEmptyKeys.NO);
     }
 
     @Override
     public String getTypeDescription() {
-      return "a '<RegexFilter>=<label1>[,<label2>,...]' assignment";
+      return "a '<RegexFilter>=[<exec group>.]<label1>[,[<exec group>.]<label2>,...]' assignment";
     }
   }
 }

@@ -33,6 +33,7 @@ import com.google.devtools.build.lib.packages.RuleClass;
 import com.google.devtools.build.lib.packages.Target;
 import com.google.devtools.build.lib.skyframe.config.BuildConfigurationKey;
 import java.util.List;
+import java.util.Optional;
 import javax.annotation.Nullable;
 
 /** Utility methods for toolchain context creation. */
@@ -162,7 +163,9 @@ public final class ToolchainContextUtil {
     }
 
     execConstraintLabels.addAll(
-        platformConfiguration.getAdditionalExecutionConstraintsFor(rule.getLabel()));
+        platformConfiguration
+            .getAdditionalExecutionConstraintsFor(rule.getLabel())
+            .get(Optional.empty()));
 
     return execConstraintLabels.build();
   }
@@ -182,6 +185,12 @@ public final class ToolchainContextUtil {
     }
     NonconfigurableAttributeMapper mapper = NonconfigurableAttributeMapper.of(rule);
     ImmutableMultimap.Builder<String, Label> execGroupConstraints = ImmutableMultimap.builder();
+    platformConfiguration.getAdditionalExecutionConstraintsFor(rule.getLabel()).entries().stream()
+        .filter(entry -> entry.getKey().isPresent())
+        .forEach(
+            entry -> {
+              execGroupConstraints.put(entry.getKey().get(), entry.getValue());
+            });
 
     var packageContext =
         Label.PackageContext.of(

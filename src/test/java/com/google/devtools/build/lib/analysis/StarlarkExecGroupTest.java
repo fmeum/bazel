@@ -602,6 +602,39 @@ public class StarlarkExecGroupTest extends BuildViewTestCase {
   }
 
   @Test
+  public void testSetExecGroupExecPropertyViaFlag() throws Exception {
+    createToolchainsAndPlatforms();
+    writeRuleWithActionsAndWatermelonExecGroup();
+
+    scratch.file(
+        "test/BUILD",
+        """
+        load("//test:defs.bzl", "with_actions")
+
+        with_actions(
+            name = "papaya",
+            exec_properties = {
+                "color": "orange",
+                "ripeness": "ripe",
+                "watermelon.color": "pink",
+                "watermelon.season": "summer",
+            },
+            output = "out.txt",
+            watermelon_output = "watermelon_out.txt",
+        )
+        """);
+
+    useConfiguration("--experimental_add_exec_constraints_to_targets=");
+    ConfiguredTarget target = getConfiguredTarget("//test:papaya");
+
+    assertThat(
+            getGeneratingAction(target, "test/watermelon_out.txt").getOwner().getExecProperties())
+        .containsExactly("color", "pink", "season", "summer", "ripeness", "ripe");
+    assertThat(getGeneratingAction(target, "test/out.txt").getOwner().getExecProperties())
+        .containsExactly("color", "orange", "ripeness", "ripe");
+  }
+
+  @Test
   public void testSetUnknownExecGroup() throws Exception {
     createToolchainsAndPlatforms();
     writeRuleWithActionsAndWatermelonExecGroup();
@@ -872,6 +905,186 @@ public class StarlarkExecGroupTest extends BuildViewTestCase {
         "--extra_toolchains=//toolchain:target_target_toolchain,//toolchain:exec_target_toolchain",
         "--platforms=//platform:target_platform",
         "--extra_execution_platforms=//platform:target_platform,//platform:fast_cpu_platform,//platform:gpu_platform");
+
+    ConfiguredTarget target = getConfiguredTarget("//test:my_test");
+
+    Provider.Key key =
+        new StarlarkProvider.Key(keyForBuild(Label.parseCanonical("//test:defs.bzl")), "MyInfo");
+    Label toolchainLabel = (Label) ((StructImpl) target.get(key)).getValue("toolchain_label");
+    assertThat(toolchainLabel).isEqualTo(Label.parseCanonicalUnchecked("//toolchain:exec_target"));
+
+    Action compileAction = getGeneratingAction(target, "test/my_test");
+    assertThat(compileAction.getExecutionPlatform().label())
+        .isEqualTo(Label.parseCanonicalUnchecked("//platform:fast_cpu_platform"));
+    assertThat(compileAction.getExecProperties()).containsExactly("require_fast_cpu", "true");
+
+    Action testAction =
+        getActions("//test:my_test").stream()
+            .filter(action -> action.getMnemonic().equals("TestRunner"))
+            .findFirst()
+            .orElseThrow();
+    assertThat(testAction.getExecutionPlatform().label())
+        .isEqualTo(Label.parseCanonicalUnchecked("//platform:gpu_platform"));
+    assertThat(testAction.getExecProperties()).containsExactly("require_gpu", "true");
+  }
+
+  @Test
+  public void testRuleExecGroupViaFlag() throws Exception {
+    scratch.file(
+        "rule/my_toolchain.bzl",
+        """
+        def _impl(ctx):
+            return [platform_common.ToolchainInfo(label = ctx.label)]
+
+        my_toolchain = rule(
+            implementation = _impl,
+        )
+        """);
+    scratch.file(
+        "rule/BUILD",
+        """
+        toolchain_type(name = "toolchain_type")
+        """);
+    scratch.file(
+        "toolchain/BUILD",
+        """
+        load("//rule:my_toolchain.bzl", "my_toolchain")
+
+        my_toolchain(
+            name = "target_target",
+        )
+
+        toolchain(
+            name = "target_target_toolchain",
+            exec_compatible_with = ["CONSTRAINTS_PACKAGE_ROOTos:linux"],
+            target_compatible_with = ["CONSTRAINTS_PACKAGE_ROOTos:linux"],
+            toolchain = ":target_target",
+            toolchain_type = "//rule:toolchain_type",
+        )
+
+        my_toolchain(
+            name = "exec_target",
+        )
+
+        toolchain(
+            name = "exec_target_toolchain",
+            exec_compatible_with = ["CONSTRAINTS_PACKAGE_ROOTos:macos"],
+            target_compatible_with = ["CONSTRAINTS_PACKAGE_ROOTos:linux"],
+            toolchain = ":exec_target",
+            toolchain_type = "//rule:toolchain_type",
+        )
+        """
+            .replace("CONSTRAINTS_PACKAGE_ROOT", TestConstants.CONSTRAINTS_PACKAGE_ROOT));
+
+    scratch.overwriteFile(
+        "platform/BUILD",
+        """
+        constraint_setting(
+            name = "fast_cpu",
+            default_constraint_value = ":no_fast_cpu",
+        )
+
+        constraint_value(
+            name = "no_fast_cpu",
+            constraint_setting = ":fast_cpu",
+        )
+
+        constraint_value(
+            name = "has_fast_cpu",
+            constraint_setting = ":fast_cpu",
+        )
+
+        constraint_setting(
+            name = "gpu",
+            default_constraint_value = ":no_gpu",
+        )
+
+        constraint_value(
+            name = "no_gpu",
+            constraint_setting = ":gpu",
+        )
+
+        constraint_value(
+            name = "has_gpu",
+            constraint_setting = ":gpu",
+        )
+
+        platform(
+            name = "target_platform",
+            constraint_values = [
+                "CONSTRAINTS_PACKAGE_ROOTos:linux",
+            ],
+        )
+
+        platform(
+            name = "fast_cpu_platform",
+            constraint_values = [
+                "CONSTRAINTS_PACKAGE_ROOTos:macos",
+                ":has_fast_cpu",
+            ],
+            exec_properties = {
+                "require_fast_cpu": "true",
+            },
+        )
+
+        platform(
+            name = "gpu_platform",
+            constraint_values = [
+                "CONSTRAINTS_PACKAGE_ROOTos:linux",
+                ":has_gpu",
+            ],
+            exec_properties = {
+                "require_gpu": "true",
+            },
+        )
+        """
+            .replace("CONSTRAINTS_PACKAGE_ROOT", TestConstants.CONSTRAINTS_PACKAGE_ROOT));
+
+    scratch.file(
+        "test/defs.bzl",
+        """
+        MyInfo = provider(fields = ["toolchain_label"])
+
+        def _impl(ctx):
+            executable = ctx.actions.declare_file(ctx.label.name)
+            ctx.actions.run_shell(
+                outputs = [executable],
+                command = "touch $1",
+                arguments = [executable.path],
+            )
+            return [
+                DefaultInfo(
+                    executable = executable,
+                ),
+                MyInfo(
+                    toolchain_label = ctx.toolchains["//rule:toolchain_type"].label,
+                ),
+            ]
+
+        my_cc_test = rule(
+            implementation = _impl,
+            test = True,
+            toolchains = ["//rule:toolchain_type"],
+        )
+        """);
+
+    scratch.file(
+        "test/BUILD",
+        """
+        load("//test:defs.bzl", "my_cc_test")
+
+        my_cc_test(
+            name = "my_test",
+        )
+        """);
+
+    useConfiguration(
+        "--extra_toolchains=//toolchain:target_target_toolchain,//toolchain:exec_target_toolchain",
+        "--platforms=//platform:target_platform",
+        "--extra_execution_platforms=//platform:target_platform,//platform:fast_cpu_platform,//platform:gpu_platform",
+        "--experimental_add_exec_constraints_to_targets='\\.test'=//platform:has_fast_cpu",
+        "--experimental_add_exec_constraints_to_targets='\\.test'=does_not_exist.//platform:does_not_exist",
+        "--experimental_add_exec_constraints_to_targets='\\.test'=test.//platform:has_gpu");
 
     ConfiguredTarget target = getConfiguredTarget("//test:my_test");
 
