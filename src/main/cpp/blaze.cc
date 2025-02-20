@@ -432,6 +432,10 @@ static vector<string> GetServerExeArgs(const blaze_util::Path &jvm_path,
   // https://github.com/openjdk/jdk/blob/2faf8b8d582183275b1fdc92313a1c63c1753e80/src/java.base/share/classes/sun/nio/fs/AbstractWatchKey.java#L40
   result.push_back("-Djdk.nio.file.WatchService.maxEventsPerPoll=10000");
 
+  // Allow the usage of the @Contended annotation to reduce false sharing in
+  // concurrent data structures.
+  result.push_back("-XX:-RestrictContended");
+
 #if defined(_WIN32)
   // See and use more than 64 CPUs on Windows.
   // https://bugs.openjdk.org/browse/JDK-6942632

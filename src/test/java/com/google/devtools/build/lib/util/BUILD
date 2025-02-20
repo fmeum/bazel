@@ -1,4 +1,4 @@
-load("@rules_java//java:defs.bzl", "java_library", "java_test")
+load("@rules_java//java:defs.bzl", "java_library", "java_plugin", "java_test")
 
 package(
     default_applicable_licenses = ["//:license"],
@@ -28,6 +28,7 @@ java_test(
             "ResourceFileLoaderTest.java",
             "HeapOffsetHelperTest.java",
             "StringEncodingTest.java",
+            "InMemoryPipeTest.java",
         ],
     ),
     tags = [
@@ -192,5 +193,32 @@ java_test(
         "//third_party:junit4",
         "//third_party:truth",
         "@maven//:com_google_testparameterinjector_test_parameter_injector",
+    ],
+)
+
+java_test(
+    name = "InMemoryPipeTest",
+    timeout = "short",
+    srcs = ["InMemoryPipeTest.java"],
+    jvm_flags = [
+        "-XX:-RestrictContended",
+    ],
+    deps = [
+        "//src/main/java/com/google/devtools/build/lib/util:in_memory_pipe",
+        "//third_party:guava",
+        "//third_party:junit4",
+    ],
+)
+
+java_test(
+    name = "InMemoryPipeBenchmark",
+    srcs = ["InMemoryPipeBenchmark.java"],
+    jvm_flags = [
+        "-XX:-RestrictContended",
+    ],
+    main_class = "org.openjdk.jmh.Main",
+    deps = [
+        "//src/main/java/com/google/devtools/build/lib/util:in_memory_pipe",
+        "//third_party:jmh",
     ],
 )

@@ -486,3 +486,11 @@ java_library(
     name = "cleaner",
     srcs = ["BazelCleaner.java"],
 )
+
+java_library(
+    name = "in_memory_pipe",
+    srcs = ["InMemoryPipe.java"],
+    add_exports = [
+        "java.base/jdk.internal.vm.annotation",
+    ],
+)
