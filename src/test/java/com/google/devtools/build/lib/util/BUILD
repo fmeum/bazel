@@ -202,6 +202,7 @@ java_test(
     srcs = ["InMemoryPipeTest.java"],
     jvm_flags = [
         "-XX:-RestrictContended",
+        "-Djdk.tracePinnedThreads=full",
     ],
     deps = [
         "//src/main/java/com/google/devtools/build/lib/util:in_memory_pipe",

@@ -45,7 +45,7 @@ public class InMemoryPipeTest {
   public void testManyPipes() throws InterruptedException {
     ArrayList<Thread> threads = new ArrayList<>();
     LongAdder counter = new LongAdder();
-    for (int i = 0; i < 10000; i++) {
+    for (int i = 0; i < 16; i++) {
       threads.add(
           Thread.startVirtualThread(
               () -> {

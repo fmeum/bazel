@@ -99,23 +99,23 @@ public class InMemoryPipe {
 
   // Wait for the other end of the pipe to catch up.
   private boolean waitForOtherEndOrClose(Object blocker) {
-    return switch ((Object) PARKED_THREAD.compareAndExchange(this, null, Thread.currentThread())) {
-      case Thread thread -> {
-        // The other end of the pipe is parked, which means that it made progress, and thus we don't
-        // need to park. Also, unpark the other end as we are about to make progress.
-        LockSupport.unpark(thread);
-        yield false;
-      }
-      case null -> {
-        // The other end of the pipe isn't parked, so we can park.
-        LockSupport.park(blocker);
-        // Since only a single thread is blocked at any given time, the only way for parkedThread
-        // not to be us is if the pipe was closed.
-        yield !PARKED_THREAD.compareAndSet(this, Thread.currentThread(), null);
-      }
+    Object previouslyParked =
+        (Object) PARKED_THREAD.compareAndExchange(this, null, Thread.currentThread());
+    if (previouslyParked instanceof Thread thread) {
+      // The other end of the pipe is parked, which means that it made progress, and thus we don't
+      // need to park. Also, unpark the other end as we are about to make progress.
+      LockSupport.unpark(thread);
+      return false;
+    }
+    if (previouslyParked != null) {
       // The other end of the pipe is closed.
-      default -> true;
-    };
+      return true;
+    }
+    // The other end of the pipe isn't parked, so we can park.
+    LockSupport.park(blocker);
+    // Since only a single thread is blocked at any given time, the only way for parkedThread
+    // not to be us is if the pipe was closed.
+    return !PARKED_THREAD.compareAndSet(this, Thread.currentThread(), null);
   }
 
   private void notifyClosed() {

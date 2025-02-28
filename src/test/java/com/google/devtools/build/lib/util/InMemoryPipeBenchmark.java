@@ -76,7 +76,7 @@ public class InMemoryPipeBenchmark {
   }
 
   @Benchmark
-  public byte[] legacyPipe() throws InterruptedException {
+  public void legacyPipe(Blackhole blackhole) throws InterruptedException {
     for (int i = 0; i < 10; i++) {
       Thread.startVirtualThread(
               () -> {
