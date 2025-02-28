@@ -20,15 +20,20 @@ import java.lang.invoke.MethodHandles;
 import java.lang.invoke.VarHandle;
 import java.util.Objects;
 import java.util.concurrent.locks.LockSupport;
+import javax.annotation.Nullable;
 import jdk.internal.vm.annotation.Contended;
 
+/**
+ * A drop-in replacement for {@link java.io.PipedInputStream}/{@link java.io.PipedOutputStream} that
+ * doesn't use {@code synchronized} to <a href="https://bugs.openjdk.org/browse/JDK-8337395">avoid
+ * deadlocks when used with virtual threads</a>.
+ */
 public class InMemoryPipe {
+  private static final Object CLOSED_SENTINEL = new Object();
+
   private final byte[] buffer;
   private final int capacity;
   private final long mask;
-
-  private volatile boolean closedForWrite;
-  private volatile boolean closedForRead;
 
   // Invariants:
   // * writePos and readPos increase monotonically.
@@ -36,18 +41,21 @@ public class InMemoryPipe {
   // * writePos - readPos <= capacity at all times.
   // * writePos is only modified by the thread that owns the OutPipe.
   // * readPos is only modified by the thread that owns the InPipe.
+  // * parkedThread is one of:
+  //   * CLOSED_SENTINEL: the pipe is closed.
+  //   * Thread: the thread that is parked.
+  //   * null: no thread is parked.
+  // * parkedThread is only updated through CAS to ensure that at most a single thread is parked at
+  //   any given time.
 
-  // Only accessed via VarHandles.
+  // All mutable variables are only accessed via VarHandles.
   @Contended("reader")
   private long readPos = 0;
 
-  // Only accessed via VarHandles.
   @Contended("writer")
   private long writePos = 0;
 
-  // Only accessed via VarHandles.
-  private Object /* Thread or CLOSED_SENTINEL */ parkedThread;
-  private static final Object CLOSED_SENTINEL = new Object();
+  @Nullable private Object parkedThread;
 
   private static final VarHandle READ_POS;
   private static final VarHandle WRITE_POS;
@@ -93,7 +101,7 @@ public class InMemoryPipe {
   private boolean waitForOtherEndOrClose(Object blocker) {
     return switch ((Object) PARKED_THREAD.compareAndExchange(this, null, Thread.currentThread())) {
       case Thread thread -> {
-        // The other end of the pipe is parked, which means that it made progress and thus we don't
+        // The other end of the pipe is parked, which means that it made progress, and thus we don't
         // need to park. Also, unpark the other end as we are about to make progress.
         LockSupport.unpark(thread);
         yield false;
@@ -236,9 +244,6 @@ public class InMemoryPipe {
     public void write(byte[] b, int off, int len) throws IOException {
       Objects.requireNonNull(b);
       Objects.checkFromIndexSize(off, len, b.length);
-      if (closedForWrite) {
-        throw new IOException("Pipe closed for writing");
-      }
       if (len == 0) {
         return;
       }
@@ -272,7 +277,7 @@ public class InMemoryPipe {
         }
 
         if (waitForOtherEndOrClose(this)) {
-          throw new IOException("Pipe closed for reading");
+          throw new IOException("Pipe closed");
         }
       }
     }

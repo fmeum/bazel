@@ -21,8 +21,10 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.io.PipedInputStream;
 import java.io.PipedOutputStream;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.atomic.LongAdder;
 import java.util.random.RandomGenerator;
 import java.util.random.RandomGeneratorFactory;
 import org.junit.Test;
@@ -33,11 +35,80 @@ import org.junit.runners.JUnit4;
 public class InMemoryPipeTest {
   private static final long SEED = 987654321L;
   private static final int REPETITIONS = 100;
-  private static final int OPS = 100;
+  private static final int OPS = 1000;
   private static final int CAPACITY = 64;
 
   private static final RandomGeneratorFactory<? extends RandomGenerator.JumpableGenerator> factory =
       RandomGeneratorFactory.of("Xoroshiro128PlusPlus");
+
+  @Test
+  public void testManyPipes() throws InterruptedException {
+    ArrayList<Thread> threads = new ArrayList<>();
+    LongAdder counter = new LongAdder();
+    for (int i = 0; i < 10000; i++) {
+      threads.add(
+          Thread.startVirtualThread(
+              () -> {
+                InMemoryPipe pipe = new InMemoryPipe(CAPACITY);
+                try {
+                  counter.add(
+                      readThroughPipe(
+                              pipe.out(),
+                              out -> {
+                                for (int j = 0; j < 1000; j++) {
+                                  out.write(j);
+                                }
+                              },
+                              pipe.in(),
+                              InputStream::readAllBytes)
+                          .length);
+                } catch (IOException | InterruptedException e) {
+                  throw new IllegalStateException(e);
+                }
+              }));
+    }
+    for (Thread thread : threads) {
+      thread.join();
+    }
+    if (counter.sum() == 0) {
+      fail("Expected non-zero sum");
+    }
+  }
+
+  @Test
+  public void testManyLegacyPipes() throws InterruptedException {
+    ArrayList<Thread> threads = new ArrayList<>();
+    LongAdder counter = new LongAdder();
+    for (int i = 0; i < 10000; i++) {
+      threads.add(
+          Thread.startVirtualThread(
+              () -> {
+                try {
+                  PipedInputStream legacyIn = new PipedInputStream(CAPACITY);
+                  PipedOutputStream legacyOut = new PipedOutputStream(legacyIn);
+                  counter.add(
+                      readThroughPipe(
+                              legacyOut,
+                              out -> {
+                                for (int j = 0; j < 1000; j++) {
+                                  out.write(j);
+                                }
+                              },
+                              legacyIn,
+                              InputStream::readAllBytes)
+                          .length);
+                } catch (IOException | InterruptedException e) {
+                  throw new IllegalStateException(e);
+                }
+              }));
+    }
+    for (Thread thread : threads) {
+      thread.join();
+    }
+    if (counter.sum() == 0) {
+      fail("Expected non-zero sum");
+    }
+  }
 
   @Test
   public void stressTestWrite() throws IOException, InterruptedException {
@@ -52,7 +123,7 @@ public class InMemoryPipeTest {
               pipe.in(),
               InputStream::readAllBytes);
 
-      var legacyIn = new PipedInputStream();
+      var legacyIn = new PipedInputStream(CAPACITY);
       var legacyOut = new PipedOutputStream(legacyIn);
       byte[] expectedResult =
           readThroughPipe(
@@ -112,6 +183,20 @@ public class InMemoryPipeTest {
         out.write(buffer, offset, length);
       } else {
         out.write(buffer[rng.nextInt(buffer.length)]);
+      }
+    }
+  }
+
+  private static void runReadOps(InputStream out, int ops, RandomGenerator rng) throws IOException {
+    byte[] buffer = new byte[2 * CAPACITY];
+    rng.nextBytes(buffer);
+    for (int i = 0; i < ops; i++) {
+      switch (rng.nextInt(3)) {
+        case 0 -> {
+          int length = rng.nextInt(buffer.length);
+          int offset = rng.nextInt(buffer.length - length);
+          out.read(buffer, offset, length);
+        }
       }
     }
   }

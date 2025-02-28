@@ -15,6 +15,7 @@ import org.openjdk.jmh.annotations.Param;
 import org.openjdk.jmh.annotations.Scope;
 import org.openjdk.jmh.annotations.Setup;
 import org.openjdk.jmh.annotations.State;
+import org.openjdk.jmh.infra.Blackhole;
 
 @BenchmarkMode(Mode.Throughput)
 @State(Scope.Benchmark)
@@ -59,15 +60,35 @@ public class InMemoryPipeBenchmark {
   }
 
   @Benchmark
-  public byte[] inMemoryPipe() throws IOException, InterruptedException {
-    var pipe = new InMemoryPipe(bufferSize);
-    return readThroughPipe(pipe.in(), pipe.out());
+  public void inMemoryPipe(Blackhole blackhole) throws InterruptedException {
+    for (int i = 0; i < 10; i++) {
+      Thread.startVirtualThread(
+              () -> {
+                var pipe = new InMemoryPipe(bufferSize);
+                try {
+                  blackhole.consume(readThroughPipe(pipe.in(), pipe.out()));
+                } catch (IOException | InterruptedException e) {
+                  throw new IllegalStateException(e);
+                }
+              })
+          .join();
+    }
   }
 
   @Benchmark
-  public byte[] legacyPipe() throws IOException, InterruptedException {
-    var in = new PipedInputStream(bufferSize);
-    var out = new PipedOutputStream(in);
-    return readThroughPipe(in, out);
+  public byte[] legacyPipe() throws InterruptedException {
+    for (int i = 0; i < 10; i++) {
+      Thread.startVirtualThread(
+              () -> {
+                try {
+                  var in = new PipedInputStream(bufferSize);
+                  var out = new PipedOutputStream(in);
+                  blackhole.consume(readThroughPipe(in, out));
+                } catch (IOException | InterruptedException e) {
+                  throw new IllegalStateException(e);
+                }
+              })
+          .join();
+    }
   }
 }

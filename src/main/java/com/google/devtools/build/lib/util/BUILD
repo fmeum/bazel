@@ -493,4 +493,7 @@ java_library(
     add_exports = [
         "java.base/jdk.internal.vm.annotation",
     ],
+    deps = [
+        "//third_party:jsr305",
+    ],
 )
