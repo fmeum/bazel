@@ -163,6 +163,7 @@ public class ExtraActionTest extends FoundationTestCase {
                 actionKeyContext,
                 /* outputMetadataStore= */ null,
                 /* rewindingEnabled= */ false,
+                /* wasRewound= */ false,
                 LostInputsCheck.NONE,
                 /* fileOutErr= */ null,
                 /* eventHandler= */ null,

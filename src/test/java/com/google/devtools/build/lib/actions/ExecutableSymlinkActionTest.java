@@ -76,6 +76,7 @@ public class ExecutableSymlinkActionTest {
         actionKeyContext,
         mock(OutputMetadataStore.class),
         /* rewindingEnabled= */ false,
+        /* wasRewound= */ false,
         LostInputsCheck.NONE,
         outErr,
         /* eventHandler= */ null,

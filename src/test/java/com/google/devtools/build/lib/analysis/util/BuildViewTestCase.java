@@ -2424,6 +2424,7 @@ public abstract class BuildViewTestCase extends FoundationTestCase {
           actionKeyContext,
           /* outputMetadataStore= */ null,
           /* rewindingEnabled= */ false,
+          /* wasRewound= */ false,
           LostInputsCheck.NONE,
           actionLogBufferPathGenerator.generate(ArtifactPathResolver.IDENTITY),
           reporter,

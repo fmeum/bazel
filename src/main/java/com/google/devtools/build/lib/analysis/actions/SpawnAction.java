@@ -331,7 +331,7 @@ public class SpawnAction extends AbstractAction implements CommandAction {
         /* filesetMappings= */ ImmutableMap.of(),
         /* reportOutputs= */ true,
         PathMapper.NOOP,
-        actionExecutionContext.wasRewound());
+        /* wasRewound= */ false);
   }
 
   /**

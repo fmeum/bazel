@@ -1005,6 +1005,39 @@ public class RemoteExecutionService {
     }
   }
 
+  private void carefullyMoveOutputsToFinalLocation(
+      Collection<FileMetadata> files, Iterable<Path> localOutputs, Map<Path, Path> realToTmpPath)
+      throws IOException {
+    var localOutputsSet = ImmutableSet.copyOf(localOutputs);
+    for (var file : files) {
+      Path realPath = file.path();
+      if (!localOutputsSet.contains(realPath)) {
+        continue;
+      }
+      Path tmpPath = Preconditions.checkNotNull(realToTmpPath.get(realPath));
+      realPath.createDirectoryAndParents();
+      // For declared files, Bazel doesn't distinguish between regular files and symlinks which
+      // resolve to regular files.
+      var stat = realPath.statNullable(Symlinks.FOLLOW);
+      if (stat == null) {
+        tmpPath.renameTo(realPath);
+        continue;
+      }
+      if (!stat.isFile()) {
+        // Can't be a symlink since we follow them.
+        throw new IOException(
+            "Output %s non-deterministically changed its type from directory to file"
+                .formatted(realPath));
+      }
+      var oldDigest = digestUtil.compute(realPath, stat);
+      if (!oldDigest.equals(file.digest())) {
+        throw new IOException(
+            "Output %s non-deterministically changed its content: %s -> %s"
+                .formatted(realPath, oldDigest, file.digest()));
+      }
+    }
+  }
+
   private void createSymlinks(Iterable<SymlinkMetadata> symlinks) throws IOException {
     for (SymlinkMetadata symlink : symlinks) {
       Preconditions.checkNotNull(
@@ -1450,8 +1483,12 @@ public class RemoteExecutionService {
       // TODO(chiwang): Stage directories directly
       ((BazelOutputService) outputService).stageArtifacts(finishedDownloads);
     } else {
-      moveOutputsToFinalLocation(
-          Iterables.transform(finishedDownloads, FileMetadata::path), realToTmpPath);
+      var localOutputs = Iterables.transform(finishedDownloads, FileMetadata::path);
+      if (action.getSpawnExecutionContext().wasRewound()) {
+        carefullyMoveOutputsToFinalLocation(metadata.files(), localOutputs, realToTmpPath);
+      } else {
+        moveOutputsToFinalLocation(localOutputs, realToTmpPath);
+      }
     }
 
     List<SymlinkMetadata> symlinksInDirectories = new ArrayList<>();

@@ -108,6 +108,7 @@ public final class StarlarkActionWithShadowedActionTest extends BuildViewTestCas
             actionKeyContext,
             /* outputMetadataStore= */ null,
             /* rewindingEnabled= */ false,
+            /* wasRewound= */ false,
             LostInputsCheck.NONE,
             /* fileOutErr= */ null,
             /* eventHandler= */ null,

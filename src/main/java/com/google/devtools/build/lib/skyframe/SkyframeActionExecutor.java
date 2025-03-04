@@ -645,6 +645,7 @@ public final class SkyframeActionExecutor {
         actionKeyContext,
         outputMetadataStore,
         rewindingEnabled,
+        wasRewound(action),
         lostInputsCheck(actionFileSystem, action, outputService),
         fileOutErr,
         selectEventHandler(emitProgressEvents),

@@ -152,6 +152,7 @@ public final class StandaloneTestStrategyTest extends BuildViewTestCase {
           new ActionKeyContext(),
           /* outputMetadataStore= */ outputMetadataStore,
           /* rewindingEnabled= */ false,
+          /* wasRewound= */ false,
           LostInputsCheck.NONE,
           fileOutErr,
           /* eventHandler= */ null,

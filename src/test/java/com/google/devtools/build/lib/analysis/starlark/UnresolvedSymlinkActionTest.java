@@ -108,6 +108,7 @@ public class UnresolvedSymlinkActionTest extends BuildViewTestCase {
                 actionKeyContext,
                 /* outputMetadataStore= */ null,
                 /* rewindingEnabled= */ false,
+                /* wasRewound= */ false,
                 LostInputsCheck.NONE,
                 /* fileOutErr= */ null,
                 new StoredEventHandler(),

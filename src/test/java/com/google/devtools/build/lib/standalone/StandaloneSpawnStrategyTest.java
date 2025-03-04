@@ -200,6 +200,7 @@ public class StandaloneSpawnStrategyTest {
         new ActionKeyContext(),
         /* outputMetadataStore= */ null,
         /* rewindingEnabled= */ false,
+        /* wasRewound= */ false,
         LostInputsCheck.NONE,
         outErr,
         reporter,
