@@ -63,7 +63,8 @@ public final class RunfilesTreeAction extends AbstractAction {
       Path execRoot,
       ArtifactPathResolver pathResolver,
       @Nullable BulkDeleter bulkDeleter,
-      boolean cleanupArchivedArtifacts) {
+      boolean cleanupArchivedArtifacts,
+      boolean wasRewound) {
     // Runfiles trees are created as a side effect of building the output manifest, not the runfiles
     // tree artifact. This method is overridden so that depending on the runfiles tree does not
     // delete the runfiles tree that's on the file system that someone decided it must be there.

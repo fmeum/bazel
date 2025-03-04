@@ -1081,7 +1081,8 @@ public final class SkyframeActionExecutor {
                   actionExecutionContext.getExecRoot(),
                   actionExecutionContext.getPathResolver(),
                   outputService.bulkDeleter(),
-                  useArchivedTreeArtifacts(action));
+                  useArchivedTreeArtifacts(action),
+                  wasRewound(action));
             } catch (IOException e) {
               logger.atWarning().withCause(e).log(
                   "failed to delete output files before executing action: '%s'", action);

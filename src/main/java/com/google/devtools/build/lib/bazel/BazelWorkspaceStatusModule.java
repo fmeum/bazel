@@ -17,6 +17,7 @@ import static com.google.common.base.StandardSystemProperty.USER_NAME;
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static java.util.stream.Collectors.joining;
 
+import com.google.common.base.Preconditions;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
@@ -164,8 +165,11 @@ public class BazelWorkspaceStatusModule extends BlazeModule {
         Path execRoot,
         ArtifactPathResolver pathResolver,
         @Nullable BulkDeleter bulkDeleter,
-        boolean cleanupArchivedArtifacts)
+        boolean cleanupArchivedArtifacts,
+        boolean wasRewound)
         throws IOException {
+      Preconditions.checkArgument(
+          !wasRewound, "BazelWorkspaceStatusAction should never be rewound");
       // The default implementation of this method deletes all output files; override it to keep
       // the old stableStatus around. This way we can reuse the existing file (preserving its mtime)
       // if the contents haven't changed.

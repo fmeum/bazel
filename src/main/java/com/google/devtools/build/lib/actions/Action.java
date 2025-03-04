@@ -91,7 +91,8 @@ public interface Action extends ActionExecutionMetadata {
       Path execRoot,
       ArtifactPathResolver pathResolver,
       @Nullable BulkDeleter bulkDeleter,
-      boolean cleanupArchivedArtifacts)
+      boolean cleanupArchivedArtifacts,
+      boolean wasRewound)
       throws IOException, InterruptedException;
 
   /**

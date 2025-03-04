@@ -541,8 +541,12 @@ public abstract class AbstractAction extends ActionKeyComputer implements Action
       Path execRoot,
       ArtifactPathResolver pathResolver,
       @Nullable BulkDeleter bulkDeleter,
-      boolean cleanupArchivedArtifacts)
+      boolean cleanupArchivedArtifacts,
+      boolean wasRewound)
       throws IOException, InterruptedException {
+    if (wasRewound) {
+      throw new IOException("Rewinding this action is not supported with this output service");
+    }
     deleteOutputs(execRoot, pathResolver, bulkDeleter, cleanupArchivedArtifacts);
   }
 

@@ -41,6 +41,7 @@ import com.google.devtools.build.lib.actions.ActionOwner;
 import com.google.devtools.build.lib.actions.ActionResult;
 import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.actions.ArtifactExpander;
+import com.google.devtools.build.lib.actions.ArtifactPathResolver;
 import com.google.devtools.build.lib.actions.BaseSpawn;
 import com.google.devtools.build.lib.actions.CommandAction;
 import com.google.devtools.build.lib.actions.CommandLine;
@@ -79,6 +80,8 @@ import com.google.devtools.build.lib.util.DetailedExitCode;
 import com.google.devtools.build.lib.util.Fingerprint;
 import com.google.devtools.build.lib.util.OnDemandString;
 import com.google.devtools.build.lib.util.ShellEscaper;
+import com.google.devtools.build.lib.vfs.BulkDeleter;
+import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.build.lib.vfs.PathFragment;
 import com.google.errorprone.annotations.CanIgnoreReturnValue;
 import com.google.errorprone.annotations.CheckReturnValue;
@@ -86,6 +89,7 @@ import com.google.errorprone.annotations.CompileTimeConstant;
 import com.google.errorprone.annotations.ForOverride;
 import com.google.errorprone.annotations.FormatMethod;
 import com.google.errorprone.annotations.FormatString;
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
@@ -225,6 +229,21 @@ public class SpawnAction extends AbstractAction implements CommandAction {
     return executeUnconditionally();
   }
 
+  @Override
+  public void prepare(
+      Path execRoot,
+      ArtifactPathResolver pathResolver,
+      @Nullable BulkDeleter bulkDeleter,
+      boolean cleanupArchivedArtifacts,
+      boolean wasRewound)
+      throws IOException, InterruptedException {
+    // Preserve the existing outputs while rewinding this action to not interfere with downstream
+    // actions that access them.
+    if (!wasRewound) {
+      deleteOutputs(execRoot, pathResolver, bulkDeleter, cleanupArchivedArtifacts);
+    }
+  }
+
   /** Hook for subclasses to perform work before the spawn is executed. */
   protected void beforeExecute(ActionExecutionContext actionExecutionContext)
       throws ExecException {}
@@ -311,7 +330,8 @@ public class SpawnAction extends AbstractAction implements CommandAction {
         /* additionalInputs= */ ImmutableList.of(),
         /* filesetMappings= */ ImmutableMap.of(),
         /* reportOutputs= */ true,
-        PathMapper.NOOP);
+        PathMapper.NOOP,
+        actionExecutionContext.wasRewound());
   }
 
   /**
@@ -358,7 +378,8 @@ public class SpawnAction extends AbstractAction implements CommandAction {
         expandedCommandLines.getParamFiles(),
         actionExecutionContext.getTopLevelFilesets(),
         reportOutputs,
-        pathMapper);
+        pathMapper,
+        actionExecutionContext.wasRewound());
   }
 
   @ForOverride
@@ -519,7 +540,8 @@ public class SpawnAction extends AbstractAction implements CommandAction {
         Iterable<? extends ActionInput> additionalInputs,
         Map<Artifact, FilesetOutputTree> filesetMappings,
         boolean reportOutputs,
-        PathMapper pathMapper)
+        PathMapper pathMapper,
+        boolean wasRewound)
         throws CommandLineExpansionException {
       super(
           arguments,
