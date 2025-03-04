@@ -1027,13 +1027,13 @@ public class RemoteExecutionService {
         // Can't be a symlink since we follow them.
         throw new IOException(
             "Output %s non-deterministically changed its type from directory to file"
-                .formatted(realPath));
+                .formatted(realPath.relativeTo(execRoot)));
       }
       var oldDigest = digestUtil.compute(realPath, stat);
       if (!oldDigest.equals(file.digest())) {
         throw new IOException(
             "Output %s non-deterministically changed its content: %s -> %s"
-                .formatted(realPath, oldDigest, file.digest()));
+                .formatted(realPath.relativeTo(execRoot), oldDigest, file.digest()));
       }
     }
   }
