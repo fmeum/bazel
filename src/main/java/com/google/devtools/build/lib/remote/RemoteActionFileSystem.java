@@ -39,6 +39,7 @@ import com.google.devtools.build.lib.actions.FileArtifactValue;
 import com.google.devtools.build.lib.actions.FileStatusWithMetadata;
 import com.google.devtools.build.lib.actions.InputMetadataProvider;
 import com.google.devtools.build.lib.clock.Clock;
+import com.google.devtools.build.lib.remote.util.DigestUtil;
 import com.google.devtools.build.lib.skyframe.TreeArtifactValue;
 import com.google.devtools.build.lib.vfs.AbstractFileSystem;
 import com.google.devtools.build.lib.vfs.DigestHashFunction;
@@ -59,6 +60,7 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.channels.SeekableByteChannel;
 import java.time.Instant;
+import java.util.Arrays;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -307,7 +309,15 @@ public class RemoteActionFileSystem extends AbstractFileSystem
     var metadata =
         FileArtifactValue.createForRemoteFileWithMaterializationData(
             digest, size, /* locationIndex= */ 1, expirationTime);
-    remoteOutputTree.injectFile(path, metadata);
+    var oldMetadata = remoteOutputTree.injectFile(path, metadata);
+    if (oldMetadata != null && !Arrays.equals(digest, oldMetadata.getDigest())) {
+      throw new IOException(
+          "Output %s changed non-hermetically: %s -> %s"
+              .formatted(
+                  path,
+                  DigestUtil.buildDigest(oldMetadata.getDigest(), oldMetadata.getSize()),
+                  DigestUtil.buildDigest(digest, size)));
+    }
   }
 
   @Override
@@ -939,7 +949,9 @@ public class RemoteActionFileSystem extends AbstractFileSystem
       return new RemoteInMemoryFileInfo(clock);
     }
 
-    protected void injectFile(PathFragment path, FileArtifactValue metadata) throws IOException {
+    @Nullable
+    protected FileArtifactValue injectFile(PathFragment path, FileArtifactValue metadata)
+        throws IOException {
       checkArgument(metadata.isRemote(), "metadata is not remote: %s", metadata);
       createDirectoryAndParents(path.getParentDirectory());
       InMemoryContentInfo node = getOrCreateWritableInode(path);
@@ -948,7 +960,9 @@ public class RemoteActionFileSystem extends AbstractFileSystem
         throw new IOException("Could not inject into " + node);
       }
 
+      var oldMetadata = remoteInMemoryFileInfo.getMetadata();
       remoteInMemoryFileInfo.set(metadata);
+      return oldMetadata;
     }
 
     // Override for access within this class
