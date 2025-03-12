@@ -48,6 +48,7 @@ import com.google.devtools.build.lib.events.Reporter;
 import com.google.devtools.build.lib.profiler.Profiler;
 import com.google.devtools.build.lib.profiler.ProfilerTask;
 import com.google.devtools.build.lib.remote.util.AsyncTaskCache;
+import com.google.devtools.build.lib.remote.util.ConcurrentPathTrie;
 import com.google.devtools.build.lib.util.TempPathGenerator;
 import com.google.devtools.build.lib.vfs.FileSymlinkLoopException;
 import com.google.devtools.build.lib.vfs.OutputPermissions;
@@ -75,6 +76,7 @@ public abstract class AbstractActionInputPrefetcher implements ActionInputPrefet
   private final AsyncTaskCache.NoResult<Path> downloadCache = AsyncTaskCache.NoResult.create();
   private final TempPathGenerator tempPathGenerator;
   private final OutputPermissions outputPermissions;
+  private final ConcurrentPathTrie rewoundActionOutputs = new ConcurrentPathTrie();
 
   protected final Path execRoot;
   protected final RemoteOutputChecker remoteOutputChecker;
@@ -380,7 +382,9 @@ public abstract class AbstractActionInputPrefetcher implements ActionInputPrefet
       // input is known to be a non-source artifact and thus must have metadata.
       FileArtifactValue metadata =
           checkNotNull(metadataSupplier.getMetadata(input), "no metadata for %s", input);
-      if (!canDownloadFile(execRoot.getRelative(execPath), metadata)) {
+      if (!canDownloadFile(execRoot.getRelative(execPath), metadata)
+          && !(rewoundActionOutputs.contains(execPath)
+              && !execRoot.getRelative(execPath).exists())) {
         System.err.println("Skipping " + execPath + " as it isn't remote: " + metadata);
         return immediateVoidFuture();
       }
@@ -595,7 +599,7 @@ public abstract class AbstractActionInputPrefetcher implements ActionInputPrefet
               }
               return Completable.complete();
             }),
-        true);
+        rewoundActionOutputs.contains(finalPath.relativeTo(execRoot)));
   }
 
   private void finalizeDownload(
@@ -681,7 +685,7 @@ public abstract class AbstractActionInputPrefetcher implements ActionInputPrefet
               link.createSymbolicLink(target);
               return Completable.complete();
             }),
-        true);
+        rewoundActionOutputs.contains(symlink.linkExecPath()));
   }
 
   public ImmutableSet<Path> downloadedFiles() {
@@ -758,5 +762,13 @@ public abstract class AbstractActionInputPrefetcher implements ActionInputPrefet
 
   public RemoteOutputChecker getRemoteOutputChecker() {
     return remoteOutputChecker;
+  }
+
+  public void markRewoundActionOutput(Artifact output) {
+    if (output.isTreeArtifact()) {
+      rewoundActionOutputs.addPrefix(output.getExecPath());
+    } else {
+      rewoundActionOutputs.add(output.getExecPath());
+    }
   }
 }
