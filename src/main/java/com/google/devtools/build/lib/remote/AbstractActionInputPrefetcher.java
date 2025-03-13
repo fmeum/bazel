@@ -327,8 +327,6 @@ public abstract class AbstractActionInputPrefetcher implements ActionInputPrefet
       return immediateVoidFuture();
     }
 
-    System.err.println("Prefetching " + ImmutableSet.copyOf(inputs));
-
     // Collect the set of directories whose output permissions must be set at the end of this call.
     // This responsibility cannot lie with the downloading of an individual file, because multiple
     // files may be concurrently downloaded into the same directory within a single call to
@@ -388,7 +386,6 @@ public abstract class AbstractActionInputPrefetcher implements ActionInputPrefet
       FileArtifactValue metadata =
           checkNotNull(metadataSupplier.getMetadata(input), "no metadata for %s", input);
       if (!canDownloadFile(execRoot.getRelative(execPath), metadata)) {
-        System.err.println("Skipping " + execPath + " as it isn't remote: " + metadata);
         return immediateVoidFuture();
       }
 
@@ -592,7 +589,6 @@ public abstract class AbstractActionInputPrefetcher implements ActionInputPrefet
                           alreadyDeleted.set(true);
                         }));
 
-    System.err.println("Maybe downloading " + finalPath);
     return downloadCache.execute(
         finalPath,
         Completable.defer(
@@ -636,7 +632,6 @@ public abstract class AbstractActionInputPrefetcher implements ActionInputPrefet
     // for artifacts produced by local actions.
     tmpPath.chmod(outputPermissions.getPermissionsMode());
     tmpPath.renameTo(finalPath);
-    System.err.println("Downloaded " + finalPath);
 
     // Set the contents proxy when supported, to make future modification checks cheaper.
     metadata.setContentsProxy(FileContentsProxy.create(finalPath.stat()));
