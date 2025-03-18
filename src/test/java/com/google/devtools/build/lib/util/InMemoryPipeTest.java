@@ -45,27 +45,28 @@ public class InMemoryPipeTest {
   public void testManyPipes() throws InterruptedException {
     ArrayList<Thread> threads = new ArrayList<>();
     LongAdder counter = new LongAdder();
-    for (int i = 0; i < 16; i++) {
+    for (int i = 0; i < 1000; i++) {
       threads.add(
-          Thread.startVirtualThread(
-              () -> {
-                InMemoryPipe pipe = new InMemoryPipe(CAPACITY);
-                try {
-                  counter.add(
-                      readThroughPipe(
-                              pipe.out(),
-                              out -> {
-                                for (int j = 0; j < 1000; j++) {
-                                  out.write(j);
-                                }
-                              },
-                              pipe.in(),
-                              InputStream::readAllBytes)
-                          .length);
-                } catch (IOException | InterruptedException e) {
-                  throw new IllegalStateException(e);
-                }
-              }));
+          Thread.ofPlatform()
+              .start(
+                  () -> {
+                    InMemoryPipe pipe = new InMemoryPipe(CAPACITY);
+                    try {
+                      counter.add(
+                          readThroughPipe(
+                                  pipe.out(),
+                                  out -> {
+                                    for (int j = 0; j < 1000; j++) {
+                                      out.write(j);
+                                    }
+                                  },
+                                  pipe.in(),
+                                  InputStream::readAllBytes)
+                              .length);
+                    } catch (IOException | InterruptedException e) {
+                      throw new IllegalStateException(e);
+                    }
+                  }));
     }
     for (Thread thread : threads) {
       thread.join();
@@ -79,28 +80,29 @@ public class InMemoryPipeTest {
   public void testManyLegacyPipes() throws InterruptedException {
     ArrayList<Thread> threads = new ArrayList<>();
     LongAdder counter = new LongAdder();
-    for (int i = 0; i < 10000; i++) {
+    for (int i = 0; i < 1000; i++) {
       threads.add(
-          Thread.startVirtualThread(
-              () -> {
-                try {
-                  PipedInputStream legacyIn = new PipedInputStream(CAPACITY);
-                  PipedOutputStream legacyOut = new PipedOutputStream(legacyIn);
-                  counter.add(
-                      readThroughPipe(
-                              legacyOut,
-                              out -> {
-                                for (int j = 0; j < 1000; j++) {
-                                  out.write(j);
-                                }
-                              },
-                              legacyIn,
-                              InputStream::readAllBytes)
-                          .length);
-                } catch (IOException | InterruptedException e) {
-                  throw new IllegalStateException(e);
-                }
-              }));
+          Thread.ofPlatform()
+              .start(
+                  () -> {
+                    try {
+                      PipedInputStream legacyIn = new PipedInputStream(CAPACITY);
+                      PipedOutputStream legacyOut = new PipedOutputStream(legacyIn);
+                      counter.add(
+                          readThroughPipe(
+                                  legacyOut,
+                                  out -> {
+                                    for (int j = 0; j < 1000; j++) {
+                                      out.write(j);
+                                    }
+                                  },
+                                  legacyIn,
+                                  InputStream::readAllBytes)
+                              .length);
+                    } catch (IOException | InterruptedException e) {
+                      throw new IllegalStateException(e);
+                    }
+                  }));
     }
     for (Thread thread : threads) {
       thread.join();
