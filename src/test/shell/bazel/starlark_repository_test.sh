@@ -56,6 +56,10 @@ msys*)
   ;;
 esac
 
+# Disable MSYS path conversion.
+export MSYS2_ARG_CONV_EXCL='*'
+export MSYS_NO_PATHCONV=1
+
 if $is_windows; then
   export LC_ALL=C.utf8
 elif [[ "$(uname -s)" == "Linux" ]]; then
@@ -905,7 +909,7 @@ genrule(
 )
 EOF
   if "$is_windows"; then
-    local repo_env_path="%bazel_workspace%\\\\repo_tools:$PATH"
+    local repo_env_path="%bazel_workspace%\\\\repo_tools;$PATH"
   else
     local repo_env_path="%bazel_workspace%/repo_tools:$PATH"
   fi
