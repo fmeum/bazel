@@ -885,7 +885,8 @@ function test_repo_env_workspace_interpolation() {
 
   cat > test.bzl <<'EOF'
 def _impl(ctx):
-  result = ctx.execute(["my_tool"])
+  tool = "my_tool.bat" if "windows" in ctx.os.name else "my_tool"
+  result = ctx.execute([tool])
   if result.return_code != 0:
     fail("my_tool failed ({}, PATH = {}): {}".format(result.return_code, ctx.os.environ["PATH"], result.stderr))
   ctx.file("out.txt", result.stdout)
