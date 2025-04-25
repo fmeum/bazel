@@ -362,8 +362,7 @@ public class CommandEnvironment {
         if (workspace.getWorkspace() != null) {
           String nativeWorkspacePath = workspace.getWorkspace().getPathString();
           if (OS.getCurrent() == OS.WINDOWS) {
-            //            nativeWorkspacePath = nativeWorkspacePath.replace('/', '\\');
-            nativeWorkspacePath = nativeWorkspacePath.replace("C:", "/c");
+            nativeWorkspacePath = nativeWorkspacePath.replace('/', '\\');
           }
           value = value.replace("%bazel_workspace%", nativeWorkspacePath);
         }
