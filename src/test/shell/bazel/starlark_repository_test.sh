@@ -905,7 +905,7 @@ genrule(
 )
 EOF
   if "$is_windows"; then
-    local repo_env_path="%bazel_workspace%\\\\repo_tools:$PATH"
+    local repo_env_path="%bazel_workspace%/repo_tools:$PATH"
   else
     local repo_env_path="%bazel_workspace%/repo_tools:$PATH"
   fi
