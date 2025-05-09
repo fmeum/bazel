@@ -650,7 +650,7 @@ EOF
 
 function test_download_regex_changed_with_action_cache_hit() {
   # Test that changes to --remote_download_regex are effective when matching
-  # optional test outputs even when the test is cached.
+  # outputs of an action that hits the action cache.
 
   mkdir -p a
   cat > a/BUILD <<'EOF'
@@ -688,6 +688,7 @@ EOF
     --remote_download_regex='.*/foo.txt' \
     //a:bar >& $TEST_log || fail "Expected success"
 
+  expect_log "action cache hit"
   assert_exists bazel-bin/a/foo.txt
 }
 
@@ -696,23 +697,33 @@ function test_download_regex_changed_with_action_cache_hit_for_test() {
   # Test that changes to --remote_download_regex are effective when matching
   # test outputs even when the test is cached.
 
+  add_rules_shell "MODULE.bazel"
   mkdir -p a
-  cat > a/BUILD <<EOF
-cc_test(
-  name = 'test',
-  srcs = [ 'test.cc' ],
-)
-EOF
-  cat > a/test.cc <<EOF
-#include <iostream>
-#include <fstream>
-#include <filesystem>
 
-int main() {
-  std::filesystem::path out = std::filesystem::path(std::getenv("TEST_UNDECLARED_OUTPUTS_DIR")) / "out.txt";
-  std::ofstream outFile(out);
-  outFile << "hi";
-}
+  cat > a/test.sh <<'EOF'
+#!/bin/sh
+
+cat > "$XML_OUTPUT_FILE" <<EOF2
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites>
+  <testsuite name="test" tests="1" failures="0" errors="0">
+    <testcase name="test_case" status="run">
+      <system-out>test_case succeeded.</system-out>
+    </testcase>
+  </testsuite>
+</testsuites>
+EOF2
+echo "hi" > "$TEST_UNDECLARED_OUTPUTS_DIR/out.txt"
+EOF
+
+  chmod +x a/test.sh
+
+  cat > a/BUILD <<EOF
+load("@rules_shell//shell:sh_test.bzl", "sh_test")
+sh_test(
+  name = 'test',
+  srcs = [ 'test.sh' ],
+)
 EOF
 
   bazel test \
@@ -727,7 +738,7 @@ EOF
     --remote_download_minimal \
     //a:test >& $TEST_log || fail "Expected success"
 
-#  assert_not_exists bazel-testlogs/a/test/test.xml
+  assert_not_exists bazel-testlogs/a/test/test.xml
   assert_not_exists bazel-testlogs/a/test/test.outputs/out.txt
 
   bazel test \
@@ -736,7 +747,8 @@ EOF
     --remote_download_regex='.*/test.xml|.*/out.txt' \
     //a:test >& $TEST_log || fail "Expected success"
 
-#  assert_exists bazel-testlogs/a/test/test.xml
+  expect_log "action cache hit"
+  assert_exists bazel-testlogs/a/test/test.xml
   assert_exists bazel-testlogs/a/test/test.outputs/out.txt
 }
 
