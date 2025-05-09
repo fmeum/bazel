@@ -785,6 +785,20 @@ public final class SkyframeActionExecutor {
         cacheHitSemaphore.release();
       }
     }
+    if (token == null) {
+      try {
+        outputService.finalizeAction(action, outputMetadataStore);
+      } catch (IOException e) {
+        throw toActionExecutionException(
+            "failed to finalize action after cache hit: " + e.getMessage(),
+            e,
+            action,
+            null,
+            Code.ACTION_FINALIZATION_FAILURE);
+      } catch (EnvironmentalExecException e) {
+        throw ActionExecutionException.fromExecException(e, action);
+      }
+    }
     return token;
   }
 

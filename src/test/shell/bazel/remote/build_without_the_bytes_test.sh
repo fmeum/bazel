@@ -648,9 +648,53 @@ EOF
   assert_exists bazel-bin/a/test
 }
 
-function test_download_regex_for_test_outputs() {
+function test_download_regex_changed_with_action_cache_hit() {
   # Test that changes to --remote_download_regex are effective when matching
   # optional test outputs even when the test is cached.
+
+  mkdir -p a
+  cat > a/BUILD <<'EOF'
+genrule(
+    name = "foo",
+    srcs = [],
+    outs = ["foo.txt"],
+    cmd = "echo \"foo\" > \"$@\"",
+)
+genrule(
+    name = "bar",
+    srcs = [":foo"],
+    outs = ["bar.txt"],
+    cmd = "cat $(location :foo) > \"$@\" && echo \"bar\" >> \"$@\"",
+)
+EOF
+
+  bazel build \
+    --remote_executor=grpc://localhost:${worker_port} \
+    --remote_download_minimal \
+    //a:bar >& $TEST_log || fail "Expected success"
+
+  rm -rf bazel-out
+
+  bazel build \
+    --remote_executor=grpc://localhost:${worker_port} \
+    --remote_download_minimal \
+    //a:bar >& $TEST_log || fail "Expected success"
+
+  assert_not_exists bazel-bin/a/foo.txt
+
+  bazel build \
+    --remote_executor=grpc://localhost:${worker_port} \
+    --remote_download_minimal \
+    --remote_download_regex='.*/foo.txt' \
+    //a:bar >& $TEST_log || fail "Expected success"
+
+  assert_exists bazel-bin/a/foo.txt
+}
+
+function test_download_regex_changed_with_action_cache_hit_for_test() {
+  # Regression test for #25762
+  # Test that changes to --remote_download_regex are effective when matching
+  # test outputs even when the test is cached.
 
   mkdir -p a
   cat > a/BUILD <<EOF
@@ -683,17 +727,17 @@ EOF
     --remote_download_minimal \
     //a:test >& $TEST_log || fail "Expected success"
 
+#  assert_not_exists bazel-testlogs/a/test/test.xml
   assert_not_exists bazel-testlogs/a/test/test.outputs/out.txt
-  assert_not_exists bazel-testlogs/a/test/test.xml
 
   bazel test \
     --remote_executor=grpc://localhost:${worker_port} \
     --remote_download_minimal \
-    --remote_download_regex='.*/test.xml|./*out.txt' \
+    --remote_download_regex='.*/test.xml|.*/out.txt' \
     //a:test >& $TEST_log || fail "Expected success"
 
+#  assert_exists bazel-testlogs/a/test/test.xml
   assert_exists bazel-testlogs/a/test/test.outputs/out.txt
-  assert_exists bazel-testlogs/a/test/test.xml
 }
 
 function do_test_non_test_toplevel_targets() {
