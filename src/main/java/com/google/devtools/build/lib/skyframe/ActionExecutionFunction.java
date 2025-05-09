@@ -748,6 +748,7 @@ public final class ActionExecutionFunction implements SkyFunction {
           action instanceof RichDataProducingAction rdpa
               ? rdpa.reconstructRichDataOnActionCacheHit(state.actionInputMetadataProvider)
               : null;
+      System.err.println("Action cache hit for " + action);
       return ActionExecutionValue.create(
           outputMetadataStore, reconstructedRichArtifactData, action);
     }

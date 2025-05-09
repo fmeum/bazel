@@ -749,6 +749,7 @@ public final class SkyframeActionExecutor {
               };
           boolean recordActionCacheHit = notify.actionCacheHit(context);
           if (!recordActionCacheHit) {
+            System.err.println("Action cache hit was not recorded for " + action);
             token =
                 actionCacheChecker.getTokenUnconditionallyAfterFailureToRecordActionCacheHit(
                     action,
@@ -785,6 +786,7 @@ public final class SkyframeActionExecutor {
         cacheHitSemaphore.release();
       }
     }
+    System.err.println("Cache token for " + action + ": " + token);
     if (token == null) {
       try {
         outputService.finalizeAction(action, outputMetadataStore);

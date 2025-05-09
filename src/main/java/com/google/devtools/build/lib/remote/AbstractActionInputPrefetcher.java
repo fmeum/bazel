@@ -27,6 +27,7 @@ import static java.util.Objects.requireNonNull;
 
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.ImmutableSet;
+import com.google.common.collect.Iterables;
 import com.google.common.collect.Sets;
 import com.google.common.flogger.GoogleLogger;
 import com.google.common.util.concurrent.Futures;
@@ -44,6 +45,7 @@ import com.google.devtools.build.lib.actions.FileContentsProxy;
 import com.google.devtools.build.lib.actions.InputMetadataProvider;
 import com.google.devtools.build.lib.actions.cache.OutputMetadataStore;
 import com.google.devtools.build.lib.actions.cache.VirtualActionInput;
+import com.google.devtools.build.lib.analysis.test.TestRunnerAction;
 import com.google.devtools.build.lib.events.Reporter;
 import com.google.devtools.build.lib.profiler.Profiler;
 import com.google.devtools.build.lib.profiler.ProfilerTask;
@@ -468,9 +470,7 @@ public abstract class AbstractActionInputPrefetcher implements ActionInputPrefet
    */
   @Nullable
   private Symlink maybeGetSymlink(
-      ActionInput input,
-      FileArtifactValue metadata,
-      MetadataSupplier metadataSupplier)
+      ActionInput input, FileArtifactValue metadata, MetadataSupplier metadataSupplier)
       throws IOException, InterruptedException {
     if (input instanceof TreeFileArtifact treeFile) {
       SpecialArtifact treeArtifact = treeFile.getParent();
