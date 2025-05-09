@@ -648,6 +648,54 @@ EOF
   assert_exists bazel-bin/a/test
 }
 
+function test_download_regex_for_test_outputs() {
+  # Test that changes to --remote_download_regex are effective when matching
+  # optional test outputs even when the test is cached.
+
+  mkdir -p a
+  cat > a/BUILD <<EOF
+cc_test(
+  name = 'test',
+  srcs = [ 'test.cc' ],
+)
+EOF
+  cat > a/test.cc <<EOF
+#include <iostream>
+#include <fstream>
+#include <filesystem>
+
+int main() {
+  std::filesystem::path out = std::filesystem::path(std::getenv("TEST_UNDECLARED_OUTPUTS_DIR")) / "out.txt";
+  std::ofstream outFile(out);
+  outFile << "hi";
+}
+EOF
+
+  bazel test \
+    --remote_executor=grpc://localhost:${worker_port} \
+    --remote_download_minimal \
+    //a:test >& $TEST_log || fail "Expected success"
+
+  rm -rf bazel-out bazel-testlogs
+
+  bazel test \
+    --remote_executor=grpc://localhost:${worker_port} \
+    --remote_download_minimal \
+    //a:test >& $TEST_log || fail "Expected success"
+
+  assert_not_exists bazel-testlogs/a/test/test.outputs/out.txt
+  assert_not_exists bazel-testlogs/a/test/test.xml
+
+  bazel test \
+    --remote_executor=grpc://localhost:${worker_port} \
+    --remote_download_minimal \
+    --remote_download_regex='.*/test.xml|./*out.txt' \
+    //a:test >& $TEST_log || fail "Expected success"
+
+  assert_exists bazel-testlogs/a/test/test.outputs/out.txt
+  assert_exists bazel-testlogs/a/test/test.xml
+}
+
 function do_test_non_test_toplevel_targets() {
   # Regression test for https://github.com/bazelbuild/bazel/issues/17190.
   #
