@@ -468,9 +468,7 @@ public abstract class AbstractActionInputPrefetcher implements ActionInputPrefet
    */
   @Nullable
   private Symlink maybeGetSymlink(
-      ActionInput input,
-      FileArtifactValue metadata,
-      MetadataSupplier metadataSupplier)
+      ActionInput input, FileArtifactValue metadata, MetadataSupplier metadataSupplier)
       throws IOException, InterruptedException {
     if (input instanceof TreeFileArtifact treeFile) {
       SpecialArtifact treeArtifact = treeFile.getParent();
