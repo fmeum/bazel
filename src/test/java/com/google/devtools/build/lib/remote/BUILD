@@ -230,6 +230,10 @@ java_test(
     name = "BuildWithoutTheBytesIntegrationTest",
     size = "large",
     srcs = ["BuildWithoutTheBytesIntegrationTest.java"],
+    resource_strip_prefix = package_name(),
+    resources = [
+        "mockito-extensions/org.mockito.plugins.StackTraceCleanerProvider",
+    ],
     shard_count = 5,
     tags = ["requires-network"],
     runtime_deps = [
@@ -256,6 +260,7 @@ java_test(
         "//third_party:mockito",
         "//third_party:truth",
         "@com_google_protobuf//:protobuf_java",
+        "@maven//:com_google_testparameterinjector_test_parameter_injector",
     ],
 )
 
