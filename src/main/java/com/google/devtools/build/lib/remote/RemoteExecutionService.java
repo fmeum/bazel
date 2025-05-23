@@ -66,7 +66,6 @@ import com.google.common.util.concurrent.ListenableFuture;
 import com.google.common.util.concurrent.SettableFuture;
 import com.google.devtools.build.lib.actions.ActionInput;
 import com.google.devtools.build.lib.actions.Artifact;
-import com.google.devtools.build.lib.actions.Artifact.SpecialArtifact;
 import com.google.devtools.build.lib.actions.ArtifactPathResolver;
 import com.google.devtools.build.lib.actions.EnvironmentalExecException;
 import com.google.devtools.build.lib.actions.ExecException;
@@ -145,10 +144,12 @@ import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
 import java.util.Objects;
+import java.util.SequencedSet;
 import java.util.Set;
 import java.util.SortedMap;
 import java.util.TreeMap;
@@ -204,6 +205,7 @@ public class RemoteExecutionService {
 
   @Nullable private final Scrubber scrubber;
   private final Set<Digest> knownMissingCasDigests;
+  private final OutputPermissions outputPermissions;
 
   private Boolean useOutputPaths;
 
@@ -223,7 +225,8 @@ public class RemoteExecutionService {
       @Nullable Path captureCorruptedOutputsDir,
       @Nullable RemoteOutputChecker remoteOutputChecker,
       OutputService outputService,
-      Set<Digest> knownMissingCasDigests) {
+      Set<Digest> knownMissingCasDigests,
+      OutputPermissions outputPermissions) {
     this.reporter = reporter;
     this.verboseFailures = verboseFailures;
     this.execRoot = execRoot;
@@ -250,6 +253,7 @@ public class RemoteExecutionService {
     this.remoteOutputChecker = remoteOutputChecker;
     this.outputService = outputService;
     this.knownMissingCasDigests = knownMissingCasDigests;
+    this.outputPermissions = outputPermissions;
   }
 
   private Command buildCommand(
@@ -908,8 +912,8 @@ public class RemoteExecutionService {
         result = true;
       }
     }
-    for (var entry : metadata.directories()) {
-      for (var file : entry.getValue().files()) {
+    for (var dir : metadata.directories().values()) {
+      for (var file : dir.files()) {
         if (knownMissingCasDigests.remove(file.digest())) {
           result = true;
         }
@@ -941,7 +945,7 @@ public class RemoteExecutionService {
       return transformAsync(
           future,
           (d) -> {
-            tmpPath.chmod(OutputPermissions.READONLY.getPermissionsMode());
+            tmpPath.chmod(outputPermissions.getPermissionsMode());
             return immediateFuture(file);
           },
           directExecutor());
@@ -1128,8 +1132,8 @@ public class RemoteExecutionService {
       return files.values();
     }
 
-    public ImmutableSet<Entry<Path, DirectoryMetadata>> directories() {
-      return directories.entrySet();
+    public ImmutableMap<Path, DirectoryMetadata> directories() {
+      return directories;
     }
 
     public Collection<SymlinkMetadata> symlinks() {
@@ -1386,22 +1390,8 @@ public class RemoteExecutionService {
       }
     }
 
-    Map<PathFragment, SpecialArtifact> treeArtifactOutputs =
-        action.getSpawn().getOutputFiles().stream()
-            .filter(
-                output -> output instanceof SpecialArtifact artifact && artifact.isTreeArtifact())
-            .collect(
-                toImmutableMap(ActionInput::getExecPath, artifact -> (SpecialArtifact) artifact));
-    for (Map.Entry<Path, DirectoryMetadata> entry : metadata.directories()) {
-      var treeArtifact =
-          treeArtifactOutputs.get(
-              action.getRemotePathResolver().localPathToExecPath(entry.getKey().asFragment()));
-      // treeArtifact can only be non-null if the output directories reported by the backend don't
-      // match the declared outputs. This situation is erroneous and the optimization below can
-      // safely be skipped.
-      if (remoteActionFileSystem != null && treeArtifact != null) {
-        remoteActionFileSystem.markSubTreeAsFullyRemote(treeArtifact);
-      }
+    SequencedSet<Path> dirsWithOutputPermissions = new LinkedHashSet<>();
+    for (Map.Entry<Path, DirectoryMetadata> entry : metadata.directories().entrySet()) {
       for (FileMetadata file : entry.getValue().files()) {
         if (realToTmpPath.containsKey(file.path)) {
           continue;
@@ -1413,6 +1403,13 @@ public class RemoteExecutionService {
           downloadsBuilder.add(
               downloadFile(
                   context, progressStatusListener, file, tmpPath, action.getRemotePathResolver()));
+          for (Path parentDir = file.path.getParentDirectory();
+              !parentDir.equals(entry.getKey());
+              parentDir = parentDir.getParentDirectory()) {
+            if (!dirsWithOutputPermissions.add(parentDir)) {
+              break;
+            }
+          }
         }
         if (hasBazelOutputService) {
           downloadsBuilder.add(immediateFuture(file));
@@ -1476,9 +1473,16 @@ public class RemoteExecutionService {
     }
 
     List<SymlinkMetadata> symlinksInDirectories = new ArrayList<>();
-    for (Entry<Path, DirectoryMetadata> entry : metadata.directories()) {
+    for (Entry<Path, DirectoryMetadata> entry : metadata.directories().entrySet()) {
       for (SymlinkMetadata symlink : entry.getValue().symlinks()) {
         symlinksInDirectories.add(symlink);
+        for (Path parentDir = symlink.path.getParentDirectory();
+            !parentDir.equals(entry.getKey());
+            parentDir = parentDir.getParentDirectory()) {
+          if (!dirsWithOutputPermissions.add(parentDir)) {
+            break;
+          }
+        }
       }
     }
 
@@ -1488,6 +1492,22 @@ public class RemoteExecutionService {
     // Create the symbolic links after all downloads are finished, because dangling symlinks
     // might not be supported on all platforms.
     createSymlinks(symlinks);
+    for (var dir : dirsWithOutputPermissions) {
+      dir.chmod(outputPermissions.getPermissionsMode());
+    }
+
+    if (remoteActionFileSystem != null) {
+      for (var output : action.getSpawn().getOutputFiles()) {
+        if (!(output instanceof Artifact.SpecialArtifact treeArtifact
+            && treeArtifact.isTreeArtifact())) {
+          continue;
+        }
+        Path dirPath = action.getSpawnExecutionContext().getPathResolver().toPath(output);
+        if (metadata.directories().containsKey(dirPath)) {
+          remoteActionFileSystem.remoteSubtreeComplete(treeArtifact);
+        }
+      }
+    }
 
     if (result.success()) {
       // Check that all mandatory outputs are created.
