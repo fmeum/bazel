@@ -13,17 +13,13 @@
 // limitations under the License.
 package com.google.devtools.build.lib.actions;
 
-import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkNotNull;
-import static com.google.common.base.Preconditions.checkState;
 
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSortedSet;
 import com.google.common.collect.Maps;
-import com.google.devtools.build.lib.actions.Artifact.ArchivedTreeArtifact;
 import com.google.devtools.build.lib.actions.Artifact.TreeFileArtifact;
-import com.google.devtools.build.lib.actions.FilesetOutputTree.RelativeSymlinkBehaviorWithoutError;
 import com.google.devtools.build.lib.bugreport.BugReport;
 import com.google.devtools.build.lib.skyframe.TreeArtifactValue;
 import com.google.devtools.build.lib.vfs.Path;
@@ -39,79 +35,59 @@ import javax.annotation.Nullable;
  * <p>This is needed because some artifacts (tree artifacts and Filesets) are in fact aggregations
  * of multiple files.
  */
-public final class CompletionContext implements ArtifactExpander {
+public final class CompletionContext {
   public static final CompletionContext FAILED_COMPLETION_CTX =
       new CompletionContext(
-          null,
           ImmutableMap.of(),
           ImmutableMap.of(),
-          null,
           ArtifactPathResolver.IDENTITY,
           new ActionInputMap(0),
-          false,
           false);
 
-  private final Path execRoot;
   private final ArtifactPathResolver pathResolver;
   private final Map<Artifact, TreeArtifactValue> treeArtifacts;
   private final Map<Artifact, FilesetOutputTree> filesets;
-  @Nullable private final FileArtifactValue baselineCoverageValue;
   // Only contains the metadata for 'important' artifacts of the Target/Aspect that completed. Any
   // 'unimportant' artifacts produced by internal output groups (most importantly, _validation) will
   // not be included to avoid retaining many GB on the heap. This ActionInputMap must only be
   // consulted with respect to known-important artifacts (e.g. artifacts referenced in BEP).
   private final ActionInputMap importantInputMap;
   private final boolean expandFilesets;
-  private final boolean fullyResolveFilesetLinks;
 
   @VisibleForTesting
   public CompletionContext(
-      Path execRoot,
       Map<Artifact, TreeArtifactValue> treeArtifacts,
       Map<Artifact, FilesetOutputTree> filesets,
-      @Nullable FileArtifactValue baselineCoverageValue,
       ArtifactPathResolver pathResolver,
       ActionInputMap importantInputMap,
-      boolean expandFilesets,
-      boolean fullyResolveFilesetLinks) {
-    this.execRoot = execRoot;
+      boolean expandFilesets) {
     this.treeArtifacts = treeArtifacts;
     this.filesets = filesets;
-    this.baselineCoverageValue = baselineCoverageValue;
     this.pathResolver = pathResolver;
     this.importantInputMap = importantInputMap;
     this.expandFilesets = expandFilesets;
-    this.fullyResolveFilesetLinks = fullyResolveFilesetLinks;
   }
 
   public static CompletionContext create(
       Map<Artifact, TreeArtifactValue> treeArtifacts,
       Map<Artifact, FilesetOutputTree> filesets,
-      @Nullable FileArtifactValue baselineCoverageValue,
       boolean expandFilesets,
-      boolean fullyResolveFilesetSymlinks,
       ActionInputMap inputMap,
       ActionInputMap importantInputMap,
-      PathResolverFactory pathResolverFactory,
-      Path execRoot,
-      String workspaceName) {
+      PathResolverFactory pathResolverFactory) {
     ArtifactPathResolver pathResolver =
         pathResolverFactory.shouldCreatePathResolverForArtifactValues()
             ? pathResolverFactory.createPathResolverForArtifactValues(
                 inputMap,
                 Maps.transformValues(treeArtifacts, TreeArtifactValue::getChildren),
-                filesets,
-                workspaceName)
+                filesets)
             : ArtifactPathResolver.IDENTITY;
     return new CompletionContext(
-        execRoot,
         treeArtifacts,
         filesets,
-        baselineCoverageValue,
         pathResolver,
         importantInputMap,
-        expandFilesets,
-        fullyResolveFilesetSymlinks);
+        expandFilesets);
   }
 
   public ArtifactPathResolver pathResolver() {
@@ -122,18 +98,9 @@ public final class CompletionContext implements ArtifactExpander {
     return importantInputMap;
   }
 
-  public Map<Artifact, FilesetOutputTree> getExpandedFilesets() {
-    return filesets;
-  }
-
   @Nullable
   public FileArtifactValue getFileArtifactValue(Artifact artifact) {
     return importantInputMap.getInputMetadata(artifact);
-  }
-
-  @Nullable
-  public FileArtifactValue getBaselineCoverageValue() {
-    return baselineCoverageValue;
   }
 
   /** Visits the expansion of the given artifacts. */
@@ -169,46 +136,24 @@ public final class CompletionContext implements ArtifactExpander {
   }
 
   private void visitFileset(Artifact filesetArtifact, ArtifactReceiver receiver) {
-    FilesetOutputTree filesetOutput = filesets.get(filesetArtifact);
-    filesetOutput.visitSymlinks(
-        fullyResolveFilesetLinks
-            ? RelativeSymlinkBehaviorWithoutError.RESOLVE_FULLY
-            : RelativeSymlinkBehaviorWithoutError.RESOLVE,
-        (name, target, metadata) ->
-            receiver.acceptFilesetMapping(filesetArtifact, name, execRoot.getRelative(target)));
-  }
-
-  @Override
-  public ImmutableSortedSet<TreeFileArtifact> expandTreeArtifact(Artifact treeArtifact) {
-    checkArgument(treeArtifact.isTreeArtifact(), treeArtifact);
-    TreeArtifactValue treeValue = treeArtifacts.get(treeArtifact);
-    return treeValue != null ? treeValue.getChildren() : ImmutableSortedSet.of();
-  }
-
-  @Nullable
-  @Override
-  public ArchivedTreeArtifact getArchivedTreeArtifact(Artifact treeArtifact) {
-    checkArgument(treeArtifact.isTreeArtifact(), treeArtifact);
-    TreeArtifactValue treeValue = treeArtifacts.get(treeArtifact);
-    return treeValue != null ? treeValue.getArchivedArtifact() : null;
-  }
-
-  @Override
-  public FilesetOutputTree expandFileset(Artifact fileset) throws MissingExpansionException {
-    checkArgument(fileset.isFileset(), fileset);
-    checkState(expandFilesets, "Fileset expansion disabled, cannot expand %s", fileset);
-    FilesetOutputTree filesetOutput = filesets.get(fileset);
-    if (filesetOutput == null) {
-      throw new MissingExpansionException("Missing expansion for fileset: " + fileset);
+    FilesetOutputTree filesetOutput =
+        checkNotNull(
+            filesets.get(filesetArtifact),
+            "Missing %s, available filesets: %s",
+            filesetArtifact,
+            filesets.keySet());
+    for (FilesetOutputSymlink link : filesetOutput.symlinks()) {
+      receiver.acceptFilesetMapping(
+          filesetArtifact, link.name(), link.target().getPath(), link.metadata());
     }
-    return filesetOutput;
   }
 
   /** A function that accepts an {@link Artifact}. */
   public interface ArtifactReceiver {
     void accept(Artifact artifact);
 
-    void acceptFilesetMapping(Artifact fileset, PathFragment relName, Path targetFile);
+    void acceptFilesetMapping(
+        Artifact fileset, PathFragment relName, Path targetFile, FileArtifactValue metadata);
   }
 
   /** A factory for {@link ArtifactPathResolver}. */
@@ -216,8 +161,7 @@ public final class CompletionContext implements ArtifactExpander {
     ArtifactPathResolver createPathResolverForArtifactValues(
         ActionInputMap actionInputMap,
         Map<Artifact, ImmutableSortedSet<TreeFileArtifact>> treeArtifacts,
-        Map<Artifact, FilesetOutputTree> filesets,
-        String workspaceName);
+        Map<Artifact, FilesetOutputTree> filesets);
 
     boolean shouldCreatePathResolverForArtifactValues();
   }

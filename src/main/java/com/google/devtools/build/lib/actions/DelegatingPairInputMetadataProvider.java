@@ -15,9 +15,12 @@
 package com.google.devtools.build.lib.actions;
 
 import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableMap;
 import com.google.devtools.build.lib.skyframe.TreeArtifactValue;
+import com.google.devtools.build.lib.vfs.PathFragment;
 import java.io.IOException;
 import java.util.LinkedHashSet;
+import java.util.Map;
 import javax.annotation.Nullable;
 
 /** A {@link InputMetadataProvider} implementation that consults two others in a given order. */
@@ -34,7 +37,7 @@ public final class DelegatingPairInputMetadataProvider implements InputMetadataP
 
   @Override
   public FileArtifactValue getInputMetadataChecked(ActionInput input)
-      throws IOException, MissingDepExecException {
+      throws InterruptedException, IOException, MissingDepExecException {
     FileArtifactValue metadata = primary.getInputMetadata(input);
     return (metadata != null) && (metadata != FileArtifactValue.MISSING_FILE_MARKER)
         ? metadata
@@ -46,6 +49,38 @@ public final class DelegatingPairInputMetadataProvider implements InputMetadataP
   public TreeArtifactValue getTreeMetadata(ActionInput actionInput) {
     TreeArtifactValue metadata = primary.getTreeMetadata(actionInput);
     return metadata != null ? metadata : secondary.getTreeMetadata(actionInput);
+  }
+
+  @Nullable
+  @Override
+  public TreeArtifactValue getEnclosingTreeMetadata(PathFragment execPath) {
+    TreeArtifactValue metadata = primary.getEnclosingTreeMetadata(execPath);
+    return metadata != null ? metadata : secondary.getEnclosingTreeMetadata(execPath);
+  }
+
+  @Override
+  @Nullable
+  public FilesetOutputTree getFileset(ActionInput input) {
+    FilesetOutputTree result = primary.getFileset(input);
+    return result != null ? result : secondary.getFileset(input);
+  }
+
+  @Override
+  public Map<Artifact, FilesetOutputTree> getFilesets() {
+    Map<Artifact, FilesetOutputTree> first = primary.getFilesets();
+    Map<Artifact, FilesetOutputTree> second = secondary.getFilesets();
+    if (first.isEmpty()) {
+      return second;
+    }
+    if (second.isEmpty()) {
+      return first;
+    }
+
+    return ImmutableMap.<Artifact, FilesetOutputTree>builderWithExpectedSize(
+            first.size() + second.size())
+        .putAll(first)
+        .putAll(second)
+        .buildKeepingLast();
   }
 
   @Override

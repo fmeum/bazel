@@ -22,9 +22,10 @@ import com.google.devtools.build.lib.util.MapCodec;
 import com.google.devtools.build.lib.util.PersistentMap;
 import com.google.devtools.build.lib.util.StringIndexer;
 import com.google.devtools.build.lib.vfs.Path;
-import java.io.DataInputStream;
-import java.io.DataOutputStream;
+import java.io.DataInput;
+import java.io.DataOutput;
 import java.io.IOException;
+import java.io.PrintStream;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicReferenceArray;
@@ -169,16 +170,13 @@ final class PersistentStringIndexer implements StringIndexer {
     }
   }
 
-  @Override
-  public String toString() {
+  public void dump(PrintStream out) {
     lock.lock();
     try {
-      StringBuilder builder = new StringBuilder();
-      builder.append("size = ").append(size()).append("\n");
-      for (Map.Entry<String, Integer> entry : stringToInt.entrySet()) {
-        builder.append(entry.getKey()).append(" <==> ").append(entry.getValue()).append("\n");
+      out.format("String indexer (%d records):\n", size());
+      for (int i = 0; i < size(); i++) {
+        out.format("  %s <=> %s\n", i, getStringForIndex(i));
       }
-      return builder.toString();
     } finally {
       lock.unlock();
     }
@@ -187,7 +185,7 @@ final class PersistentStringIndexer implements StringIndexer {
   private static final MapCodec<String, Integer> CODEC =
       new MapCodec<String, Integer>() {
         @Override
-        protected String readKey(DataInputStream in) throws IOException {
+        protected String readKey(DataInput in) throws IOException {
           int length = in.readInt();
           if (length < 0) {
             throw new IOException("corrupt key length: " + length);
@@ -198,19 +196,19 @@ final class PersistentStringIndexer implements StringIndexer {
         }
 
         @Override
-        protected Integer readValue(DataInputStream in) throws IOException {
+        protected Integer readValue(DataInput in) throws IOException {
           return in.readInt();
         }
 
         @Override
-        protected void writeKey(String key, DataOutputStream out) throws IOException {
+        protected void writeKey(String key, DataOutput out) throws IOException {
           byte[] content = key.getBytes(UTF_8);
           out.writeInt(content.length);
           out.write(content);
         }
 
         @Override
-        protected void writeValue(Integer value, DataOutputStream out) throws IOException {
+        protected void writeValue(Integer value, DataOutput out) throws IOException {
           out.writeInt(value);
         }
       };
@@ -230,11 +228,11 @@ final class PersistentStringIndexer implements StringIndexer {
       super(VERSION, CODEC, new ConcurrentHashMap<>(INITIAL_CAPACITY), mapFile, journalFile);
       this.clock = clock;
       nextUpdate = clock.nanoTime();
-      load(/* failFast= */ true);
+      load();
     }
 
     @Override
-    protected boolean updateJournal() {
+    protected boolean shouldFlushJournal() {
       long time = clock.nanoTime();
       if (SAVE_INTERVAL_NS == 0L || time > nextUpdate) {
         nextUpdate = time + SAVE_INTERVAL_NS;
@@ -249,7 +247,7 @@ final class PersistentStringIndexer implements StringIndexer {
     }
 
     void flush() {
-      forceFlush();
+      flushJournal();
     }
   }
 }

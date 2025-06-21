@@ -30,6 +30,7 @@ load(
     "tool_path",
     "with_feature_set",
 )
+load("@rules_cc//cc/common:cc_common.bzl", "cc_common")
 
 _FEATURE_NAMES = struct(
     cpp_modules = "cpp_modules",
@@ -657,7 +658,7 @@ _split_functions_feature = feature(
                 flag_group(
                     flags = [
                         "-fsplit-machine-functions",
-                        "-DBUILD_PROPELLER_TYPE=\"split\"",
+                        "-DBUILD_MFS_ENABLED=1",
                     ],
                 ),
             ],

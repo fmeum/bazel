@@ -74,7 +74,6 @@ import com.google.devtools.build.lib.actions.ResourceSet;
 import com.google.devtools.build.lib.actions.SimpleSpawn;
 import com.google.devtools.build.lib.actions.Spawn;
 import com.google.devtools.build.lib.actions.SpawnResult;
-import com.google.devtools.build.lib.actions.StaticInputMetadataProvider;
 import com.google.devtools.build.lib.analysis.BlazeVersionInfo;
 import com.google.devtools.build.lib.authandtls.CallCredentialsProvider;
 import com.google.devtools.build.lib.authandtls.GoogleAuthUtils;
@@ -225,7 +224,6 @@ public class RemoteSpawnRunnerWithGrpcRemoteExecutorTest {
             ImmutableList.of("/bin/echo", "Hi!"),
             ImmutableMap.of("VARIABLE", "value"),
             /* executionInfo= */ ImmutableMap.<String, String>of(),
-            /* filesetMappings= */ ImmutableMap.of(),
             /* inputs= */ NestedSetBuilder.create(
                 Order.STABLE_ORDER, ActionInputHelper.fromPath("input")),
             /* tools= */ NestedSetBuilder.emptySet(Order.STABLE_ORDER),
@@ -772,8 +770,8 @@ public class RemoteSpawnRunnerWithGrpcRemoteExecutorTest {
 
   @Test
   public void remotelyExecuteRetries() throws Exception {
-    when(remoteOutputChecker.shouldDownloadOutput(ArgumentMatchers.<PathFragment>any()))
-        .thenReturn(true);
+    PathFragment execPath = ArgumentMatchers.<PathFragment>any();
+    when(remoteOutputChecker.shouldDownloadOutput(execPath, any())).thenReturn(true);
 
     serviceRegistry.addService(
         new ActionCacheImplBase() {
@@ -929,8 +927,8 @@ public class RemoteSpawnRunnerWithGrpcRemoteExecutorTest {
 
   @Test
   public void remotelyExecuteRetriesWaitResult() throws Exception {
-    when(remoteOutputChecker.shouldDownloadOutput(ArgumentMatchers.<PathFragment>any()))
-        .thenReturn(true);
+    PathFragment execPath = ArgumentMatchers.<PathFragment>any();
+    when(remoteOutputChecker.shouldDownloadOutput(execPath, any())).thenReturn(true);
 
     // This test's flow is similar to the previous, except the result
     // will eventually be returned by the waitExecute function.
@@ -1582,8 +1580,6 @@ public class RemoteSpawnRunnerWithGrpcRemoteExecutorTest {
             execRoot.asFragment(),
             artifactRoot.getRoot().asPath().relativeTo(execRoot).getPathString(),
             new ActionInputMap(0),
-            ImmutableList.of(),
-            StaticInputMetadataProvider.empty(),
             actionInputFetcher);
 
     return new FakeSpawnExecutionContext(

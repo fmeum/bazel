@@ -916,17 +916,6 @@ public class CppOptions extends FragmentOptions {
   public boolean objcEnableBinaryStripping;
 
   @Option(
-      name = "experimental_starlark_cc_import",
-      defaultValue = "false",
-      documentationCategory = OptionDocumentationCategory.BUILD_TIME_OPTIMIZATION,
-      effectTags = {
-        OptionEffectTag.LOADING_AND_ANALYSIS,
-      },
-      metadataTags = {OptionMetadataTag.EXPERIMENTAL},
-      help = "If enabled, the Starlark version of cc_import can be used.")
-  public boolean experimentalStarlarkCcImport;
-
-  @Option(
       name = "experimental_generate_llvm_lcov",
       defaultValue = "false",
       documentationCategory = OptionDocumentationCategory.UNCATEGORIZED,
@@ -943,20 +932,6 @@ public class CppOptions extends FragmentOptions {
       metadataTags = {OptionMetadataTag.INCOMPATIBLE_CHANGE},
       help = "If enabled, give distinguishing mnemonic to header processing actions")
   public boolean useCppCompileHeaderMnemonic;
-
-  // TODO: When moving this flag to the graveyard, also delete
-  // tools/cpp/osx_cc_wrapper.sh.tpl and make tools/cpp/linux_cc_wrapper.sh.tpl
-  // the generic wrapper for header parsing on all Unix platforms.
-  @Option(
-      name = "incompatible_macos_set_install_name",
-      defaultValue = "true",
-      documentationCategory = OptionDocumentationCategory.UNDOCUMENTED,
-      effectTags = {OptionEffectTag.LOADING_AND_ANALYSIS},
-      metadataTags = {OptionMetadataTag.INCOMPATIBLE_CHANGE},
-      help =
-          "Whether to explicitly set `-install_name` when creating dynamic libraries. "
-              + "See https://github.com/bazelbuild/bazel/issues/12370")
-  public boolean macosSetInstallName;
 
   @Option(
       name = "experimental_use_cpp_compile_action_args_params_file",
@@ -1057,19 +1032,6 @@ public class CppOptions extends FragmentOptions {
   public boolean experimentalCppCompileResourcesEstimation;
 
   @Option(
-      name = "experimental_platform_cc_test",
-      defaultValue = "false",
-      documentationCategory = OptionDocumentationCategory.UNDOCUMENTED,
-      effectTags = {
-        OptionEffectTag.LOADING_AND_ANALYSIS,
-      },
-      metadataTags = {OptionMetadataTag.EXPERIMENTAL},
-      help =
-          "If enabled, a Starlark version of cc_test can be used which will use platform-based"
-              + " toolchain() resolution to choose a test runner.")
-  public boolean experimentalPlatformCcTest;
-
-  @Option(
       name = "experimental_starlark_compiling",
       defaultValue = "false",
       documentationCategory = OptionDocumentationCategory.UNDOCUMENTED,
@@ -1079,17 +1041,6 @@ public class CppOptions extends FragmentOptions {
       metadataTags = {OptionMetadataTag.EXPERIMENTAL},
       help = "If enabled, a Starlark version of compiling is used.")
   public boolean experimentalStarlarkCompiling;
-
-  @Option(
-      name = "experimental_starlark_linking",
-      defaultValue = "false",
-      documentationCategory = OptionDocumentationCategory.UNDOCUMENTED,
-      effectTags = {
-        OptionEffectTag.LOADING_AND_ANALYSIS,
-      },
-      metadataTags = {OptionMetadataTag.EXPERIMENTAL},
-      help = "If enabled, a Starlark version of linking is used.")
-  public boolean experimentalStarlarkLinking;
 
   /** See {@link #targetLibcTopLabel} documentation. * */
   @Override

@@ -21,7 +21,6 @@ import com.google.common.collect.Maps;
 import com.google.devtools.build.lib.actions.ActionExecutionContext;
 import com.google.devtools.build.lib.actions.ActionExecutionException;
 import com.google.devtools.build.lib.actions.Artifact;
-import com.google.devtools.build.lib.actions.ArtifactExpander.MissingExpansionException;
 import com.google.devtools.build.lib.actions.EnvironmentalExecException;
 import com.google.devtools.build.lib.actions.ExecException;
 import com.google.devtools.build.lib.actions.FilesetOutputSymlink;
@@ -53,12 +52,10 @@ public final class SymlinkTreeStrategy implements SymlinkTreeActionContext {
       (artifact) -> artifact == null ? null : artifact.getPath().asFragment();
 
   private final OutputService outputService;
-  private final Path execRoot;
   private final String workspaceName;
 
-  public SymlinkTreeStrategy(OutputService outputService, Path execRoot, String workspaceName) {
+  public SymlinkTreeStrategy(OutputService outputService, String workspaceName) {
     this.outputService = outputService;
-    this.execRoot = execRoot;
     this.workspaceName = workspaceName;
   }
 
@@ -116,19 +113,12 @@ public final class SymlinkTreeStrategy implements SymlinkTreeActionContext {
 
   private ImmutableMap<PathFragment, PathFragment> getFilesetMap(
       SymlinkTreeAction action, ActionExecutionContext actionExecutionContext) {
-    ImmutableList<FilesetOutputSymlink> filesetLinks;
-    try {
-      filesetLinks =
-          actionExecutionContext
-              .getArtifactExpander()
-              .expandFileset(action.getInputManifest())
-              .symlinks();
-    } catch (MissingExpansionException e) {
-      throw new IllegalStateException(e);
-    }
-
-    return SymlinkTreeHelper.processFilesetLinks(
-        filesetLinks, action.getWorkspaceNameForFileset(), execRoot.asFragment());
+    ImmutableList<FilesetOutputSymlink> filesetLinks =
+        actionExecutionContext
+            .getInputMetadataProvider()
+            .getFileset(action.getInputManifest())
+            .symlinks();
+    return SymlinkTreeHelper.processFilesetLinks(filesetLinks, action.getWorkspaceNameForFileset());
   }
 
   private static Map<PathFragment, Artifact> getRunfilesMap(SymlinkTreeAction action) {

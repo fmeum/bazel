@@ -51,7 +51,9 @@ public final class JavaConfiguration extends Fragment implements JavaConfigurati
     /** JavaBuilder computes the reduced classpath before invoking javac. */
     JAVABUILDER,
     /** Bazel computes the reduced classpath and tries it in a separate action invocation. */
-    BAZEL
+    BAZEL,
+    /** Bazel uses the reduced classpath, but doesn't fallback to the full transitive classpath */
+    BAZEL_NO_FALLBACK,
   }
 
   /** Values for the --experimental_one_version_enforcement option */
@@ -74,6 +76,7 @@ public final class JavaConfiguration extends Fragment implements JavaConfigurati
   private final Label javaLauncherLabel;
   private final boolean useIjars;
   private final boolean useHeaderCompilation;
+  private final boolean javaHeaderCompilationDirectDeps;
   private final boolean generateJavaDeps;
   private final OneVersionEnforcementLevel enforceOneVersion;
   private final boolean enforceOneVersionOnJavaTests;
@@ -97,7 +100,6 @@ public final class JavaConfiguration extends Fragment implements JavaConfigurati
   private final boolean experimentalEnableJspecify;
   private final boolean multiReleaseDeployJars;
   private final boolean disallowJavaImportExports;
-  private final boolean disallowJavaImportEmptyJars;
   private final boolean autoCreateDeployJarForJavaTests;
 
   public JavaConfiguration(BuildOptions buildOptions) throws InvalidConfigurationException {
@@ -107,6 +109,7 @@ public final class JavaConfiguration extends Fragment implements JavaConfigurati
     this.javaLauncherLabel = javaOptions.javaLauncher;
     this.useIjars = javaOptions.useIjars;
     this.useHeaderCompilation = javaOptions.headerCompilation;
+    this.javaHeaderCompilationDirectDeps = javaOptions.javaHeaderCompilationDirectDeps;
     this.generateJavaDeps =
         javaOptions.javaDeps || javaOptions.javaClasspath != JavaClasspathMode.OFF;
     this.javaClasspath = javaOptions.javaClasspath;
@@ -127,7 +130,6 @@ public final class JavaConfiguration extends Fragment implements JavaConfigurati
     this.runAndroidLint = javaOptions.runAndroidLint;
     this.multiReleaseDeployJars = javaOptions.multiReleaseDeployJars;
     this.disallowJavaImportExports = javaOptions.disallowJavaImportExports;
-    this.disallowJavaImportEmptyJars = javaOptions.disallowJavaImportEmptyJars;
     this.autoCreateDeployJarForJavaTests = javaOptions.autoCreateDeployJarForJavaTests;
     Map<String, Label> optimizers = javaOptions.bytecodeOptimizers;
     if (optimizers.size() != 1) {
@@ -235,6 +237,10 @@ public final class JavaConfiguration extends Fragment implements JavaConfigurati
   public boolean useHeaderCompilationStarlark(StarlarkThread thread) throws EvalException {
     checkPrivateAccess(thread);
     return useHeaderCompilation();
+  }
+
+  public boolean javaHeaderCompilationDirectDeps() {
+    return javaHeaderCompilationDirectDeps;
   }
 
   /** Returns true iff dependency information is generated after compilation. */
@@ -409,14 +415,6 @@ public final class JavaConfiguration extends Fragment implements JavaConfigurati
     return multiReleaseDeployJars;
   }
 
-  /** Returns true if empty java_import jars are not allowed. */
-  @Override
-  public boolean getDisallowJavaImportEmptyJarsInStarlark(StarlarkThread thread)
-      throws EvalException {
-    checkPrivateAccess(thread);
-    return disallowJavaImportEmptyJars;
-  }
-
   /** Returns true if java_import exports are not allowed. */
   @Override
   public boolean getDisallowJavaImportExportsInStarlark(StarlarkThread thread)
@@ -462,5 +460,12 @@ public final class JavaConfiguration extends Fragment implements JavaConfigurati
   public boolean autoCreateJavaTestDeployJars(StarlarkThread thread) throws EvalException {
     BuiltinRestriction.failIfCalledOutsideDefaultAllowlist(thread);
     return autoCreateDeployJarForJavaTests;
+  }
+
+  @Override
+  public boolean getUseHeaderCompilationDirectDepsInStarlark(StarlarkThread thread)
+      throws EvalException {
+    checkPrivateAccess(thread);
+    return javaHeaderCompilationDirectDeps;
   }
 }

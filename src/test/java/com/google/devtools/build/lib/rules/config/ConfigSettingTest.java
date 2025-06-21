@@ -18,6 +18,8 @@ import static com.google.common.truth.Truth.assertThat;
 import com.google.devtools.build.lib.analysis.ConfiguredRuleClassProvider;
 import com.google.devtools.build.lib.analysis.config.BuildOptions;
 import com.google.devtools.build.lib.analysis.config.ConfigMatchingProvider;
+import com.google.devtools.build.lib.analysis.config.ConfigMatchingProvider.MatchResult.Match;
+import com.google.devtools.build.lib.analysis.config.ConfigMatchingProvider.MatchResult.NoMatch;
 import com.google.devtools.build.lib.analysis.config.Fragment;
 import com.google.devtools.build.lib.analysis.config.FragmentOptions;
 import com.google.devtools.build.lib.analysis.config.RequiresOptions;
@@ -65,6 +67,14 @@ public class ConfigSettingTest extends BuildViewTestCase {
         documentationCategory = OptionDocumentationCategory.UNDOCUMENTED,
         effectTags = {OptionEffectTag.NO_OP})
     public List<String> allowMultipleOption;
+
+    @Option(
+        name = "new_option_name",
+        documentationCategory = OptionDocumentationCategory.UNDOCUMENTED,
+        effectTags = {OptionEffectTag.NO_OP},
+        defaultValue = "",
+        oldName = "old_option_name")
+    public String optionWithOldName;
   }
 
   /** Test fragment. */
@@ -108,11 +118,10 @@ public class ConfigSettingTest extends BuildViewTestCase {
     return getConfiguredTarget(label).getProvider(ConfigMatchingProvider.class);
   }
 
-  private boolean forceConvertMatchResult(ConfigMatchingProvider.MatchResult result)
-      throws Exception {
-    if (result.equals(ConfigMatchingProvider.MatchResult.MATCH)) {
+  private boolean forceConvertMatchResult(ConfigMatchingProvider.MatchResult result) {
+    if (result instanceof Match) {
       return true;
-    } else if (result.equals(ConfigMatchingProvider.MatchResult.NOMATCH)) {
+    } else if (result instanceof NoMatch) {
       return false;
     }
     throw new IllegalStateException("Unexpected MatchResult: " + result);
@@ -210,6 +219,20 @@ public class ConfigSettingTest extends BuildViewTestCase {
         "config_setting(",
         "    name = 'badoption',",
         "    values = {'internal_option': 'bar'})");
+  }
+
+  @Test
+  public void oldNameReference() throws Exception {
+    scratch.file(
+        "test/BUILD",
+        """
+        config_setting(
+            name = "match",
+            values = {"old_option_name": "foo"},
+        )
+        """);
+    assertThat(getConfiguredTarget("//test:match")).isNotNull();
+    assertNoEvents();
   }
 
   /**
@@ -467,9 +490,41 @@ public class ConfigSettingTest extends BuildViewTestCase {
     assertThat(getConfigMatchingProviderResultAsBoolean("//test:match")).isEqualTo(matchExpected);
   }
 
+  @Test
+  public void flagWithOldName_NoMatch() throws Exception {
+    scratch.file(
+        "test/BUILD",
+        """
+        config_setting(
+            name = "match",
+            values = {
+                "old_option_name": "different_setting",
+            },
+        )
+        """);
+    useConfiguration("--new_option_name=is_set");
+    assertThat(getConfigMatchingProviderResultAsBoolean("//test:match")).isFalse();
+  }
+
+  @Test
+  public void flagWithOldName_Match() throws Exception {
+    scratch.file(
+        "test/BUILD",
+        """
+        config_setting(
+            name = "match",
+            values = {
+                "old_option_name": "is_set",
+            },
+        )
+        """);
+    useConfiguration("--new_option_name=is_set");
+    assertThat(getConfigMatchingProviderResultAsBoolean("//test:match")).isTrue();
+  }
+
   /**
    * Tests multi-value flags that don't support multiple values <b></b>in the same instance<b>. See
-   * comments on {@link #multiValueListMultipleExpectedValues()} for details.
+   * comments on {@link #multiValueListMultipleExpectedValues(List, boolean)} for details.
    */
   @Test
   public void multiValueListSingleValueThatLooksLikeMultiple() throws Exception {
@@ -2953,5 +3008,69 @@ public class ConfigSettingTest extends BuildViewTestCase {
     assertThat(getConfiguredTarget("//test:match")).isNotNull();
     assertContainsEvent(
         "select() on %s is deprecated. Use platform constraints instead".formatted(flag));
+  }
+
+  @Test
+  @TestParameters({"{flag: cpu}", "{flag: host_cpu}", "{flag: crosstool_top}"})
+  public void selectOnDisabledFlagFails(String flag) throws Exception {
+    scratch.file(
+        "test/BUILD",
+        """
+        config_setting(
+            name = "match",
+            values = {
+              "%s": "//foo",
+            },
+        )
+        """
+            .formatted(flag));
+    useConfiguration("--incompatible_disable_select_on=%s".formatted(flag));
+    reporter.removeHandler(failFastHandler);
+    assertThat(getConfiguredTarget("//test:match")).isNull();
+    assertContainsEvent(
+        "in values attribute of config_setting rule //test:match: error while parsing configuration"
+            + " settings: select() on %s is not allowed. Use platform constraints instead"
+                .formatted(flag));
+  }
+
+  @Test
+  // If --foo has oldName --old_foo, let disabling flag selection have fine-grained control over
+  // which name is permitted. For example, if we want to force all config_settings to use the
+  // new name, we could set --incompatible_disable-select_on=old_foo.
+  @TestParameters({
+    "{configSettingName: new_option_name, disabledName: new_option_name, expectSuccess:"
+        + " false}",
+    "{configSettingName: old_option_name, disabledName: old_option_name,"
+        + " expectSuccess: false}",
+    "{configSettingName: new_option_name, disabledName: old_option_name," + " expectSuccess: true}",
+    "{configSettingName: old_option_name, disabledName: new_option_name," + " expectSuccess: true}",
+  })
+  public void selectOnDisabledFlagwithOldName(
+      String configSettingName, String disabledName, boolean expectSuccess) throws Exception {
+    scratch.file(
+        "test/BUILD",
+        """
+        config_setting(
+            name = "match",
+            values = {
+              "%s": "//foo",
+            },
+        )
+        """
+            .formatted(configSettingName));
+    useConfiguration("--incompatible_disable_select_on=%s".formatted(disabledName));
+    reporter.removeHandler(failFastHandler);
+
+    if (expectSuccess) {
+      assertThat(getConfiguredTarget("//test:match")).isNotNull();
+      assertNoEvents();
+    } else {
+      assertThat(getConfiguredTarget("//test:match")).isNull();
+      assertContainsEvent(
+          "in values attribute of config_setting rule //test:match: error while parsing"
+              + " configuration"
+              + " settings: select() on %s is not allowed. Use platform constraints instead"
+                  .formatted(disabledName));
+    }
   }
 }

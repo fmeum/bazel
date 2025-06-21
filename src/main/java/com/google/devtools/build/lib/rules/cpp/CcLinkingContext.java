@@ -13,20 +13,21 @@
 // limitations under the License.
 package com.google.devtools.build.lib.rules.cpp;
 
+import static com.google.common.collect.ImmutableList.toImmutableList;
+
 import com.google.common.base.Joiner;
 import com.google.common.base.MoreObjects;
 import com.google.common.base.Objects;
 import com.google.common.base.Preconditions;
 import com.google.common.collect.ImmutableList;
-import com.google.devtools.build.lib.actions.ActionKeyContext;
 import com.google.devtools.build.lib.actions.Artifact;
-import com.google.devtools.build.lib.actions.CommandLineExpansionException;
-import com.google.devtools.build.lib.bugreport.BugReport;
 import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.collect.nestedset.Depset;
 import com.google.devtools.build.lib.collect.nestedset.NestedSet;
 import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
+import com.google.devtools.build.lib.collect.nestedset.Order;
 import com.google.devtools.build.lib.concurrent.ThreadSafety.Immutable;
+import com.google.devtools.build.lib.packages.StarlarkInfo;
 import com.google.devtools.build.lib.packages.semantics.BuildLanguageOptions;
 import com.google.devtools.build.lib.starlarkbuildapi.cpp.CcLinkingContextApi;
 import com.google.devtools.build.lib.starlarkbuildapi.cpp.LinkerInputApi;
@@ -43,7 +44,6 @@ import net.starlark.java.eval.Starlark;
 import net.starlark.java.eval.StarlarkList;
 import net.starlark.java.eval.StarlarkSemantics;
 import net.starlark.java.eval.StarlarkThread;
-import net.starlark.java.eval.SymbolGenerator.Symbol;
 
 /** Structure of CcLinkingContext. */
 public class CcLinkingContext implements CcLinkingContextApi<Artifact> {
@@ -55,34 +55,21 @@ public class CcLinkingContext implements CcLinkingContextApi<Artifact> {
   public static final class LinkOptions {
     private final ImmutableList<String> linkOptions;
 
-    // This needs to be here to satisfy two constraints:
-    // 1. We cannot use reference equality so that when this object is serialized and then
-    // de-serialized, equality still works
-    // 2. Link options created from different configured targets but with the same contents must
-    // not be equal. If they were, the following error case would happen: if A depends on B1 and C1
-    // B1 depends on B2, C1 depends on C2 and B2 and C2 both have "-l<something>" in their linkopts,
-    // the nested set containing the linkopts would remove one of them, thereby moving
-    // "-l<something>" before the object files of C2 on the linker command line, thus making the
-    // symbols in them invisible from C2.
-    private final Object symbolForEquality;
-
-    private LinkOptions(ImmutableList<String> linkOptions, Object symbolForEquality) {
+    private LinkOptions(ImmutableList<String> linkOptions) {
       this.linkOptions = Preconditions.checkNotNull(linkOptions);
-      this.symbolForEquality = Preconditions.checkNotNull(symbolForEquality);
     }
 
     public ImmutableList<String> get() {
       return linkOptions;
     }
 
-    public static LinkOptions of(ImmutableList<String> linkOptions, Symbol<?> symbol) {
-      return new LinkOptions(linkOptions, symbol);
+    public static LinkOptions of(ImmutableList<String> linkOptions) {
+      return new LinkOptions(linkOptions);
     }
 
     @Override
     public int hashCode() {
-      // Symbol is sufficient for equality check.
-      return symbolForEquality.hashCode();
+      return linkOptions.hashCode();
     }
 
     @Override
@@ -93,21 +80,12 @@ public class CcLinkingContext implements CcLinkingContextApi<Artifact> {
       if (!(obj instanceof LinkOptions that)) {
         return false;
       }
-      if (!this.symbolForEquality.equals(that.symbolForEquality)) {
-        return false;
-      }
-      if (this.linkOptions.equals(that.linkOptions)) {
-        return true;
-      }
-      BugReport.sendBugReport(
-          new IllegalStateException(
-              "Unexpected inequality with equal symbols: " + this + ", " + that));
-      return false;
+      return this.linkOptions.equals(that.linkOptions);
     }
 
     @Override
     public String toString() {
-      return '[' + Joiner.on(",").join(linkOptions) + "] (owner: " + symbolForEquality;
+      return '[' + Joiner.on(",").join(linkOptions) + "]";
     }
   }
 
@@ -120,26 +98,11 @@ public class CcLinkingContext implements CcLinkingContextApi<Artifact> {
   @Immutable
   public static final class Linkstamp implements LinkstampApi<Artifact> {
     private final Artifact artifact;
-    private final NestedSet<Artifact> declaredIncludeSrcs;
-    private final int nestedDigest;
+    private final ImmutableList<Artifact> declaredIncludeSrcs;
 
-    // TODO(janakr): if action key context is not available, the digest can be computed lazily,
-    // only if we are doing an equality comparison and artifacts are equal. That should never
-    // happen, so doing an expensive digest should be ok then. If this is ever moved to Starlark
-    // and Starlark doesn't support custom equality or amortized deep equality of nested sets, a
-    // Symbol can be used as an equality proxy, similar to what LinkOptions does above.
-    Linkstamp(
-        Artifact artifact,
-        NestedSet<Artifact> declaredIncludeSrcs,
-        ActionKeyContext actionKeyContext)
-        throws CommandLineExpansionException, InterruptedException {
+    Linkstamp(Artifact artifact, NestedSet<Artifact> declaredIncludeSrcs) {
       this.artifact = Preconditions.checkNotNull(artifact);
-      this.declaredIncludeSrcs = Preconditions.checkNotNull(declaredIncludeSrcs);
-      StringBuilder nestedDigestBuilder = new StringBuilder();
-      for (Artifact declaredIncludeSrc : declaredIncludeSrcs.toList()) {
-        nestedDigestBuilder.append(declaredIncludeSrc.getExecPathString());
-      }
-      nestedDigest = nestedDigestBuilder.toString().hashCode();
+      this.declaredIncludeSrcs = declaredIncludeSrcs.toList();
     }
 
     /** Returns the linkstamp artifact. */
@@ -153,25 +116,20 @@ public class CcLinkingContext implements CcLinkingContextApi<Artifact> {
       return artifact;
     }
 
-    /** Returns the declared includes. */
-    public NestedSet<Artifact> getDeclaredIncludeSrcs() {
-      return declaredIncludeSrcs;
-    }
-
     @Override
     public Depset getDeclaredIncludeSrcsForStarlark(StarlarkThread thread) throws EvalException {
       CcModule.checkPrivateStarlarkificationAllowlist(thread);
-      return Depset.of(Artifact.class, getDeclaredIncludeSrcs());
+      return Depset.of(
+          Artifact.class, NestedSetBuilder.wrap(Order.STABLE_ORDER, declaredIncludeSrcs));
     }
 
     @Override
     public int hashCode() {
-      // Artifact should be enough to disambiguate basically all the time.
-      return artifact.hashCode();
+      return Objects.hashCode(artifact, declaredIncludeSrcs);
     }
 
     @Override
-    public final boolean isImmutable() {
+    public boolean isImmutable() {
       return true; // immutable and Starlark-hashable
     }
 
@@ -183,7 +141,8 @@ public class CcLinkingContext implements CcLinkingContextApi<Artifact> {
       if (!(obj instanceof Linkstamp other)) {
         return false;
       }
-      return artifact.equals(other.artifact) && nestedDigest == other.nestedDigest;
+      return artifact.equals(other.artifact)
+          && declaredIncludeSrcs.equals(other.declaredIncludeSrcs);
     }
   }
 
@@ -193,19 +152,18 @@ public class CcLinkingContext implements CcLinkingContextApi<Artifact> {
   // TODO(bazel-team): choose less confusing names for this class and the package-level interface of
   // the same name.
   @Immutable
-  public static class LinkerInput
-      implements LinkerInputApi<LibraryToLink, LtoBackendArtifacts, Artifact> {
+  public static class LinkerInput implements LinkerInputApi<LtoBackendArtifacts, Artifact> {
     // Identifies which target created the LinkerInput. It doesn't have to be unique between
     // LinkerInputs.
     private final Label owner;
-    private final ImmutableList<LibraryToLink> libraries;
+    private final ImmutableList<StarlarkInfo> libraries;
     private final ImmutableList<LinkOptions> userLinkFlags;
     private final ImmutableList<Artifact> nonCodeInputs;
     private final ImmutableList<Linkstamp> linkstamps;
 
     public LinkerInput(
         Label owner,
-        ImmutableList<LibraryToLink> libraries,
+        ImmutableList<StarlarkInfo> libraries,
         ImmutableList<LinkOptions> userLinkFlags,
         ImmutableList<Artifact> nonCodeInputs,
         ImmutableList<Linkstamp> linkstamps) {
@@ -235,13 +193,17 @@ public class CcLinkingContext implements CcLinkingContextApi<Artifact> {
       return owner;
     }
 
+    /**
+     * @deprecated Use only in tests
+     */
+    @Deprecated
     public List<LibraryToLink> getLibraries() {
-      return libraries;
+      return libraries.stream().map(LibraryToLink::wrap).collect(toImmutableList());
     }
 
     @Override
-    public Sequence<LibraryToLink> getStarlarkLibrariesToLink(StarlarkSemantics semantics) {
-      return StarlarkList.immutableCopyOf(getLibraries());
+    public Sequence<StarlarkInfo> getStarlarkLibrariesToLink(StarlarkSemantics semantics) {
+      return StarlarkList.immutableCopyOf(libraries);
     }
 
     public List<LinkOptions> getUserLinkFlags() {
@@ -254,7 +216,7 @@ public class CcLinkingContext implements CcLinkingContextApi<Artifact> {
           getUserLinkFlags().stream()
               .map(LinkOptions::get)
               .flatMap(Collection::stream)
-              .collect(ImmutableList.toImmutableList()));
+              .collect(toImmutableList()));
     }
 
     public List<Artifact> getNonCodeInputs() {
@@ -284,7 +246,7 @@ public class CcLinkingContext implements CcLinkingContextApi<Artifact> {
         owner.debugPrint(printer, thread);
       }
       printer.append(", libraries=[");
-      for (LibraryToLink libraryToLink : libraries) {
+      for (StarlarkInfo libraryToLink : libraries) {
         libraryToLink.debugPrint(printer, thread);
         printer.append(", ");
       }
@@ -306,13 +268,13 @@ public class CcLinkingContext implements CcLinkingContextApi<Artifact> {
     /** Builder for {@link LinkerInput} */
     public static class Builder {
       private Label owner;
-      private final ImmutableList.Builder<LibraryToLink> libraries = ImmutableList.builder();
+      private final ImmutableList.Builder<StarlarkInfo> libraries = ImmutableList.builder();
       private final ImmutableList.Builder<LinkOptions> userLinkFlags = ImmutableList.builder();
       private final ImmutableList.Builder<Artifact> nonCodeInputs = ImmutableList.builder();
       private final ImmutableList.Builder<Linkstamp> linkstamps = ImmutableList.builder();
 
       @CanIgnoreReturnValue
-      public Builder addLibraries(List<LibraryToLink> libraries) {
+      public Builder addLibraries(List<StarlarkInfo> libraries) {
         this.libraries.addAll(libraries);
         return this;
       }
@@ -422,6 +384,10 @@ public class CcLinkingContext implements CcLinkingContextApi<Artifact> {
     return mergedCcLinkingContext.build();
   }
 
+  /**
+   * @deprecated Only use in tests
+   */
+  @Deprecated
   public List<Artifact> getStaticModeParamsForExecutableLibraries() {
     ImmutableList.Builder<Artifact> libraryListBuilder = ImmutableList.builder();
     for (LibraryToLink libraryToLink : getLibraries().toList()) {
@@ -438,6 +404,10 @@ public class CcLinkingContext implements CcLinkingContextApi<Artifact> {
     return libraryListBuilder.build();
   }
 
+  /**
+   * @deprecated Only use in tests
+   */
+  @Deprecated
   public List<Artifact> getStaticModeParamsForDynamicLibraryLibraries() {
     ImmutableList.Builder<Artifact> artifactListBuilder = ImmutableList.builder();
     for (LibraryToLink library : getLibraries().toList()) {
@@ -454,12 +424,32 @@ public class CcLinkingContext implements CcLinkingContextApi<Artifact> {
     return artifactListBuilder.build();
   }
 
+  /**
+   * @deprecated Use only in tests. @Deprecated
+   */
+  @Deprecated
   public List<Artifact> getDynamicLibrariesForRuntime(boolean linkingStatically) {
     return LibraryToLink.getDynamicLibrariesForRuntime(linkingStatically, getLibraries().toList());
   }
 
+  /**
+   * @deprecated Use only in tests
+   */
+  @Deprecated
   public NestedSet<LibraryToLink> getLibraries() {
     NestedSetBuilder<LibraryToLink> libraries = NestedSetBuilder.linkOrder();
+    for (LinkerInput linkerInput : linkerInputs.toList()) {
+      libraries.addAll(linkerInput.getLibraries());
+    }
+    return libraries.build();
+  }
+
+  /**
+   * @deprecated Don't use. The function will be removed.
+   */
+  @Deprecated
+  NestedSet<StarlarkInfo> getLibrariesFromLinkerInputs() {
+    NestedSetBuilder<StarlarkInfo> libraries = NestedSetBuilder.linkOrder();
     for (LinkerInput linkerInput : linkerInputs.toList()) {
       libraries.addAll(linkerInput.libraries);
     }
@@ -481,12 +471,13 @@ public class CcLinkingContext implements CcLinkingContextApi<Artifact> {
   }
 
   @Override
+  @Deprecated
   public Object getStarlarkLibrariesToLink(StarlarkSemantics semantics) {
     // TODO(plf): Flag can be removed already.
     if (semantics.getBool(BuildLanguageOptions.INCOMPATIBLE_DEPSET_FOR_LIBRARIES_TO_LINK_GETTER)) {
-      return Depset.of(LibraryToLink.class, getLibraries());
+      return Depset.of(StarlarkInfo.class, getLibrariesFromLinkerInputs());
     } else {
-      return StarlarkList.immutableCopyOf(getLibraries().toList());
+      return StarlarkList.immutableCopyOf(getLibrariesFromLinkerInputs().toList());
     }
   }
 
@@ -507,7 +498,7 @@ public class CcLinkingContext implements CcLinkingContextApi<Artifact> {
     return getUserLinkFlags().toList().stream()
         .map(LinkOptions::get)
         .flatMap(Collection::stream)
-        .collect(ImmutableList.toImmutableList());
+        .collect(toImmutableList());
   }
 
   public NestedSet<Linkstamp> getLinkstamps() {
@@ -562,7 +553,7 @@ public class CcLinkingContext implements CcLinkingContextApi<Artifact> {
     }
 
     @CanIgnoreReturnValue
-    public Builder addLibraries(List<LibraryToLink> libraries) {
+    public Builder addLibraries(List<StarlarkInfo> libraries) {
       hasDirectLinkerInput = true;
       linkerInputBuilder.addLibraries(libraries);
       return this;

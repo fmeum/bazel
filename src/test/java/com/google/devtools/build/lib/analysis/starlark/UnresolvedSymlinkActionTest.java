@@ -112,8 +112,6 @@ public class UnresolvedSymlinkActionTest extends BuildViewTestCase {
                 /* fileOutErr= */ null,
                 new StoredEventHandler(),
                 /* clientEnv= */ ImmutableMap.of(),
-                /* topLevelFilesets= */ ImmutableMap.of(),
-                /* artifactExpander= */ null,
                 /* actionFileSystem= */ null,
                 DiscoveredModulesPruner.DEFAULT,
                 SyscallCache.NO_CACHE,
@@ -146,7 +144,7 @@ public class UnresolvedSymlinkActionTest extends BuildViewTestCase {
 
   private String computeKey(UnresolvedSymlinkAction action) {
     Fingerprint fp = new Fingerprint();
-    action.computeKey(actionKeyContext, /*artifactExpander=*/ null, fp);
+    action.computeKey(actionKeyContext, /* inputMetadataProvider= */ null, fp);
     return fp.hexDigestAndReset();
   }
 }

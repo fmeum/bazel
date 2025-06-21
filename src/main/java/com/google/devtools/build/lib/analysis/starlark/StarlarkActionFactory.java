@@ -349,7 +349,8 @@ public class StarlarkActionFactory implements StarlarkActionFactoryApi {
               NestedSetBuilder.wrap(Order.STABLE_ORDER, args.getDirectoryArtifacts()),
               (Artifact) output,
               args.build(getMainRepoMappingSupplier()),
-              args.getParameterFileType());
+              args.getParameterFileType(),
+              isExecutable);
     } else {
       throw new AssertionError("Unexpected type: " + content.getClass().getSimpleName());
     }
@@ -770,19 +771,13 @@ public class StarlarkActionFactory implements StarlarkActionFactoryApi {
       builder.setProgressMessageFromStarlark((String) progressMessage);
     }
 
-    ImmutableMap<String, String> env = null;
+    ImmutableMap<String, String> env = ImmutableMap.of();
     if (envUnchecked != Starlark.NONE) {
       env = ImmutableMap.copyOf(Dict.cast(envUnchecked, String.class, String.class, "env"));
     }
     if (Starlark.truth(useDefaultShellEnv)) {
-      if (env != null
-          && getSemantics()
-              .getBool(BuildLanguageOptions.INCOMPATIBLE_MERGE_FIXED_AND_DEFAULT_SHELL_ENV)) {
-        builder.useDefaultShellEnvironmentWithOverrides(env);
-      } else {
-        builder.useDefaultShellEnvironment();
-      }
-    } else if (env != null) {
+      builder.useDefaultShellEnvironment(env);
+    } else {
       builder.setEnvironment(env);
     }
 
@@ -793,6 +788,27 @@ public class StarlarkActionFactory implements StarlarkActionFactoryApi {
             getSemantics().getBool(BuildLanguageOptions.INCOMPATIBLE_ALLOW_TAGS_PROPAGATION));
     builder.setExecutionInfo(executionInfo);
 
+    String execGroup = determineExecGroup(ruleContext, execGroupUnchecked, toolchainUnchecked);
+    builder.setExecGroup(execGroup);
+
+    if (shadowedActionUnchecked != Starlark.NONE) {
+      builder.setShadowedAction(Optional.of((Action) shadowedActionUnchecked));
+    }
+
+    if (resourceSetUnchecked != Starlark.NONE) {
+      validateResourceSetBuilder(resourceSetUnchecked);
+      builder.setResources(
+          StarlarkActionResourceSetBuilder.create(
+              (StarlarkCallable) resourceSetUnchecked, mnemonic, getSemantics()));
+    }
+
+    // Always register the action
+    registerAction(builder.build(ruleContext));
+  }
+
+  public static String determineExecGroup(
+      RuleContext ruleContext, Object execGroupUnchecked, Object toolchainUnchecked)
+      throws EvalException {
     Label toolchainLabel = null;
     if (toolchainUnchecked instanceof Label label) {
       toolchainLabel = label;
@@ -812,7 +828,7 @@ public class StarlarkActionFactory implements StarlarkActionFactoryApi {
       checkValidGroupName(execGroup);
 
       // If toolchain and exec_groups are both defined, verify they are compatible.
-      if (useAutoExecGroups && toolchainLabel != null) {
+      if (ruleContext.useAutoExecGroups() && toolchainLabel != null) {
         if (ruleContext.getExecGroups().getExecGroup(execGroup).toolchainTypes().stream()
             .map(ToolchainTypeRequirement::toolchainType)
             .noneMatch(toolchainLabel::equals)) {
@@ -823,27 +839,13 @@ public class StarlarkActionFactory implements StarlarkActionFactoryApi {
         }
       }
 
-      builder.setExecGroup(execGroup);
-    } else if (useAutoExecGroups && toolchainLabel != null) {
+      return execGroup;
+    } else if (ruleContext.useAutoExecGroups() && toolchainLabel != null) {
       verifyAutomaticExecGroupExists(toolchainLabel.toString(), ruleContext);
-      builder.setExecGroup(toolchainLabel.toString());
-    } else {
-      builder.setExecGroup(DeclaredExecGroup.DEFAULT_EXEC_GROUP_NAME);
+      return toolchainLabel.toString();
     }
 
-    if (shadowedActionUnchecked != Starlark.NONE) {
-      builder.setShadowedAction(Optional.of((Action) shadowedActionUnchecked));
-    }
-
-    if (resourceSetUnchecked != Starlark.NONE) {
-      validateResourceSetBuilder(resourceSetUnchecked);
-      builder.setResources(
-          StarlarkActionResourceSetBuilder.create(
-              (StarlarkCallable) resourceSetUnchecked, mnemonic, getSemantics()));
-    }
-
-    // Always register the action
-    registerAction(builder.build(ruleContext));
+    return DeclaredExecGroup.DEFAULT_EXEC_GROUP_NAME;
   }
 
   private static class StarlarkActionResourceSetBuilder implements ResourceSetOrBuilder {

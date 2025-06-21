@@ -34,7 +34,6 @@ import com.google.devtools.build.lib.cmdline.RepositoryName;
 import com.google.devtools.build.lib.cmdline.StarlarkThreadContext;
 import com.google.devtools.build.lib.events.Event;
 import com.google.devtools.build.lib.packages.Rule;
-import com.google.devtools.build.lib.packages.semantics.BuildLanguageOptions;
 import com.google.devtools.build.lib.pkgcache.PathPackageLocator;
 import com.google.devtools.build.lib.profiler.Profiler;
 import com.google.devtools.build.lib.profiler.ProfilerTask;
@@ -42,7 +41,6 @@ import com.google.devtools.build.lib.profiler.SilentCloseable;
 import com.google.devtools.build.lib.repository.RepositoryFetchProgress;
 import com.google.devtools.build.lib.rules.repository.NeedsSkyframeRestartException;
 import com.google.devtools.build.lib.rules.repository.RepoRecordedInput;
-import com.google.devtools.build.lib.rules.repository.RepositoryDirectoryValue;
 import com.google.devtools.build.lib.rules.repository.RepositoryFunction;
 import com.google.devtools.build.lib.rules.repository.WorkspaceFileHelper;
 import com.google.devtools.build.lib.runtime.ProcessWrapper;
@@ -64,6 +62,7 @@ import java.util.Optional;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.ExecutionException;
 import javax.annotation.Nullable;
+import net.starlark.java.eval.Dict;
 import net.starlark.java.eval.EvalException;
 import net.starlark.java.eval.Mutability;
 import net.starlark.java.eval.Starlark;
@@ -121,6 +120,10 @@ public final class StarlarkRepositoryFunction extends RepositoryFunction {
     }
   }
 
+  private static class State extends WorkerSkyKeyComputeState<FetchResult> {
+    @Nullable FetchResult result;
+  }
+
   private record FetchArgs(
       Rule rule, Path outputDirectory, BlazeDirectories directories, Environment env, SkyKey key) {
     FetchArgs toWorkerArgs(Environment env) {
@@ -139,15 +142,23 @@ public final class StarlarkRepositoryFunction extends RepositoryFunction {
     }
     // See below (the `catch CancellationException` clause) for why there's a `while` loop here.
     while (true) {
-      var state = env.getState(WorkerSkyKeyComputeState<FetchResult>::new);
+      var state = env.getState(State::new);
+      if (state.result != null) {
+        // Escape early if we've already finished fetching once. This can happen if
+        // RepositoryDelegatorFunction triggers a Skyframe restart _after_
+        // StarlarkRepositoryFunction#fetch is finished.
+        return state.result;
+      }
       try {
-        return state.startOrContinueWork(
-            env,
-            "starlark-repository-" + rule.getName(),
-            (workerEnv) -> {
-              setupRepoRoot(outputDirectory);
-              return fetchInternal(args.toWorkerArgs(workerEnv));
-            });
+        state.result =
+            state.startOrContinueWork(
+                env,
+                "starlark-repository-" + rule.getName(),
+                (workerEnv) -> {
+                  setupRepoRoot(outputDirectory);
+                  return fetchInternal(args.toWorkerArgs(workerEnv));
+                });
+        return state.result;
       } catch (ExecutionException e) {
         Throwables.throwIfInstanceOf(e.getCause(), RepositoryFunctionException.class);
         Throwables.throwIfInstanceOf(e.getCause(), InterruptedException.class);
@@ -196,7 +207,6 @@ public final class StarlarkRepositoryFunction extends RepositoryFunction {
       return null;
     }
 
-    boolean enableBzlmod = starlarkSemantics.getBool(BuildLanguageOptions.ENABLE_BZLMOD);
     RepoRuleId repoRuleId =
         new RepoRuleId(
             rule.getRuleClassObject().getRuleDefinitionEnvironmentLabel(), rule.getRuleClass());
@@ -204,16 +214,13 @@ public final class StarlarkRepositoryFunction extends RepositoryFunction {
     if (NonRegistryOverride.BOOTSTRAP_REPO_RULES.contains(repoRuleId)) {
       // Avoid a cycle.
       mainRepoMapping = null;
-    } else if (enableBzlmod || !isWorkspaceRepo(rule)) {
+    } else {
       var mainRepoMappingValue =
-          (RepositoryMappingValue)
-              env.getValue(RepositoryMappingValue.KEY_FOR_ROOT_MODULE_WITHOUT_WORKSPACE_REPOS);
+          (RepositoryMappingValue) env.getValue(RepositoryMappingValue.key(RepositoryName.MAIN));
       if (mainRepoMappingValue == null) {
         return null;
       }
       mainRepoMapping = mainRepoMappingValue.repositoryMapping();
-    } else {
-      mainRepoMapping = rule.getPackageMetadata().repositoryMapping();
     }
 
     IgnoredSubdirectoriesValue ignoredSubdirectories =
@@ -223,6 +230,7 @@ public final class StarlarkRepositoryFunction extends RepositoryFunction {
     }
 
     Map<RepoRecordedInput, String> recordedInputValues = new LinkedHashMap<>();
+    RepoMetadata repoMetadata;
     try (Mutability mu = Mutability.create("Starlark repository");
         StarlarkRepositoryContext starlarkRepositoryContext =
             new StarlarkRepositoryContext(
@@ -277,9 +285,17 @@ public final class StarlarkRepositoryFunction extends RepositoryFunction {
         starlarkRepositoryContext.markSuccessful();
       }
 
+      repoMetadata =
+          switch (result) {
+            case Dict<?, ?> dict -> new RepoMetadata(Reproducibility.NO, dict);
+            case RepoMetadata rm -> rm;
+            default -> RepoMetadata.NONREPRODUCIBLE;
+          };
       RepositoryResolvedEvent resolved =
           new RepositoryResolvedEvent(
-              rule, starlarkRepositoryContext.getAttr(), outputDirectory, result);
+              rule,
+              starlarkRepositoryContext.getAttr(),
+              repoMetadata.attrsForReproducibility());
       if (resolved.isNewInformationReturned()) {
         env.getListener().handle(Event.debug(resolved.getMessage()));
         env.getListener().handle(Event.debug(defInfo));
@@ -303,8 +319,6 @@ public final class StarlarkRepositoryFunction extends RepositoryFunction {
                 repoMappings.getRowKey(), repoMappings.getColumnKey()),
             repoMappings.getValue().getName());
       }
-
-      env.getListener().post(resolved);
     } catch (NeedsSkyframeRestartException e) {
       return null;
     } catch (EvalException e) {
@@ -344,17 +358,12 @@ public final class StarlarkRepositoryFunction extends RepositoryFunction {
       // Otherwise, we can just create an empty REPO.bazel file.
       try {
         FileSystemUtils.createEmptyFile(outputDirectory.getRelative(LabelConstants.REPO_FILE_NAME));
-        if (starlarkSemantics.getBool(BuildLanguageOptions.ENABLE_WORKSPACE)) {
-          FileSystemUtils.createEmptyFile(
-              outputDirectory.getRelative(LabelConstants.WORKSPACE_FILE_NAME));
-        }
       } catch (IOException e) {
         throw new RepositoryFunctionException(e, Transience.TRANSIENT);
       }
     }
 
-    return new FetchResult(
-        RepositoryDirectoryValue.builder().setPath(outputDirectory), recordedInputValues);
+    return new FetchResult(recordedInputValues, repoMetadata.reproducible());
   }
 
   @SuppressWarnings("unchecked")

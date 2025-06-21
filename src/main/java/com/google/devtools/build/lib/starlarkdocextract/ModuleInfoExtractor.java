@@ -105,7 +105,7 @@ public final class ModuleInfoExtractor {
                       + " resolution for dependencies of this repository.\n\n"
                       + "For example, an entry `\"@foo\": \"@bar\"` declares that, for any time"
                       + " this repository depends on `@foo` (such as a dependency on"
-                      + " `@foo//some:target`, it should actually resolve that dependency within"
+                      + " `@foo//some:target`), it should actually resolve that dependency within"
                       + " globally-declared `@bar` (`@bar//some:target`).\n\n"
                       + "This attribute is _not_ supported in `MODULE.bazel` context (when invoking"
                       + " a repository rule inside a module extension's implementation function).")
@@ -399,7 +399,7 @@ public final class ModuleInfoExtractor {
       AttributeInfoExtractor.addDocumentableAttributes(
           contextForImplicitMacroAttributes,
           IMPLICIT_MACRO_ATTRIBUTES,
-          macroClass.getAttributes().values(),
+          macroClass.getAttributeProvider().getAttributes(),
           macroInfoBuilder::addAttribute);
 
       moduleInfoBuilder.addMacroInfo(macroInfoBuilder);
@@ -555,12 +555,15 @@ public final class ModuleInfoExtractor {
       AttributeInfoExtractor.addDocumentableAttributes(
           context,
           IMPLICIT_REPOSITORY_RULE_ATTRIBUTES,
-          ruleClass.getAttributes(),
+          ruleClass.getAttributeProvider().getAttributes(),
           repositoryRuleInfoBuilder::addAttribute);
-      if (ruleClass.hasAttr("$environ", Types.STRING_LIST)) {
+      if (ruleClass.getAttributeProvider().hasAttr("$environ", Types.STRING_LIST)) {
         for (String env :
             Types.STRING_LIST.cast(
-                ruleClass.getAttributeByName("$environ").getDefaultValue(null))) {
+                ruleClass
+                    .getAttributeProvider()
+                    .getAttributeByName("$environ")
+                    .getDefaultValue(null))) {
           repositoryRuleInfoBuilder.addEnviron(internalToUnicode(env));
         }
       }

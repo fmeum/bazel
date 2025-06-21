@@ -455,7 +455,12 @@ public class RunCommand implements BlazeCommand {
       configuration = result.getBuildConfiguration();
     }
 
-    if (!configuration.buildRunfileManifests()) {
+    // When --nobuild_runfile_manifests is enabled, either virtual roots are also enabled (in which
+    // case we assume runfiles staging is handled elsewhere) or the output service is responsible
+    // for staging runfiles.
+    if (!configuration.buildRunfileManifests()
+        && env.getDirectories().getVirtualSourceRoot() == null
+        && !env.getOutputService().stagesTopLevelRunfiles()) {
       throw new RunCommandException(
           reportAndCreateFailureResult(
               env,
@@ -656,9 +661,22 @@ public class RunCommand implements BlazeCommand {
               ImmutableSet.copyOf(environmentProvider.getInheritedEnvironment()));
     }
     TreeMap<String, String> runEnvironment = makeMutableRunEnvironment(env);
-    actionEnvironment.resolve(runEnvironment, env.getClientEnv());
-    for (var entry : extraRunEnvironment) {
-      runEnvironment.put(entry.getKey(), entry.getValue());
+    ImmutableMap<String, String> clientEnv = env.getClientEnv();
+    actionEnvironment.resolve(runEnvironment, clientEnv);
+    for (Map.Entry<String, String> entry : extraRunEnvironment) {
+      String key = entry.getKey();
+      String value = entry.getValue();
+      if (value == null) {
+        // If a value is missing, inherit from client environment if present, otherwise leave unset.
+        // In the latter case, explicitly remove since the same key might be given multiple times.
+        if (clientEnv.containsKey(key)) {
+          runEnvironment.put(key, clientEnv.get(key));
+        } else {
+          runEnvironment.remove(key);
+        }
+      } else {
+        runEnvironment.put(key, value);
+      }
     }
 
     ImmutableList<String> argsFromBinary;
@@ -716,19 +734,25 @@ public class RunCommand implements BlazeCommand {
         settings.getRunfilesSymlinksCreated()
             == options.getOptions(CoreOptions.class).buildRunfileLinks);
 
+    Path devirtualizedExecRoot = env.getExecRoot().devirtualize();
+    Path devirtualizedRunfilesDir =
+        settings.getRunfilesDir() != null
+            ? settings.getRunfilesDir().devirtualize()
+            : builtTargets.targetToRunRunfilesDir.getParentDirectory().devirtualize();
+
     ExecutionOptions executionOptions = options.getOptions(ExecutionOptions.class);
     Path tmpDirRoot =
-        TestStrategy.getTmpRoot(env.getWorkspace(), env.getExecRoot(), executionOptions);
+        TestStrategy.getTmpRoot(env.getWorkspace(), devirtualizedExecRoot, executionOptions);
     PathFragment maybeRelativeTmpDir =
-        tmpDirRoot.startsWith(env.getExecRoot())
-            ? tmpDirRoot.relativeTo(env.getExecRoot())
+        tmpDirRoot.startsWith(devirtualizedExecRoot)
+            ? tmpDirRoot.relativeTo(devirtualizedExecRoot)
             : tmpDirRoot.asFragment();
     TreeMap<String, String> runEnvironment = makeMutableRunEnvironment(env);
     runEnvironment.putAll(
         testPolicy.computeTestEnvironment(
             testAction,
             env.getClientEnv(),
-            settings.getRunfilesDir().relativeTo(env.getExecRoot()),
+            devirtualizedRunfilesDir.relativeTo(devirtualizedExecRoot),
             maybeRelativeTmpDir.getRelative(TestStrategy.getTmpDirName(testAction))));
 
     try {
@@ -770,7 +794,9 @@ public class RunCommand implements BlazeCommand {
     }
 
     return new RunCommandLine.Builder(
-            ImmutableSortedMap.copyOf(runEnvironment), env.getExecRoot(), /* isTestTarget= */ true)
+            ImmutableSortedMap.copyOf(runEnvironment),
+            /* workingDir= */ devirtualizedExecRoot,
+            /* isTestTarget= */ true)
         .addArgs(testArgs)
         .addArgsFromResidue(argsFromResidue)
         .build();
@@ -786,7 +812,7 @@ public class RunCommand implements BlazeCommand {
     TreeMap<String, String> result = new TreeMap<>();
     result.put("BUILD_WORKSPACE_DIRECTORY", env.getWorkspace().getPathString());
     result.put("BUILD_WORKING_DIRECTORY", env.getWorkingDirectory().getPathString());
-    result.put("BUILD_EXECROOT", env.getExecRoot().getPathString());
+    result.put("BUILD_EXECROOT", env.getExecRoot().devirtualize().getPathString());
     result.put("BUILD_ID", env.getCommandId().toString());
     return result;
   }
@@ -933,6 +959,13 @@ public class RunCommand implements BlazeCommand {
     // Workspace name directory doesn't exist, so don't add it.
     if (configuration.runfilesEnabled()) {
       workingDir = workingDir.getRelative(runfilesSupport.getRunfiles().getPrefix());
+    }
+
+    // Return early if runfiles staging is handled elsewhere (i.e. either if virtual roots are
+    // enabled or if it's managed by the output service).
+    if (env.getDirectories().getVirtualSourceRoot() != null
+        || env.getOutputService().stagesTopLevelRunfiles()) {
+      return workingDir.devirtualize();
     }
 
     // Always create runfiles directory and the workspace-named directory underneath, even if we

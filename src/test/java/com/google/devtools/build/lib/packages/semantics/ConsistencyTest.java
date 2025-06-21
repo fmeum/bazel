@@ -139,9 +139,7 @@ public class ConsistencyTest {
         "--experimental_dormant_deps=" + rand.nextBoolean(),
         "--incompatible_always_check_depset_elements=" + rand.nextBoolean(),
         "--incompatible_depset_for_libraries_to_link_getter=" + rand.nextBoolean(),
-        "--incompatible_disable_target_provider_fields=" + rand.nextBoolean(),
         "--incompatible_disallow_empty_glob=" + rand.nextBoolean(),
-        "--incompatible_disallow_struct_provider_syntax=" + rand.nextBoolean(),
         "--incompatible_do_not_split_linking_cmdline=" + rand.nextBoolean(),
         "--incompatible_enable_deprecated_label_apis=" + rand.nextBoolean(),
         "--incompatible_enforce_starlark_utf8="
@@ -150,7 +148,6 @@ public class ConsistencyTest {
                 .toString()
                 .toLowerCase(Locale.ROOT),
         "--incompatible_locations_prefers_executable=" + rand.nextBoolean(),
-        "--incompatible_merge_fixed_and_default_shell_env=" + rand.nextBoolean(),
         "--incompatible_no_attr_license=" + rand.nextBoolean(),
         "--incompatible_no_implicit_file_export=" + rand.nextBoolean(),
         "--incompatible_no_rule_outputs_param=" + rand.nextBoolean(),
@@ -191,11 +188,7 @@ public class ConsistencyTest {
         .setBool(
             BuildLanguageOptions.INCOMPATIBLE_DEPSET_FOR_LIBRARIES_TO_LINK_GETTER,
             rand.nextBoolean())
-        .setBool(
-            BuildLanguageOptions.INCOMPATIBLE_DISABLE_TARGET_PROVIDER_FIELDS, rand.nextBoolean())
         .setBool(BuildLanguageOptions.INCOMPATIBLE_DISALLOW_EMPTY_GLOB, rand.nextBoolean())
-        .setBool(
-            BuildLanguageOptions.INCOMPATIBLE_DISALLOW_STRUCT_PROVIDER_SYNTAX, rand.nextBoolean())
         .setBool(BuildLanguageOptions.INCOMPATIBLE_DO_NOT_SPLIT_LINKING_CMDLINE, rand.nextBoolean())
         .setBool(BuildLanguageOptions.INCOMPATIBLE_ENABLE_DEPRECATED_LABEL_APIS, rand.nextBoolean())
         .set(
@@ -203,8 +196,6 @@ public class ConsistencyTest {
             BuildLanguageOptions.Utf8EnforcementMode.values()[
                 rand.nextInt(BuildLanguageOptions.Utf8EnforcementMode.values().length)])
         .setBool(BuildLanguageOptions.INCOMPATIBLE_LOCATIONS_PREFERS_EXECUTABLE, rand.nextBoolean())
-        .setBool(
-            BuildLanguageOptions.INCOMPATIBLE_MERGE_FIXED_AND_DEFAULT_SHELL_ENV, rand.nextBoolean())
         .setBool(BuildLanguageOptions.INCOMPATIBLE_NO_ATTR_LICENSE, rand.nextBoolean())
         .setBool(BuildLanguageOptions.INCOMPATIBLE_NO_IMPLICIT_FILE_EXPORT, rand.nextBoolean())
         .setBool(BuildLanguageOptions.INCOMPATIBLE_NO_RULE_OUTPUTS_PARAM, rand.nextBoolean())

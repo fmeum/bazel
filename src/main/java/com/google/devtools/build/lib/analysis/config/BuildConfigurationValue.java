@@ -93,6 +93,8 @@ public class BuildConfigurationValue
     FragmentRegistry getFragmentRegistry();
 
     ImmutableSet<String> getReservedActionMnemonics();
+
+    String getRunfilesPrefix();
   }
 
   private final OutputDirectories outputDirectories;
@@ -182,8 +184,8 @@ public class BuildConfigurationValue
   public static BuildConfigurationValue create(
       BuildOptions buildOptions,
       @Nullable BuildOptions baselineOptions,
-      String workspaceName,
       boolean siblingRepositoryLayout,
+      String targetCpu,
       // Arguments below this are server-global.
       BlazeDirectories directories,
       GlobalStateProvider globalProvider,
@@ -203,8 +205,9 @@ public class BuildConfigurationValue
     return new BuildConfigurationValue(
         buildOptions,
         mnemonic,
-        workspaceName,
         siblingRepositoryLayout,
+        targetCpu,
+        globalProvider.getRunfilesPrefix(),
         directories,
         fragments,
         globalProvider.getReservedActionMnemonics(),
@@ -218,7 +221,6 @@ public class BuildConfigurationValue
   public static BuildConfigurationValue createForTesting(
       BuildOptions buildOptions,
       String mnemonic,
-      String workspaceName,
       boolean siblingRepositoryLayout,
       // Arguments below this are server-global.
       BlazeDirectories directories,
@@ -236,8 +238,9 @@ public class BuildConfigurationValue
     return new BuildConfigurationValue(
         buildOptions,
         mnemonic,
-        workspaceName,
         siblingRepositoryLayout,
+        "",
+        globalProvider.getRunfilesPrefix(),
         directories,
         fragments,
         globalProvider.getReservedActionMnemonics(),
@@ -262,9 +265,10 @@ public class BuildConfigurationValue
   BuildConfigurationValue(
       BuildOptions buildOptions,
       String mnemonic,
-      String workspaceName,
       boolean siblingRepositoryLayout,
+      String targetCpu,
       // Arguments below this are either server-global and constant or completely dependent values.
+      String workspaceName,
       BlazeDirectories directories,
       ImmutableMap<Class<? extends Fragment>, Fragment> fragments,
       ImmutableSet<String> reservedActionMnemonics,
@@ -304,7 +308,7 @@ public class BuildConfigurationValue
     globalMakeEnv =
         ImmutableMap.of(
             "TARGET_CPU",
-            options.cpu,
+            targetCpu,
             "COMPILATION_MODE",
             options.compilationMode.toString(),
             "BINDIR",
@@ -657,6 +661,10 @@ public class BuildConfigurationValue
     return outputDirectories.getDirectories();
   }
 
+  public String targetCpu() {
+    return this.globalMakeEnv.get("TARGET_CPU");
+  }
+
   /** Returns true if non-functional build stamps are enabled. */
   public boolean stampBinaries() {
     return options.stampBinaries;
@@ -681,11 +689,6 @@ public class BuildConfigurationValue
   /** Returns true if we are building runfile links for this configuration. */
   public boolean buildRunfileLinks() {
     return options.buildRunfileManifests && options.buildRunfileLinks;
-  }
-
-  /** Returns if we are building external runfiles symlinks using the old-style structure. */
-  public boolean legacyExternalRunfiles() {
-    return options.legacyExternalRunfiles;
   }
 
   /**
@@ -753,6 +756,10 @@ public class BuildConfigurationValue
 
   public boolean checkVisibility() {
     return options.checkVisibility;
+  }
+
+  public boolean verboseVisibilityErrors() {
+    return options.verboseVisibilityErrors;
   }
 
   public boolean checkTestonlyForOutputFiles() {

@@ -52,6 +52,8 @@
 #include <utility>
 #include <vector>
 
+#include "src/main/cpp/startup_interceptor.h"
+
 #if !defined(_WIN32)
 #include <sys/stat.h>
 #include <unistd.h>
@@ -432,6 +434,11 @@ static vector<string> GetServerExeArgs(const blaze_util::Path &jvm_path,
   // https://github.com/openjdk/jdk/blob/2faf8b8d582183275b1fdc92313a1c63c1753e80/src/java.base/share/classes/sun/nio/fs/AbstractWatchKey.java#L40
   result.push_back("-Djdk.nio.file.WatchService.maxEventsPerPoll=10000");
 
+  // Disable warnings about unsafe memory access, which still occurs in
+  // protobuf.
+  // TODO: Drop this when protobuf uses VarHandle.
+  result.push_back("-Dsun.misc.unsafe.memory.access=allow");
+
 #if defined(_WIN32)
   // See and use more than 64 CPUs on Windows.
   // https://bugs.openjdk.org/browse/JDK-6942632
@@ -444,8 +451,8 @@ static vector<string> GetServerExeArgs(const blaze_util::Path &jvm_path,
         << "Running host JVM under debugger (listening on TCP port 5005).";
     // Start JVM so that it listens for a connection from a
     // JDWP-compliant debugger:
-    result.push_back("-Xdebug");
-    result.push_back("-Xrunjdwp:transport=dt_socket,server=y,address=5005");
+    result.push_back(
+        "-agentlib:jdwp=transport=dt_socket,server=y,address=5005");
   }
   result.insert(result.end(), user_options.begin(), user_options.end());
 
@@ -661,8 +668,8 @@ static void EnsureServerDir(const blaze_util::Path &server_dir) {
 }
 
 // Do a chdir into the workspace, and die if it fails.
-static const void GoToWorkspace(const WorkspaceLayout &workspace_layout,
-                                const string &workspace) {
+static void GoToWorkspace(const WorkspaceLayout &workspace_layout,
+                          const string &workspace) {
   if (workspace_layout.InWorkspace(workspace) &&
       !blaze_util::ChangeDirectory(workspace)) {
     BAZEL_DIE(blaze_exit_code::INTERNAL_ERROR)
@@ -671,7 +678,7 @@ static const void GoToWorkspace(const WorkspaceLayout &workspace_layout,
   }
 }
 
-static const bool IsServerMode(const string &command) {
+static bool IsServerMode(const string &command) {
   return "exec-server" == command;
 }
 
@@ -906,7 +913,10 @@ static void StartServerAndConnect(
     const blaze_util::Path &server_dir, const WorkspaceLayout &workspace_layout,
     const string &workspace, const OptionProcessor &option_processor,
     const StartupOptions &startup_options, LoggingInfo *logging_info,
-    BlazeServer *server, const string &build_label) {
+    BlazeServer *server, const string &build_label,
+    StartupInterceptor *interceptor) {
+  if (interceptor != nullptr) interceptor->MaybeReroute(&startup_options);
+
   // Delete the old command_port file if it already exists. Otherwise we might
   // run into the race condition that we read the old command_port file before
   // the new server has written the new file and we try to connect to the old
@@ -979,10 +989,13 @@ static bool IsVolatileArg(const string &arg) {
 }
 
 // Returns true if the server needs to be restarted to accommodate changes
-// between the two argument lists.
+// between the two argument lists. Populates old_server_options and
+// new_server_options.
 static bool AreStartupOptionsDifferent(
     const vector<string> &running_server_args,
-    const vector<string> &requested_args) {
+    const vector<string> &requested_args,
+    vector<string> *old_server_options,
+    vector<string> *new_server_options) {
   // We need not worry about one side missing an argument and the other side
   // having the default value, since this command line is the canonical one for
   // this version of Bazel: either the default value is listed explicitly or it
@@ -1030,6 +1043,7 @@ static bool AreStartupOptionsDifferent(
                        "included in the current request:";
     for (const string &a : old_args) {
       BAZEL_LOG(INFO) << "  " << a;
+      old_server_options->push_back(a);
     }
   }
   if (!new_args.empty()) {
@@ -1037,6 +1051,7 @@ static bool AreStartupOptionsDifferent(
                        "included when creating the server:";
     for (const string &a : new_args) {
       BAZEL_LOG(INFO) << "  " << a;
+      new_server_options->push_back(a);
     }
   }
 
@@ -1067,11 +1082,31 @@ static bool KillRunningServerIfDifferentStartupOptions(
   // These strings contain null-separated command line arguments. If they are
   // the same, the server can stay alive, otherwise, it needs shuffle off this
   // mortal coil.
-  if (AreStartupOptionsDifferent(old_arguments, server_exe_args)) {
+  vector<string> old_server_options;
+  vector<string> new_server_options;
+  if (AreStartupOptionsDifferent(old_arguments, server_exe_args,
+                                 &old_server_options,
+                                 &new_server_options)) {
     logging_info->restart_reason = NEW_OPTIONS;
-    BAZEL_LOG(WARNING) << "Running " << startup_options.product_name
-                       << " server needs to be killed, because the startup "
-                          "options are different.";
+
+    string different_startup_options_message;
+
+    string old_options_str;
+    blaze_util::JoinStrings(old_server_options, ' ', &old_options_str);
+    different_startup_options_message +=
+        "\n  - Only in old server: " + old_options_str;
+
+    string new_options_str;
+    blaze_util::JoinStrings(new_server_options, ' ', &new_options_str);
+    different_startup_options_message +=
+        "\n  - Only in new server: " + new_options_str;
+
+    BAZEL_LOG(WARNING)
+        << "Running " << startup_options.product_name
+        << " server needs to be killed, because the following startup "
+           "options are different:"
+        << different_startup_options_message;
+
     server->KillRunningServer();
     return true;
   }
@@ -1140,12 +1175,14 @@ static ATTRIBUTE_NORETURN void RunClientServerMode(
     const StartupOptions &startup_options, LoggingInfo *logging_info,
     const std::optional<DurationMillis> extract_data_duration,
     const std::optional<DurationMillis> command_wait_duration,
-    BlazeServer *server, const string &build_label) {
+    BlazeServer *server, StartupInterceptor *interceptor,
+    const string &build_label) {
   while (true) {
     if (!server->Connected()) {
       StartServerAndConnect(server_exe, server_exe_args, server_dir,
                             workspace_layout, workspace, option_processor,
-                            startup_options, logging_info, server, build_label);
+                            startup_options, logging_info, server, build_label,
+                            interceptor);
     }
 
     // Check for the case when the workspace directory deleted and then gets
@@ -1456,7 +1493,8 @@ static void RunLauncher(const string &self_path,
                         const StartupOptions &startup_options,
                         const OptionProcessor &option_processor,
                         const WorkspaceLayout &workspace_layout,
-                        const string &workspace, LoggingInfo *logging_info) {
+                        const string &workspace, LoggingInfo *logging_info,
+                        StartupInterceptor *interceptor) {
   blaze_server = new BlazeServer(startup_options);
 
   const std::optional<DurationMillis> command_wait_duration =
@@ -1529,15 +1567,16 @@ static void RunLauncher(const string &self_path,
   } else {
     string build_label;
     ExtractBuildLabel(self_path, &build_label);
-    RunClientServerMode(server_exe, server_exe_args, server_dir,
-                        workspace_layout, workspace, option_processor,
-                        startup_options, logging_info, extract_data_duration,
-                        command_wait_duration, blaze_server, build_label);
+    RunClientServerMode(
+        server_exe, server_exe_args, server_dir, workspace_layout, workspace,
+        option_processor, startup_options, logging_info, extract_data_duration,
+        command_wait_duration, blaze_server, interceptor, build_label);
   }
 }
 
 int Main(int argc, const char *const *argv, WorkspaceLayout *workspace_layout,
-         OptionProcessor *option_processor, uint64_t start_time) {
+         OptionProcessor *option_processor, StartupInterceptor *interceptor,
+         uint64_t start_time) {
   blaze_util::InitializeStdOutErrForUtf8();
 
   // Logging must be set first to assure no log statements are missed.
@@ -1629,7 +1668,8 @@ int Main(int argc, const char *const *argv, WorkspaceLayout *workspace_layout,
   PrepareDirectories(startup_options);
 
   RunLauncher(self_path, archive_contents, install_md5, *startup_options,
-              *option_processor, *workspace_layout, workspace, &logging_info);
+              *option_processor, *workspace_layout, workspace, &logging_info,
+              interceptor);
   return 0;
 }
 

@@ -442,7 +442,6 @@ public class FileSystemUtils {
   @ThreadSafe // but not atomic
   public static MoveResult moveFile(Path from, Path to) throws IOException {
     // We don't try-catch here for better performance.
-    to.delete();
     try {
       from.renameTo(to);
       return MoveResult.FILE_MOVED;
@@ -450,6 +449,9 @@ public class FileSystemUtils {
       // Fallback to a copy.
       FileStatus stat = from.stat(Symlinks.NOFOLLOW);
       if (stat.isFile()) {
+        // Target may be a symlink, in which case opening a stream below would not actually replace
+        // it.
+        to.delete();
         try (InputStream in = from.getInputStream();
             OutputStream out = to.getOutputStream()) {
           copyLargeBuffer(in, out);
@@ -471,7 +473,15 @@ public class FileSystemUtils {
         }
         to.setExecutable(from.isExecutable()); // Copy executable bit.
       } else if (stat.isSymbolicLink()) {
-        to.createSymbolicLink(from.readSymbolicLink());
+        PathFragment fromTarget = from.readSymbolicLink();
+        try {
+          to.createSymbolicLink(fromTarget);
+        } catch (IOException unused2) {
+          // May have failed due the target file existing, but not being a symlink.
+          // TODO: Only catch FileAlreadyExistsException once we throw that.
+          to.delete();
+          to.createSymbolicLink(fromTarget);
+        }
       } else {
         throw new IOException("Don't know how to copy " + from);
       }
@@ -698,55 +708,25 @@ public class FileSystemUtils {
     asByteSink(outputFile).write(content);
   }
 
-  /**
-   * Writes lines to file using the given encoding, ending every line with a system specific line
-   * break character.
-   */
+  /** Writes lines to file using the given encoding, ending every line with '\n'. */
   @ThreadSafe // but not atomic
   public static void writeLinesAs(Path file, Charset charset, String... lines) throws IOException {
     writeLinesAs(file, charset, Arrays.asList(lines));
   }
 
-  /**
-   * Writes lines to file using the given encoding, ending every line with a system specific line
-   * break character.
-   */
+  /** Writes lines to file using the given encoding, ending every line with '\n'. */
   @ThreadSafe // but not atomic
   public static void writeLinesAs(Path file, Charset charset, Iterable<String> lines)
       throws IOException {
     file.getParentDirectory().createDirectoryAndParents();
-    asByteSink(file).asCharSink(charset).writeLines(lines);
+    asByteSink(file).asCharSink(charset).writeLines(lines, "\n");
   }
 
-  /**
-   * Writes lines to file using the given encoding, ending every line with a given line break
-   * character.
-   */
-  @ThreadSafe // but not atomic
-  public static void writeLinesAs(
-      Path file, Charset charset, Iterable<String> lines, String lineBreak) throws IOException {
-    file.getParentDirectory().createDirectoryAndParents();
-    asByteSink(file).asCharSink(charset).writeLines(lines, lineBreak);
-  }
-
-  /**
-   * Appends lines to file using the given encoding, ending every line with a system specific line
-   * break character.
-   */
+  /** Appends lines to file using the given encoding, ending every line with '\n'. */
   @ThreadSafe // but not atomic
   public static void appendLinesAs(Path file, Charset charset, String... lines) throws IOException {
-    appendLinesAs(file, charset, Arrays.asList(lines));
-  }
-
-  /**
-   * Appends lines to file using the given encoding, ending every line with a system specific line
-   * break character.
-   */
-  @ThreadSafe // but not atomic
-  public static void appendLinesAs(Path file, Charset charset, Iterable<String> lines)
-      throws IOException {
     file.getParentDirectory().createDirectoryAndParents();
-    asByteSink(file, true).asCharSink(charset).writeLines(lines);
+    asByteSink(file, true).asCharSink(charset).writeLines(Arrays.asList(lines), "\n");
   }
 
   /**

@@ -25,7 +25,7 @@ java_library(
         "//src/main/java/com/google/devtools/build/lib:runtime",
         "//src/main/java/com/google/devtools/build/lib/analysis:analysis_cluster",
         "//src/main/java/com/google/devtools/build/lib/analysis:blaze_directories",
-        "//src/main/java/com/google/devtools/build/lib/analysis:config/build_configuration",
+        "//src/main/java/com/google/devtools/build/lib/analysis/config:build_configuration",
         "//src/main/java/com/google/devtools/build/lib/authandtls",
         "//src/main/java/com/google/devtools/build/lib/authandtls/credentialhelper",
         "//src/main/java/com/google/devtools/build/lib/authandtls/credentialhelper:credential_module",
@@ -38,7 +38,6 @@ java_library(
         "//src/main/java/com/google/devtools/build/lib/bazel/bzlmod:tidy_impl",
         "//src/main/java/com/google/devtools/build/lib/bazel/bzlmod:vendor",
         "//src/main/java/com/google/devtools/build/lib/bazel/commands",
-        "//src/main/java/com/google/devtools/build/lib/bazel/repository",
         "//src/main/java/com/google/devtools/build/lib/bazel/repository:repository_options",
         "//src/main/java/com/google/devtools/build/lib/bazel/repository/cache",
         "//src/main/java/com/google/devtools/build/lib/bazel/repository/downloader",
@@ -47,9 +46,7 @@ java_library(
         "//src/main/java/com/google/devtools/build/lib/cmdline",
         "//src/main/java/com/google/devtools/build/lib/events",
         "//src/main/java/com/google/devtools/build/lib/pkgcache",
-        "//src/main/java/com/google/devtools/build/lib/rules:repository/local_repository_rule",
-        "//src/main/java/com/google/devtools/build/lib/rules:repository/new_local_repository_function",
-        "//src/main/java/com/google/devtools/build/lib/rules:repository/new_local_repository_rule",
+        "//src/main/java/com/google/devtools/build/lib/profiler",
         "//src/main/java/com/google/devtools/build/lib/rules:repository/repository_function",
         "//src/main/java/com/google/devtools/build/lib/skyframe:mutable_supplier",
         "//src/main/java/com/google/devtools/build/lib/skyframe:precomputed_value",
@@ -74,9 +71,9 @@ java_library(
     name = "bazel_configuration",
     srcs = ["BazelConfiguration.java"],
     deps = [
-        "//src/main/java/com/google/devtools/build/lib/analysis:config/build_options",
-        "//src/main/java/com/google/devtools/build/lib/analysis:config/fragment",
-        "//src/main/java/com/google/devtools/build/lib/analysis:config/fragment_options",
+        "//src/main/java/com/google/devtools/build/lib/analysis/config:build_options",
+        "//src/main/java/com/google/devtools/build/lib/analysis/config:fragment",
+        "//src/main/java/com/google/devtools/build/lib/analysis/config:fragment_options",
         "//src/main/java/com/google/devtools/build/lib/concurrent:thread_safety",
         "//src/main/java/com/google/devtools/common/options",
     ],
@@ -208,15 +205,6 @@ java_library(
         "//src/main/java/com/google/devtools/build/lib/starlarkdebug/module",
         "//src/main/java/com/google/devtools/build/lib/worker:worker_module",
         "//third_party:guava",
-    ],
-)
-
-java_library(
-    name = "resolved_event",
-    srcs = ["ResolvedEvent.java"],
-    deps = [
-        "//src/main/java/com/google/devtools/build/lib/events",
-        "//src/main/java/com/google/devtools/build/lib/vfs",
     ],
 )
 

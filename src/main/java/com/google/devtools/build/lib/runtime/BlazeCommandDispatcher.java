@@ -54,6 +54,7 @@ import com.google.devtools.build.lib.runtime.InstrumentationOutputFactory.Destin
 import com.google.devtools.build.lib.runtime.proto.InvocationPolicyOuterClass.InvocationPolicy;
 import com.google.devtools.build.lib.server.FailureDetails;
 import com.google.devtools.build.lib.server.FailureDetails.FailureDetail;
+import com.google.devtools.build.lib.server.IdleTask;
 import com.google.devtools.build.lib.skyframe.RepositoryMappingValue.RepositoryMappingResolutionException;
 import com.google.devtools.build.lib.util.AbruptExitException;
 import com.google.devtools.build.lib.util.AnsiStrippingOutputStream;
@@ -86,6 +87,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Supplier;
 import java.util.logging.Level;
 import javax.annotation.Nullable;
 import net.starlark.java.eval.Starlark;
@@ -160,6 +162,7 @@ public class BlazeCommandDispatcher implements CommandDispatcher {
       String clientDescription,
       long firstContactTimeMillis,
       Optional<List<Pair<String, String>>> startupOptionsTaggedWithBazelRc,
+      Supplier<ImmutableList<IdleTask.Result>> idleTaskResultsSupplier,
       List<Any> commandExtensions,
       CommandExtensionReporter commandExtensionReporter)
       throws InterruptedException {
@@ -236,6 +239,12 @@ public class BlazeCommandDispatcher implements CommandDispatcher {
     long waitTimeInMs =
         !multipleAttempts ? 0 : (BlazeClock.nanoTime() - clockBefore) / (1000L * 1000L);
 
+    // Retrieve information about idle tasks that ran during a previous idle period.
+    // We do this after obtaining the lock so that a non-blocking command doesn't cause this
+    // information to be lost (instead, it will be forwarded to the next command).
+    ImmutableList<IdleTask.Result> idleTaskResultsFromPreviousIdlePeriod =
+        idleTaskResultsSupplier.get();
+
     try {
       String retrievedShutdownReason = this.shutdownReason.get();
       if (retrievedShutdownReason != null) {
@@ -261,6 +270,7 @@ public class BlazeCommandDispatcher implements CommandDispatcher {
                   command,
                   waitTimeInMs,
                   startupOptionsTaggedWithBazelRc,
+                  idleTaskResultsFromPreviousIdlePeriod,
                   commandExtensions,
                   attemptNumber,
                   attemptedCommandIds,
@@ -310,6 +320,7 @@ public class BlazeCommandDispatcher implements CommandDispatcher {
         clientDescription,
         runtime.getClock().currentTimeMillis(),
         /* startupOptionsTaggedWithBazelRc= */ Optional.empty(),
+        /* idleTaskResultsSupplier= */ () -> ImmutableList.of(),
         /* commandExtensions= */ ImmutableList.of(),
         /* commandExtensionReporter= */ (ext) -> {});
   }
@@ -324,6 +335,7 @@ public class BlazeCommandDispatcher implements CommandDispatcher {
       BlazeCommand command,
       long waitTimeInMs,
       Optional<List<Pair<String, String>>> startupOptionsTaggedWithBazelRc,
+      @Nullable ImmutableList<IdleTask.Result> idleTaskResultsFromPreviousIdlePeriod,
       List<Any> commandExtensions,
       int attemptNumber,
       Set<UUID> attemptedCommandIds,
@@ -360,8 +372,9 @@ public class BlazeCommandDispatcher implements CommandDispatcher {
             commandEnvWarnings,
             waitTimeInMs,
             firstContactTime,
-            commandExtensions,
+            idleTaskResultsFromPreviousIdlePeriod,
             this::setShutdownReason,
+            commandExtensions,
             commandExtensionReporter,
             attemptNumber,
             buildRequestIdOverride,
@@ -620,6 +633,7 @@ public class BlazeCommandDispatcher implements CommandDispatcher {
         } catch (InterruptedException e) {
           Thread.currentThread().interrupt();
           String message = "command interrupted while computing main repo mapping";
+          logger.atInfo().withCause(e).log("%s", message);
           reporter.handle(Event.error(message));
           earlyExitCode = InterruptedFailureDetails.detailedExitCode(message);
         } catch (RepositoryMappingResolutionException e) {
@@ -688,9 +702,6 @@ public class BlazeCommandDispatcher implements CommandDispatcher {
               options.getExplicitStarlarkOptions(
                   CommandLineEvent.OriginalCommandLineEvent::commandLinePriority),
               startupOptionsTaggedWithBazelRc);
-      // If flagsets are applied, a CanonicalCommandLineEvent is also emitted by
-      // BuildTool.buildTargets(). This is a duplicate event, and consumers are expected to
-      // handle it correctly, by accepting the last event.
       CommandLineEvent canonicalCommandLineEvent =
           new CommandLineEvent.CanonicalCommandLineEvent(
               runtime,
@@ -700,7 +711,14 @@ public class BlazeCommandDispatcher implements CommandDispatcher {
               options.getExplicitStarlarkOptions(
                   CommandLineEvent.OriginalCommandLineEvent::commandLinePriority),
               options.getStarlarkOptions(),
-              options.asListOfCanonicalOptions());
+              options.asListOfCanonicalOptions(),
+              // If this is a command that analyzes with BuildTool, PROJECT.scl might set extra
+              // canonical flags. In that case give BuildTool a chance to post a final updated
+              // CanonicalCommandLineEvent. Then this one is dropped. But if that event doesn't post
+              // for any reason, including a build error or crash, post this one so the build still
+              // registers a canonical command line. That guarantees BuildEventStream always posts
+              // exactly one CanonicalCommandLineEvent message for all builds.
+              /* replaceable= */ commandAnnotation.buildPhase().analyzes());
       OriginalUnstructuredCommandLineEvent unstructuredServerCommandLineEvent;
       if (commandName.equals("run") && !includeResidueInRunBepEvent) {
         unstructuredServerCommandLineEvent =

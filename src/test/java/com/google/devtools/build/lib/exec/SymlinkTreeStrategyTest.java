@@ -67,7 +67,7 @@ public final class SymlinkTreeStrategyTest extends BuildViewTestCase {
     StoredEventHandler eventHandler = new StoredEventHandler();
 
     when(context.getContext(SymlinkTreeActionContext.class))
-        .thenReturn(new SymlinkTreeStrategy(outputService, getExecRoot(), "__main__"));
+        .thenReturn(new SymlinkTreeStrategy(outputService, "__main__"));
     when(context.getInputPath(any())).thenAnswer((i) -> ((Artifact) i.getArgument(0)).getPath());
     when(context.getPathResolver()).thenReturn(ArtifactPathResolver.IDENTITY);
     when(context.getEventHandler()).thenReturn(eventHandler);
@@ -85,7 +85,7 @@ public final class SymlinkTreeStrategyTest extends BuildViewTestCase {
         .createSymlinkTree(any(), any());
 
     Runfiles runfiles =
-        new Runfiles.Builder("TESTING", false)
+        new Runfiles.Builder("TESTING")
             .setEmptyFilesSupplier(
                 new Runfiles.EmptyFilesSupplier() {
                   @Override
@@ -131,7 +131,7 @@ public final class SymlinkTreeStrategyTest extends BuildViewTestCase {
 
     when(context.getExecRoot()).thenReturn(getExecRoot());
     when(context.getContext(SymlinkTreeActionContext.class))
-        .thenReturn(new SymlinkTreeStrategy(outputService, null, "__main__"));
+        .thenReturn(new SymlinkTreeStrategy(outputService, "__main__"));
     when(context.getInputPath(any())).thenAnswer((i) -> ((Artifact) i.getArgument(0)).getPath());
     when(context.getEventHandler()).thenReturn(eventHandler);
     when(outputService.canCreateSymlinkTree()).thenReturn(false);
@@ -141,7 +141,7 @@ public final class SymlinkTreeStrategyTest extends BuildViewTestCase {
     Artifact runfile = getBinArtifactWithNoOwner("dir/runfile");
 
     Runfiles runfiles =
-        new Runfiles.Builder("TESTING", false)
+        new Runfiles.Builder("TESTING")
             .setEmptyFilesSupplier(
                 new Runfiles.EmptyFilesSupplier() {
                   @Override

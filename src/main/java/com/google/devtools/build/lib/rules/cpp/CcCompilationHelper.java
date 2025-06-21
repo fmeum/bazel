@@ -64,6 +64,7 @@ import net.starlark.java.eval.StarlarkFunction;
 import net.starlark.java.eval.StarlarkList;
 import net.starlark.java.eval.Tuple;
 
+// LINT.IfChange()
 /**
  * A class to create C/C++ compile actions in a way that is consistent with cc_library. Rules that
  * generate source files and emulate cc_library on top of that should use this class instead of the
@@ -435,7 +436,7 @@ public final class CcCompilationHelper {
 
     if (shouldProcessHeaders
         && CcToolchainProvider.shouldProcessHeaders(featureConfiguration, cppConfiguration)
-        && !shouldProvideHeaderModules()
+        && !isHeaderModulesEnabled()
         && !isTextualInclude) {
       compilationUnitSources.put(
           privateHeader, CppSource.create(privateHeader, label, CppSource.Type.HEADER));
@@ -511,7 +512,7 @@ public final class CcCompilationHelper {
         || isTextualInclude
         || !isHeader
         || !CcToolchainProvider.shouldProcessHeaders(featureConfiguration, cppConfiguration)
-        || shouldProvideHeaderModules()) {
+        || isHeaderModulesEnabled()) {
       return;
     }
 
@@ -528,9 +529,9 @@ public final class CcCompilationHelper {
     // We assume TreeArtifacts passed in are directories containing proper sources for compilation.
     if (!sourceCategory.getSourceTypes().matches(source.getExecPathString())
         && !source.isTreeArtifact()) {
-      // TODO(plf): If it's a non-source file we ignore it. This is only the case for precompiled
-      // files which should be forbidden in srcs of cc_library|binary and instead be migrated to
-      // cc_import rules.
+      // TODO(b/413333884): If it's a non-source file we ignore it. This is only the case for
+      // precompiled files which should be forbidden in srcs of cc_library|binary and instead be
+      // migrated to cc_import rules.
       return;
     }
 
@@ -861,7 +862,18 @@ public final class CcCompilationHelper {
     return this;
   }
 
-  /** @return whether we want to provide header modules for the current target. */
+  /**
+   * @return whether providing header modules is enabled.
+   */
+  private boolean isHeaderModulesEnabled() {
+    return featureConfiguration.isEnabled(CppRuleClasses.HEADER_MODULES);
+  }
+
+  /**
+   * @return whether we want to provide header modules for the current target.
+   *     <p>This is the case if a) header modules are enabled and b) there are public or private
+   *     headers so the header module would not be empty.
+   */
   private boolean shouldProvideHeaderModules() {
     return featureConfiguration.isEnabled(CppRuleClasses.HEADER_MODULES)
         && (!publicHeaders.isEmpty() || !privateHeaders.isEmpty());
@@ -1174,7 +1186,8 @@ public final class CcCompilationHelper {
     ActionOwner actionOwner = null;
     if (actionConstructionContext instanceof RuleContext ruleContext
         && ruleContext.useAutoExecGroups()) {
-      actionOwner = actionConstructionContext.getActionOwner(semantics.getCppToolchainType());
+      actionOwner =
+          actionConstructionContext.getActionOwner(semantics.getCppToolchainType().toString());
     }
     try {
       CppCompileActionTemplate actionTemplate =
@@ -1308,18 +1321,17 @@ public final class CcCompilationHelper {
           buildVariables,
           featureConfiguration,
           ImmutableList.of(),
-          cppModuleMap,
           CppHelper.getFdoBuildStamp(cppConfiguration, fdoContext, featureConfiguration),
           isUsingMemProf,
           variablesExtensions,
           genericAdditionalBuildVariables,
-          ccCompilationContext.getDirectModuleMaps(),
           ccCompilationContext.getIncludeDirs(),
           ccCompilationContext.getQuoteIncludeDirs(),
           ccCompilationContext.getSystemIncludeDirs(),
           ccCompilationContext.getFrameworkIncludeDirs(),
           ccCompilationContext.getDefines(),
-          ccCompilationContext.getNonTransitiveDefines());
+          ccCompilationContext.getNonTransitiveDefines(),
+          ccCompilationContext.getExternalIncludeDirs());
 
       if (usePrebuiltParent) {
         parent = buildVariables.build();
@@ -1350,7 +1362,9 @@ public final class CcCompilationHelper {
         builder.getDotdFile(),
         builder.getDiagnosticsFile(),
         usePic,
-        ccCompilationContext.getExternalIncludeDirs(),
+        featureConfiguration,
+        cppModuleMap,
+        ccCompilationContext.getDirectModuleMaps(),
         additionalBuildVariables);
     return buildVariables.build();
   }
@@ -1805,3 +1819,4 @@ public final class CcCompilationHelper {
     return ImmutableList.of(dAction.getPrimaryOutput(), sdAction.getPrimaryOutput());
   }
 }
+// LINT.ThenChange(//src/main/java/com/google/devtools/build/lib/rules/cpp/CcStaticCompilationHelper.java)

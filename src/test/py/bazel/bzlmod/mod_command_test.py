@@ -718,6 +718,23 @@ class ModCommandTest(test_base.TestBase):
         stderr,
     )
 
+    # Verify that check-only mode fails without changes.
+    with open('MODULE.bazel', 'r') as module_file:
+        before_check_only = module_file.read()
+    exit_code, stdout, stderr = self.RunBazel([
+        'mod',
+        'tidy',
+        '--lockfile_mode=update',
+        '--experimental_isolated_extension_usages',
+        '--check_only'
+    ], allow_failure=True)
+    self.AssertExitCode(exit_code, 3, stderr)
+    self.assertEqual([], stdout)
+    self.assertIn(["Needs tidy: MODULE.bazel"], stderr)
+    with open('MODULE.bazel', 'r') as module_file:
+        after_check_only = module_file.read()
+    self.assertEqual(before_check_only, after_check_only)
+
     # Run bazel mod tidy to fix the imports.
     _, stdout, stderr = self.RunBazel([
         'mod',
@@ -833,6 +850,17 @@ class ModCommandTest(test_base.TestBase):
         ],
     )
 
+    # Verify that check-only mode fails without changes.
+    with open('MODULE.bazel', 'r') as module_file:
+        before_check_only = module_file.read()
+    exit_code, stdout, stderr = self.RunBazel(['mod', 'tidy', '--check_only'], allow_failure=True)
+    self.AssertExitCode(exit_code, 3, stderr)
+    self.assertEqual([], stdout)
+    self.assertIn(['Needs tidy: MODULE.bazel'], stderr)
+    with open('MODULE.bazel', 'r') as module_file:
+        after_check_only = module_file.read()
+    self.assertEqual(before_check_only, after_check_only)
+
     # Verify that bazel mod tidy formats the MODULE.bazel file
     # even if there are no use_repos to fix.
     self.RunBazel(['mod', 'tidy'])
@@ -876,6 +904,16 @@ class ModCommandTest(test_base.TestBase):
             'ext = module_extension(implementation=_ext_impl)',
         ],
     )
+
+    # Verify that check-only mode succeeds without changes.
+    with open('MODULE.bazel', 'r') as module_file:
+        before_check_only = module_file.read()
+    _, stdout, stderr = self.RunBazel(['mod', 'tidy', '--check_only'])
+    self.assertEqual([], stdout)
+    self.assertNotIn('Needs tidy: ', '\n'.join(stderr))
+    with open('MODULE.bazel', 'r') as module_file:
+        after_check_only = module_file.read()
+    self.assertEqual(before_check_only, after_check_only)
 
     # Verify that bazel mod tidy doesn't fail or change the file.
     self.RunBazel(['mod', 'tidy'])
@@ -1270,7 +1308,6 @@ class ModCommandTest(test_base.TestBase):
       self.assertEqual(
           [
               'include("//:firstProd.MODULE.bazel")',
-              '',  # formatted despite no extension usages!
               'include("//:second.MODULE.bazel")',
               '',
           ],

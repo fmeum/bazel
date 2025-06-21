@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 # Copyright 2015 The Bazel Authors. All rights reserved.
 #
@@ -296,6 +296,10 @@ EOF
   mkdir -p ${BAZEL_TOOLS_REPO}/tools/java/runfiles
   link_file "${PWD}/tools/java/runfiles/BUILD.tools" "${BAZEL_TOOLS_REPO}/tools/java/runfiles/BUILD"
 
+  # Create @bazel_tools/tools/launcher/BUILD
+  mkdir -p ${BAZEL_TOOLS_REPO}/tools/launcher
+  link_file "${PWD}/tools/launcher/BUILD.bootstrap" "${BAZEL_TOOLS_REPO}/tools/launcher/BUILD"
+
   # Create @bazel_tools/tools/python/BUILD
   mkdir -p ${BAZEL_TOOLS_REPO}/tools/python
   link_file "${PWD}/tools/python/BUILD.tools" "${BAZEL_TOOLS_REPO}/tools/python/BUILD"
@@ -331,9 +335,8 @@ function build_jni() {
     mkdir -p "$(dirname "$tmp_output")"
     mkdir -p "$(dirname "$output")"
 
-    # Keep this `find` command in sync with the `srcs` of
-    # //src/main/native/windows:windows_jni
-    local srcs=$(find src/main/native/windows -name '*.cc' -o -name '*.h')
+    # Keep this in sync with the `srcs` of //src/main/native/windows:windows_jni
+    local -r srcs="src/main/native/common.cc $(find src/main/native/windows -name '*.cc' -o -name '*.h')"
     [ -n "$srcs" ] || fail "Could not find sources for Windows JNI library"
 
     # do not quote $srcs because we need to expand it to multiple args

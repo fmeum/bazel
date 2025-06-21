@@ -57,7 +57,6 @@ import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.actions.Artifact.DerivedArtifact;
 import com.google.devtools.build.lib.actions.Artifact.SpecialArtifact;
 import com.google.devtools.build.lib.actions.Artifact.TreeFileArtifact;
-import com.google.devtools.build.lib.actions.ArtifactExpander;
 import com.google.devtools.build.lib.actions.ArtifactOwner;
 import com.google.devtools.build.lib.actions.ArtifactRoot;
 import com.google.devtools.build.lib.actions.ArtifactRoot.RootType;
@@ -65,6 +64,7 @@ import com.google.devtools.build.lib.actions.BasicActionLookupValue;
 import com.google.devtools.build.lib.actions.BuildFailedException;
 import com.google.devtools.build.lib.actions.FileArtifactValue;
 import com.google.devtools.build.lib.actions.FileStateValue;
+import com.google.devtools.build.lib.actions.InputMetadataProvider;
 import com.google.devtools.build.lib.actions.OutputChecker;
 import com.google.devtools.build.lib.actions.ResourceManager;
 import com.google.devtools.build.lib.actions.util.ActionsTestUtil;
@@ -127,7 +127,6 @@ import com.google.devtools.build.lib.util.CrashFailureDetails;
 import com.google.devtools.build.lib.util.DetailedExitCode;
 import com.google.devtools.build.lib.util.Fingerprint;
 import com.google.devtools.build.lib.util.io.TimestampGranularityMonitor;
-import com.google.devtools.build.lib.vfs.FileSystem;
 import com.google.devtools.build.lib.vfs.FileSystemUtils;
 import com.google.devtools.build.lib.vfs.LocalOutputService;
 import com.google.devtools.build.lib.vfs.ModifiedFileSet;
@@ -467,12 +466,6 @@ public final class SequencedSkyframeExecutorTest extends BuildViewTestCase {
           @Override
           public ModifiedFileSet getDiff(View oldView, View newView) {
             return ModifiedFileSet.NOTHING_MODIFIED;
-          }
-
-          @Override
-          public ModifiedFileSet getDiffFromEvaluatingVersion(
-              OptionsProvider options, FileSystem fs) throws BrokenDiffAwarenessException {
-            throw new UnsupportedOperationException("not implemented");
           }
 
           @Override
@@ -878,7 +871,7 @@ public final class SequencedSkyframeExecutorTest extends BuildViewTestCase {
     var unused =
         skyframeExecutor.buildArtifacts(
             reporter,
-            ResourceManager.instanceForTestingOnly(),
+            new ResourceManager(),
             new DummyExecutor(fileSystem, rootDirectory),
             ImmutableSet.of(),
             ImmutableSet.of(),
@@ -986,7 +979,7 @@ public final class SequencedSkyframeExecutorTest extends BuildViewTestCase {
     var unused =
         skyframeExecutor.buildArtifacts(
             reporter,
-            ResourceManager.instanceForTestingOnly(),
+            new ResourceManager(),
             new DummyExecutor(fileSystem, rootDirectory),
             ImmutableSet.of(),
             ImmutableSet.of(),
@@ -1134,7 +1127,7 @@ public final class SequencedSkyframeExecutorTest extends BuildViewTestCase {
     var unused =
         skyframeExecutor.buildArtifacts(
             reporter,
-            ResourceManager.instanceForTestingOnly(),
+            new ResourceManager(),
             new DummyExecutor(fileSystem, rootDirectory),
             ImmutableSet.of(),
             ImmutableSet.of(),
@@ -1225,7 +1218,7 @@ public final class SequencedSkyframeExecutorTest extends BuildViewTestCase {
     var unused =
         skyframeExecutor.buildArtifacts(
             reporter,
-            ResourceManager.instanceForTestingOnly(),
+            new ResourceManager(),
             new DummyExecutor(fileSystem, rootDirectory),
             ImmutableSet.of(),
             ImmutableSet.of(),
@@ -1346,7 +1339,7 @@ public final class SequencedSkyframeExecutorTest extends BuildViewTestCase {
     var unused =
         skyframeExecutor.buildArtifacts(
             reporter,
-            ResourceManager.instanceForTestingOnly(),
+            new ResourceManager(),
             new DummyExecutor(fileSystem, rootDirectory),
             ImmutableSet.of(),
             ImmutableSet.of(),
@@ -1401,7 +1394,7 @@ public final class SequencedSkyframeExecutorTest extends BuildViewTestCase {
 
     @Override
     public String getKey(
-        ActionKeyContext actionKeyContext, @Nullable ArtifactExpander artifactExpander) {
+        ActionKeyContext actionKeyContext, @Nullable InputMetadataProvider inputMetadataProvider) {
       Fingerprint fp = new Fingerprint();
       fp.addPath(inputArtifact.getPath());
       fp.addPath(outputArtifact.getPath());
@@ -1568,7 +1561,7 @@ public final class SequencedSkyframeExecutorTest extends BuildViewTestCase {
     var unused =
         skyframeExecutor.buildArtifacts(
             reporter,
-            ResourceManager.instanceForTestingOnly(),
+            new ResourceManager(),
             new DummyExecutor(fileSystem, rootDirectory),
             ImmutableSet.of(),
             ImmutableSet.of(),
@@ -1672,7 +1665,7 @@ public final class SequencedSkyframeExecutorTest extends BuildViewTestCase {
     var unused =
         skyframeExecutor.buildArtifacts(
             reporter,
-            ResourceManager.instanceForTestingOnly(),
+            new ResourceManager(),
             new DummyExecutor(fileSystem, rootDirectory),
             ImmutableSet.of(),
             ImmutableSet.of(),
@@ -1792,7 +1785,7 @@ public final class SequencedSkyframeExecutorTest extends BuildViewTestCase {
     var unused =
         skyframeExecutor.buildArtifacts(
             reporter,
-            ResourceManager.instanceForTestingOnly(),
+            new ResourceManager(),
             new DummyExecutor(fileSystem, rootDirectory),
             ImmutableSet.of(),
             ImmutableSet.of(),
@@ -1865,7 +1858,7 @@ public final class SequencedSkyframeExecutorTest extends BuildViewTestCase {
     @Override
     protected void computeKey(
         ActionKeyContext actionKeyContext,
-        @Nullable ArtifactExpander artifactExpander,
+        @Nullable InputMetadataProvider inputMetadataProvider,
         Fingerprint fp) {
       fp.addString(warningText);
       fp.addPath(getPrimaryOutput().getExecPath());
@@ -1977,7 +1970,7 @@ public final class SequencedSkyframeExecutorTest extends BuildViewTestCase {
     Builder builder =
         new SkyframeBuilder(
             skyframeExecutor,
-            ResourceManager.instanceForTestingOnly(),
+            new ResourceManager(),
             NULL_CHECKER,
             ModifiedFileSet.EVERYTHING_MODIFIED,
             /* fileCache= */ null,
@@ -2117,7 +2110,7 @@ public final class SequencedSkyframeExecutorTest extends BuildViewTestCase {
     Builder builder =
         new SkyframeBuilder(
             skyframeExecutor,
-            ResourceManager.instanceForTestingOnly(),
+            new ResourceManager(),
             NULL_CHECKER,
             ModifiedFileSet.EVERYTHING_MODIFIED,
             /* fileCache= */ null,
@@ -2241,7 +2234,7 @@ public final class SequencedSkyframeExecutorTest extends BuildViewTestCase {
     Builder builder =
         new SkyframeBuilder(
             skyframeExecutor,
-            ResourceManager.instanceForTestingOnly(),
+            new ResourceManager(),
             NULL_CHECKER,
             ModifiedFileSet.EVERYTHING_MODIFIED,
             /* fileCache= */ null,
@@ -2269,7 +2262,6 @@ public final class SequencedSkyframeExecutorTest extends BuildViewTestCase {
                       null,
                       new TopLevelArtifactContext(
                           /* runTestsExclusively= */ false,
-                          false,
                           false,
                           OutputGroupInfo.determineOutputGroups(
                               ImmutableList.of(),
@@ -2363,7 +2355,7 @@ public final class SequencedSkyframeExecutorTest extends BuildViewTestCase {
     Builder builder =
         new SkyframeBuilder(
             skyframeExecutor,
-            ResourceManager.instanceForTestingOnly(),
+            new ResourceManager(),
             NULL_CHECKER,
             ModifiedFileSet.EVERYTHING_MODIFIED,
             /* fileCache= */ null,
@@ -2474,7 +2466,7 @@ public final class SequencedSkyframeExecutorTest extends BuildViewTestCase {
     Builder builder =
         new SkyframeBuilder(
             skyframeExecutor,
-            ResourceManager.instanceForTestingOnly(),
+            new ResourceManager(),
             NULL_CHECKER,
             ModifiedFileSet.EVERYTHING_MODIFIED,
             /* fileCache= */ null,
@@ -2571,7 +2563,7 @@ public final class SequencedSkyframeExecutorTest extends BuildViewTestCase {
     Builder builder =
         new SkyframeBuilder(
             skyframeExecutor,
-            ResourceManager.instanceForTestingOnly(),
+            new ResourceManager(),
             NULL_CHECKER,
             ModifiedFileSet.EVERYTHING_MODIFIED,
             /* fileCache= */ null,
@@ -2653,7 +2645,7 @@ public final class SequencedSkyframeExecutorTest extends BuildViewTestCase {
     Builder builder =
         new SkyframeBuilder(
             skyframeExecutor,
-            ResourceManager.instanceForTestingOnly(),
+            new ResourceManager(),
             NULL_CHECKER,
             ModifiedFileSet.EVERYTHING_MODIFIED,
             /* fileCache= */ null,

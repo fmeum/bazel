@@ -7,7 +7,9 @@ package(
 
 filegroup(
     name = "srcs",
-    srcs = glob(["**"]),
+    srcs = glob(["**"]) + [
+        "//src/test/java/com/google/devtools/build/lib/sandbox/cgroups:srcs",
+    ],
     visibility = ["//src:__subpackages__"],
 )
 
@@ -24,7 +26,6 @@ java_library(
     deps = [
         "//src/main/java/com/google/devtools/build/lib:runtime",
         "//src/main/java/com/google/devtools/build/lib/actions",
-        "//src/main/java/com/google/devtools/build/lib/actions:artifact_expander",
         "//src/main/java/com/google/devtools/build/lib/actions:artifacts",
         "//src/main/java/com/google/devtools/build/lib/exec:spawn_input_expander",
         "//src/main/java/com/google/devtools/build/lib/exec:spawn_runner",
@@ -53,6 +54,7 @@ java_test(
             "SandboxOptionsTest.java",
             "SymlinkedSandboxedSpawnTest.java",
         ],
+    jvm_flags = ["-Djava.lang.Thread.allowVirtualThreads=true"],
     test_class = "com.google.devtools.build.lib.AllTests",
     runtime_deps = [
         "//src/test/java/com/google/devtools/build/lib:test_runner",

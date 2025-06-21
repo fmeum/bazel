@@ -20,7 +20,6 @@ import static java.util.Collections.singletonList;
 import com.google.auto.value.AutoValue;
 import com.google.common.collect.Maps;
 import com.google.devtools.build.lib.cmdline.Label;
-import com.ryanharter.auto.value.gson.GenerateTypeAdapter;
 import java.util.Collection;
 import java.util.List;
 import java.util.Map;
@@ -31,7 +30,6 @@ import net.starlark.java.eval.Starlark;
 
 /** Wraps a dictionary of attribute names and values. Always uses a dict to represent them */
 @AutoValue
-@GenerateTypeAdapter
 public abstract class AttributeValues {
 
   public static AttributeValues create(Dict<String, Object> attribs) {
@@ -62,8 +60,14 @@ public abstract class AttributeValues {
     String repoName = label.getRepository().getName();
     throw Starlark.errorf(
         "no repository visible as '@%s' %s, but referenced by label '@%s//%s:%s' in"
-            + " attribute '%s' of %s.",
-        repoName, where, repoName, label.getPackageName(), label.getName(), attrName, what);
+            + " attribute '%s'%s.",
+        repoName,
+        where,
+        repoName,
+        label.getPackageName(),
+        label.getName(),
+        attrName,
+        what.isEmpty() ? "" : " of " + what);
   }
 
   private static Optional<Label> getFirstNonVisibleLabel(Object nativeAttrValue) {

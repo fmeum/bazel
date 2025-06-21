@@ -16,6 +16,7 @@ package com.google.devtools.build.lib.actions;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.devtools.build.lib.skyframe.TreeArtifactValue;
+import com.google.devtools.build.lib.vfs.PathFragment;
 import java.util.Collection;
 import java.util.Map;
 import javax.annotation.Nullable;
@@ -58,6 +59,23 @@ public final class StaticInputMetadataProvider implements InputMetadataProvider 
   @Override
   public TreeArtifactValue getTreeMetadata(ActionInput actionInput) {
     return null;
+  }
+
+  @Nullable
+  @Override
+  public TreeArtifactValue getEnclosingTreeMetadata(PathFragment execPath) {
+    return null;
+  }
+
+  @Override
+  @Nullable
+  public FilesetOutputTree getFileset(ActionInput input) {
+    return null;
+  }
+
+  @Override
+  public ImmutableMap<Artifact, FilesetOutputTree> getFilesets() {
+    return ImmutableMap.of();
   }
 
   @Override

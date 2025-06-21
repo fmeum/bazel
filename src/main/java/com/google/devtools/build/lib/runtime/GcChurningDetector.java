@@ -14,11 +14,23 @@
 
 package com.google.devtools.build.lib.runtime;
 
+import com.google.common.annotations.VisibleForTesting;
 import com.google.common.flogger.GoogleLogger;
+import com.google.devtools.build.lib.bugreport.BugReporter;
+import com.google.devtools.build.lib.bugreport.Crash;
+import com.google.devtools.build.lib.bugreport.CrashContext;
 import com.google.devtools.build.lib.clock.BlazeClock;
 import com.google.devtools.build.lib.clock.Clock;
+import com.google.devtools.build.lib.runtime.MemoryPressure.MemoryPressureStats;
+import com.google.devtools.build.lib.runtime.MemoryPressure.MemoryPressureStats.FullGcFractionPoint;
+import com.google.devtools.build.lib.server.FailureDetails;
+import com.google.devtools.build.lib.server.FailureDetails.Crash.Code;
+import com.google.devtools.build.lib.server.FailureDetails.Crash.OomCauseCategory;
+import com.google.devtools.build.lib.server.FailureDetails.FailureDetail;
+import com.google.devtools.build.lib.util.DetailedExitCode;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
 
 /**
  * Per-invocation handler of {@link MemoryPressureEvent} to detect GC churning.
@@ -31,18 +43,26 @@ import java.time.Instant;
  */
 class GcChurningDetector {
   private static final GoogleLogger logger = GoogleLogger.forEnclosingClass();
+  private static final Duration MIN_INVOCATION_WALL_TIME_DURATION = Duration.ofMinutes(1);
 
+  private final int thresholdPercentage;
   private Duration cumulativeFullGcDuration = Duration.ZERO;
   private final Clock clock;
   private final Instant start;
+  private final ArrayList<FullGcFractionPoint> fullGcFractionPoints = new ArrayList<>();
+  private final BugReporter bugReporter;
 
-  private GcChurningDetector(Clock clock) {
+  @VisibleForTesting
+  GcChurningDetector(int thresholdPercentage, Clock clock, BugReporter bugReporter) {
+    this.thresholdPercentage = thresholdPercentage;
     this.clock = clock;
     this.start = clock.now();
+    this.bugReporter = bugReporter;
   }
 
-  static GcChurningDetector createForCommand() {
-    return new GcChurningDetector(BlazeClock.instance());
+  static GcChurningDetector createForCommand(MemoryPressureOptions options) {
+    return new GcChurningDetector(
+        options.gcChurningThreshold, BlazeClock.instance(), BugReporter.defaultInstance());
   }
 
   // This is called from MemoryPressureListener on a single memory-pressure-listener-0 thread, so it
@@ -54,12 +74,50 @@ class GcChurningDetector {
 
     cumulativeFullGcDuration = cumulativeFullGcDuration.plus(event.duration());
     Duration invocationWallTimeDuration = Duration.between(start, clock.now());
-    double gcFraction =
-        cumulativeFullGcDuration.toMillis() * 1.0 / invocationWallTimeDuration.toMillis();
+    // This narrowing conversion is fine in practice since MAX_INT ms is almost 25 days, and
+    // we don't care about supporting an invocation running for that long.
+    int invocationWallTimeSoFarMs = (int) invocationWallTimeDuration.toMillis();
+    if (invocationWallTimeSoFarMs == 0) {
+      // Given that our data points have millisecond resolution, don't bother recording a data point
+      // if it's been less than a full millisecond so far.
+      return;
+    }
+    double gcFraction = cumulativeFullGcDuration.toMillis() * 1.0 / invocationWallTimeSoFarMs;
+    fullGcFractionPoints.add(
+        FullGcFractionPoint.newBuilder()
+            .setInvocationWallTimeSoFarMs(invocationWallTimeSoFarMs)
+            .setFullGcFractionSoFar(gcFraction)
+            .build());
     logger.atInfo().log(
         "cumulativeFullGcDuration=%s invocationWallTimeDuration=%s gcFraction=%.3f",
         cumulativeFullGcDuration, invocationWallTimeDuration, gcFraction);
 
-    // TODO: b/389784555 - Crash Blaze when there has been too much GC churn.
+    double gcFractionPercentage = gcFraction * 100;
+    if (gcFractionPercentage >= thresholdPercentage
+        && invocationWallTimeDuration.compareTo(MIN_INVOCATION_WALL_TIME_DURATION) >= 0) {
+      OutOfMemoryError oom =
+          new OutOfMemoryError(
+              String.format(
+                  "GcChurningDetector forcing exit: %.1f%% of the invocation's wall time so far"
+                      + " (%ss) has been spent doing full GCs",
+                  gcFractionPercentage, invocationWallTimeDuration.toSeconds()));
+      logger.atInfo().log("Calling handleCrash");
+      bugReporter.handleCrash(
+          Crash.from(
+              oom,
+              DetailedExitCode.of(
+                  FailureDetail.newBuilder()
+                      .setMessage(oom.getMessage())
+                      .setCrash(
+                          FailureDetails.Crash.newBuilder()
+                              .setCode(Code.CRASH_OOM)
+                              .setOomCauseCategory(OomCauseCategory.GC_CHURNING))
+                      .build())),
+          CrashContext.halt());
+    }
+  }
+
+  void populateStats(MemoryPressureStats.Builder memoryPressureStatsBuilder) {
+    memoryPressureStatsBuilder.addAllFullGcFractionPoint(fullGcFractionPoints);
   }
 }

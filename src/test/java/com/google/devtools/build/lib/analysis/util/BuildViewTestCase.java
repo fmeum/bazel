@@ -46,7 +46,6 @@ import com.google.devtools.build.lib.actions.ActionLookupValue;
 import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.actions.Artifact.DerivedArtifact;
 import com.google.devtools.build.lib.actions.Artifact.SpecialArtifact;
-import com.google.devtools.build.lib.actions.ArtifactExpander;
 import com.google.devtools.build.lib.actions.ArtifactOwner;
 import com.google.devtools.build.lib.actions.ArtifactPathResolver;
 import com.google.devtools.build.lib.actions.ArtifactRoot;
@@ -154,7 +153,6 @@ import com.google.devtools.build.lib.skyframe.ConfiguredTargetAndData;
 import com.google.devtools.build.lib.skyframe.ConfiguredTargetKey;
 import com.google.devtools.build.lib.skyframe.DiffAwareness;
 import com.google.devtools.build.lib.skyframe.PackageFunction;
-import com.google.devtools.build.lib.skyframe.PackageRootsNoSymlinkCreation;
 import com.google.devtools.build.lib.skyframe.PrecomputedValue;
 import com.google.devtools.build.lib.skyframe.SequencedSkyframeExecutor;
 import com.google.devtools.build.lib.skyframe.SkyFunctionEnvironmentForTesting;
@@ -175,9 +173,7 @@ import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.build.lib.vfs.PathFragment;
 import com.google.devtools.build.lib.vfs.Root;
 import com.google.devtools.build.lib.vfs.SyscallCache;
-import com.google.devtools.build.skyframe.ErrorInfo;
 import com.google.devtools.build.skyframe.InMemoryMemoizingEvaluator;
-import com.google.devtools.build.skyframe.MemoizingEvaluator;
 import com.google.devtools.build.skyframe.SkyFunction;
 import com.google.devtools.build.skyframe.SkyFunctionName;
 import com.google.devtools.build.skyframe.SkyKey;
@@ -190,6 +186,7 @@ import com.google.errorprone.annotations.ForOverride;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
@@ -230,7 +227,7 @@ public abstract class BuildViewTestCase extends FoundationTestCase {
   // Note that these configurations are virtual (they use only VFS)
   protected BuildConfigurationValue targetConfig; // "target" or "build" config
   protected BuildConfigurationValue execConfig;
-  private List<String> configurationArgs;
+  private ImmutableList<String> configurationArgs;
 
   private PackageOptions packageOptions;
   private BuildLanguageOptions buildLanguageOptions;
@@ -520,8 +517,6 @@ public abstract class BuildViewTestCase extends FoundationTestCase {
     skyframeExecutor.injectExtraPrecomputedValues(
         ImmutableList.of(
             PrecomputedValue.injected(
-                RepositoryDelegatorFunction.RESOLVED_FILE_INSTEAD_OF_WORKSPACE, Optional.empty()),
-            PrecomputedValue.injected(
                 RepositoryDelegatorFunction.VENDOR_DIRECTORY, Optional.empty())));
   }
 
@@ -672,7 +667,8 @@ public abstract class BuildViewTestCase extends FoundationTestCase {
     view = new BuildViewForTesting(directories, ruleClassProvider, skyframeExecutor, null);
     view.setConfigurationForTesting(targetConfig);
 
-    view.setArtifactRoots(new PackageRootsNoSymlinkCreation(Root.fromPath(rootDirectory)));
+    Root root = Root.fromPath(rootDirectory);
+    view.getArtifactFactory().setPackageRoots(pkgId -> root);
   }
 
   protected CachingAnalysisEnvironment getTestAnalysisEnvironment() throws InterruptedException {
@@ -2098,6 +2094,26 @@ public abstract class BuildViewTestCase extends FoundationTestCase {
         .getPackage(reporter, PackageIdentifier.createInMainRepo(packageName));
   }
 
+  /**
+   * Copies the protolark-provided {@code project} scl definition into the given scratch file path.
+   *
+   * <p>{@code PROJECT.scl} files load this file to define their configuration. This method loads
+   * the actual (non-mocked) file, so tests can effectively match production code.
+   */
+  protected void writeProjectSclDefinition(String dest) throws Exception {
+
+    scratch.file(
+        dest,
+        Files.readString(
+            java.nio.file.Path.of(
+                com.google.devtools.build.runfiles.Runfiles.preload()
+                    .withSourceRepository("")
+                    .rlocation(
+                        TestConstants.WORKSPACE_NAME
+                            + "/"
+                            + TestConstants.PROJECT_SCL_DEFINITION_PATH))));
+  }
+
   /** A stub analysis environment. */
   protected class StubAnalysisEnvironment implements AnalysisEnvironment {
 
@@ -2216,22 +2232,25 @@ public abstract class BuildViewTestCase extends FoundationTestCase {
 
   protected ImmutableList<String> baselineCoverageArtifactBasenames(ConfiguredTarget target)
       throws Exception {
-    Artifact baselineCoverage =
-        target.get(InstrumentedFilesInfo.STARLARK_CONSTRUCTOR).getBaselineCoverageArtifact();
-    if (baselineCoverage == null) {
-      return ImmutableList.of();
-    }
-    ImmutableList.Builder<String> basenames = ImmutableList.builder();
-    var baselineCoverageAction = (BaselineCoverageAction) getGeneratingAction(baselineCoverage);
-    ByteArrayOutputStream bytes = new ByteArrayOutputStream();
-    baselineCoverageAction
-        .newDeterministicWriter(ActionsTestUtil.createContext(reporter))
-        .writeTo(bytes);
+    ImmutableList<Artifact> baselineCoverageArtifacts =
+        target
+            .get(InstrumentedFilesInfo.STARLARK_CONSTRUCTOR)
+            .getBaselineCoverageArtifacts()
+            .toList();
 
-    for (String line : Splitter.on('\n').split(bytes.toString(UTF_8))) {
-      if (line.startsWith("SF:")) {
-        String basename = line.substring(line.lastIndexOf('/') + 1);
-        basenames.add(basename);
+    ImmutableList.Builder<String> basenames = ImmutableList.builder();
+    for (Artifact baselineCoverage : baselineCoverageArtifacts) {
+      var baselineCoverageAction = (BaselineCoverageAction) getGeneratingAction(baselineCoverage);
+      ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+      baselineCoverageAction
+          .newDeterministicWriter(ActionsTestUtil.createContext(reporter))
+          .writeTo(bytes);
+
+      for (String line : Splitter.on('\n').split(bytes.toString(UTF_8))) {
+        if (line.startsWith("SF:")) {
+          String basename = line.substring(line.lastIndexOf('/') + 1);
+          basenames.add(basename);
+        }
       }
     }
     return basenames.build();
@@ -2394,19 +2413,12 @@ public abstract class BuildViewTestCase extends FoundationTestCase {
   public class ActionExecutionContextBuilder {
     private InputMetadataProvider actionInputFileCache = null;
     private final TreeMap<String, String> clientEnv = new TreeMap<>();
-    private ArtifactExpander artifactExpander = null;
     private Executor executor = new DummyExecutor(fileSystem, getExecRoot());
 
     @CanIgnoreReturnValue
     public ActionExecutionContextBuilder setMetadataProvider(
         InputMetadataProvider actionInputFileCache) {
       this.actionInputFileCache = actionInputFileCache;
-      return this;
-    }
-
-    @CanIgnoreReturnValue
-    public ActionExecutionContextBuilder setArtifactExpander(ArtifactExpander artifactExpander) {
-      this.artifactExpander = artifactExpander;
       return this;
     }
 
@@ -2428,8 +2440,6 @@ public abstract class BuildViewTestCase extends FoundationTestCase {
           actionLogBufferPathGenerator.generate(ArtifactPathResolver.IDENTITY),
           reporter,
           clientEnv,
-          /* topLevelFilesets= */ ImmutableMap.of(),
-          artifactExpander,
           /* actionFileSystem= */ null,
           DiscoveredModulesPruner.DEFAULT,
           SyscallCache.NO_CACHE,

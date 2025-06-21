@@ -23,12 +23,14 @@ import com.google.common.base.MoreObjects;
 import com.google.common.base.Objects;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
+import com.google.common.collect.Maps;
 import com.google.devtools.build.lib.actions.Artifact.TreeFileArtifact;
 import com.google.devtools.build.lib.collect.compacthashmap.CompactHashMap;
 import com.google.devtools.build.lib.skyframe.TreeArtifactValue;
 import com.google.devtools.build.lib.vfs.PathFragment;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
@@ -159,6 +161,8 @@ public final class ActionInputMap implements InputMetadataProvider {
 
   private TrieArtifact treeArtifactsRoot = new TrieArtifact();
 
+  private final Map<Artifact, FilesetOutputTree> filesets = Maps.newTreeMap();
+
   private List<RunfilesTree> runfilesTrees = new ArrayList<>();
 
   public ActionInputMap(int sizeHint) {
@@ -236,6 +240,19 @@ public final class ActionInputMap implements InputMetadataProvider {
 
   @Nullable
   @Override
+  public FilesetOutputTree getFileset(ActionInput input) {
+    checkArgument(isFileset(input), input);
+
+    return filesets.get(input);
+  }
+
+  @Override
+  public Map<Artifact, FilesetOutputTree> getFilesets() {
+    return Collections.unmodifiableMap(filesets);
+  }
+
+  @Nullable
+  @Override
   public RunfilesArtifactValue getRunfilesMetadata(ActionInput input) {
     checkArgument(isRunfilesTree(input), input);
 
@@ -290,10 +307,6 @@ public final class ActionInputMap implements InputMetadataProvider {
     return getTreeMetadata(input.getExecPath());
   }
 
-  /**
-   * Returns the {@link TreeArtifactValue} for the given path, or {@code null} if no such tree
-   * artifact exists.
-   */
   @Nullable
   public TreeArtifactValue getTreeMetadata(PathFragment execPath) {
     int index = getIndex(execPath.getPathString());
@@ -304,13 +317,9 @@ public final class ActionInputMap implements InputMetadataProvider {
     return value instanceof TreeArtifactValue treeValue ? treeValue : null;
   }
 
-  /**
-   * Returns the {@link TreeArtifactValue} for the shortest prefix of the given path, possibly the
-   * path itself, that corresponds to a tree artifact; or {@code null} if no such tree artifact
-   * exists.
-   */
   @Nullable
-  public TreeArtifactValue getTreeMetadataForPrefix(PathFragment execPath) {
+  @Override
+  public TreeArtifactValue getEnclosingTreeMetadata(PathFragment execPath) {
     return treeArtifactsRoot.findTreeArtifactNodeAtPrefix(execPath);
   }
 
@@ -361,6 +370,12 @@ public final class ActionInputMap implements InputMetadataProvider {
         oldIndex == -1 || !isTreeArtifact((ActionInput) keys[oldIndex]),
         "Tried to overwrite tree artifact with a file: '%s' with the same exec path",
         input);
+  }
+
+  public void putFileset(Artifact input, FilesetOutputTree outputTree) {
+    checkArgument(input.isFileset(), input);
+
+    filesets.put(input, outputTree);
   }
 
   public void putRunfilesMetadata(Artifact input, RunfilesArtifactValue metadata) {
@@ -468,5 +483,9 @@ public final class ActionInputMap implements InputMetadataProvider {
 
   private static boolean isRunfilesTree(ActionInput input) {
     return input instanceof Artifact artifact && artifact.isRunfilesTree();
+  }
+
+  private static boolean isFileset(ActionInput input) {
+    return input instanceof Artifact artifact && artifact.isFileset();
   }
 }

@@ -20,7 +20,6 @@ import com.google.devtools.build.lib.concurrent.ThreadSafety.ThreadSafe;
 import com.google.devtools.build.lib.util.MapCodec.IncompatibleFormatException;
 import com.google.devtools.build.lib.vfs.FileSystemUtils;
 import com.google.devtools.build.lib.vfs.Path;
-import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.util.HashMap;
 import java.util.Hashtable;
@@ -76,16 +75,12 @@ public abstract class PersistentMap<K, V> extends ForwardingConcurrentMap<K, V> 
   private MapCodec<K, V>.Writer journalOut;
 
   /**
-   * 'dirty' is true when the in-memory representation of the map is more recent than the on-disk
-   * representation.
-   */
-  private boolean dirty;
-
-  /**
    * If non-null, contains the message from an {@code IOException} thrown by a previously failed
    * write. This error is deferred until the next call to a method which is able to throw an
    * exception.
    */
+  @GuardedBy("this")
+  @Nullable
   private String deferredIOFailure = null;
 
   /**
@@ -129,7 +124,7 @@ public abstract class PersistentMap<K, V> extends ForwardingConcurrentMap<K, V> 
   public V put(K key, V value) {
     V previous = delegate.put(key, value);
     journal.add(key);
-    markAsDirty();
+    maybeFlushJournal();
     return previous;
   }
 
@@ -140,39 +135,29 @@ public abstract class PersistentMap<K, V> extends ForwardingConcurrentMap<K, V> 
     V previous = delegate.putIfAbsent(key, value);
     if (previous == null) {
       journal.add(key);
-      markAsDirty();
+      maybeFlushJournal();
     }
     return previous;
   }
 
-  /** Marks the map as dirty and potentially writes updated entries to the journal. */
+  /**
+   * Potentially flushes the in-memory journal to disk, as determined by {@link
+   * #shouldFlushJournal()}.
+   */
   @ThreadSafe
-  protected void markAsDirty() {
-    dirty = true;
-    if (updateJournal()) {
-      writeJournal();
+  private void maybeFlushJournal() {
+    if (shouldFlushJournal()) {
+      flushJournal();
     }
   }
 
   /**
-   * Determines if the journal should be updated. The default implementation always returns 'true',
-   * but subclasses are free to override this to implement their own journal updating strategy. For
-   * example it is possible to implement an update at most every five seconds using the following
-   * code:
+   * Determines whether the in-memory journal should be flushed to disk.
    *
-   * <pre>
-   * private long nextUpdate;
-   * protected boolean updateJournal() {
-   *   long time = System.currentTimeMillis();
-   *   if (time &gt; nextUpdate) {
-   *     nextUpdate = time + 5 * 1000;
-   *     return true;
-   *   }
-   *   return false;
-   * }
-   * </pre>
+   * <p>Called whenever an update is appended to the in-memory journal. The default is to flush it
+   * immediately, but subclasses are free to override this to implement their own strategy.
    */
-  protected boolean updateJournal() {
+  protected boolean shouldFlushJournal() {
     return true;
   }
 
@@ -186,7 +171,7 @@ public abstract class PersistentMap<K, V> extends ForwardingConcurrentMap<K, V> 
       // we know that 'object' must be an instance of K, because the
       // remove call succeeded, i.e. 'object' was mapped to 'previous'.
       journal.add((K) object); // unchecked
-      markAsDirty();
+      maybeFlushJournal();
     }
     return previous;
   }
@@ -201,15 +186,12 @@ public abstract class PersistentMap<K, V> extends ForwardingConcurrentMap<K, V> 
     throw new UnsupportedOperationException();
   }
 
-  /**
-   * Updates the persistent journal by writing all entries to the {@link #journalOut} stream and
-   * clearing the in memory journal.
-   */
-  private synchronized void writeJournal() {
+  /** Flushes the in-memory journal to disk. */
+  public synchronized void flushJournal() {
     try {
       if (journalOut == null) {
         // Append to a preexisting journal file, which may have been left around after the last
-        // save() because keepJournal() was true.
+        // save() because shouldKeepJournal() was true.
         journalOut = codec.createWriter(journalFile, version, /* overwrite= */ false);
       }
       // Journal may have duplicates, we can ignore them.
@@ -222,52 +204,57 @@ public abstract class PersistentMap<K, V> extends ForwardingConcurrentMap<K, V> 
     }
   }
 
-  protected void forceFlush() {
-    if (dirty) {
-      writeJournal();
-    }
-  }
-
   /**
    * Loads the previous written map entries from disk.
    *
-   * @param failFast whether to throw an IOException if an error occurs, including a version
-   *     mismatch or corrupted file contents; otherwise, the error is suppressed and the remainder
-   *     of the file is ignored, resulting in a valid but potentially incomplete map.
+   * <p>If no on-disk state exists, loading is successful and produces an empty map.
+   *
+   * <p>Data corruption is handled differently for each file:
+   *
+   * <ul>
+   *   <li>Corruption in the map file is treated as an error, as the file is updated atomically.
+   *   <li>Corruption in the journal file is tolerated by ignoring the remaining contents, as the
+   *       file is updated non-atomically.
+   *
+   * @throws IncompatibleFormatException if the on-disk data is in an incompatible format
+   * @throws IOException if data corruption is detected and cannot be recovered from, or some other
+   *     I/O error occurs
    */
-  public synchronized void load(boolean failFast) throws IOException {
+  public synchronized void load() throws IOException {
     if (!loaded) {
-      loadEntries(mapFile, failFast);
+      if (mapFile.exists()) {
+        loadEntries(mapFile);
+      }
       if (journalFile.exists()) {
-        loadEntries(journalFile, failFast);
-        // Force the map to be dirty, so that we can save it to disk.
-        dirty = true;
-        save(/*fullSave=*/ true);
-      } else {
-        dirty = false;
+        try {
+          loadEntries(journalFile);
+        } catch (IOException e) {
+          if (e instanceof IncompatibleFormatException) {
+            throw e;
+          }
+        }
+        // Merge the journal into the map file and delete the former, ensuring that we don't keep
+        // appending to a corrupted journal.
+        // TODO(tjgq): Avoid doing this unless journal corruption was detected.
+        save(/* fullSave= */ true);
       }
       loaded = true;
     }
   }
 
-  /** Loads the previous written map entries from disk. */
-  public synchronized void load() throws IOException {
-    load(/* failFast= */ false);
-  }
-
   @Override
   public synchronized void clear() {
     super.clear();
-    markAsDirty();
     try {
-      save();
+      // We must do a full save because we're bypassing the journal.
+      save(/* fullSave= */ true);
     } catch (IOException e) {
-      this.deferredIOFailure = e.getMessage() + " during map write";
+      this.deferredIOFailure = e.getMessage() + " during map clear";
     }
   }
 
   /**
-   * Saves all the entries of this map to disk and deletes the journal file.
+   * Saves the map to disk.
    *
    * @throws IOException if there was an I/O error during this call, or any previous call since the
    *     last save().
@@ -277,9 +264,10 @@ public abstract class PersistentMap<K, V> extends ForwardingConcurrentMap<K, V> 
   }
 
   /**
-   * Saves all the entries of this map to disk and deletes the journal file.
+   * Saves the map to disk.
    *
-   * @param fullSave if true, always write the full cache to disk, without the journal.
+   * @param fullSave if true, the journal file will be merged into the map file and deleted;
+   *     otherwise, the decision is made by {@link #shouldKeepJournal()}.
    * @throws IOException if there was an I/O error during this call, or any previous call since the
    *     last save().
    */
@@ -292,30 +280,24 @@ public abstract class PersistentMap<K, V> extends ForwardingConcurrentMap<K, V> 
         deferredIOFailure = null;
       }
     }
-    if (dirty) {
-      if (!fullSave && keepJournal()) {
-        forceFlush();
-        journalOut.close();
-        journalOut = null;
-        return journalSize() + cacheSize();
-      } else {
-        dirty = false;
-        Path mapTemp =
-            mapFile.getRelative(FileSystemUtils.replaceExtension(mapFile.asFragment(), ".tmp"));
-        try {
-          saveEntries(mapTemp);
-          mapFile.delete();
-          mapTemp.renameTo(mapFile);
-        } finally {
-          mapTemp.delete();
-        }
-        clearJournal();
-        journalFile.delete();
-        return cacheSize();
-      }
+    if (!fullSave && shouldKeepJournal()) {
+      flushJournal();
+      journalOut.close();
+      journalOut = null;
     } else {
-      return cacheSize();
+      Path mapTemp =
+          mapFile.getRelative(FileSystemUtils.replaceExtension(mapFile.asFragment(), ".tmp"));
+      try {
+        saveEntries(mapTemp);
+        mapFile.delete();
+        mapTemp.renameTo(mapFile);
+      } finally {
+        mapTemp.delete();
+      }
+      clearJournal();
+      journalFile.delete();
     }
+    return journalSize() + cacheSize();
   }
 
   protected final synchronized long journalSize() throws IOException {
@@ -327,11 +309,12 @@ public abstract class PersistentMap<K, V> extends ForwardingConcurrentMap<K, V> 
   }
 
   /**
-   * If true, keep the journal during the save(). The journal is flushed, but
-   * the map file is not touched. This may be useful in cases where the journal
-   * is much smaller than the map.
+   * Whether to keep the journal file on save.
+   *
+   * <p>The default is to always merge the journal file into the main file and delete the former,
+   * but subclasses are free to override this to implement their own strategy.
    */
-  protected boolean keepJournal() {
+  protected boolean shouldKeepJournal() {
     return false;
   }
 
@@ -346,21 +329,12 @@ public abstract class PersistentMap<K, V> extends ForwardingConcurrentMap<K, V> 
   /**
    * Loads all entries from the given file into the backing map.
    *
-   * @param failFast whether to throw an IOException if an error occurs, including a version
-   *     mismatch or corrupted file contents; otherwise, the error is suppressed and the remainder
-   *     of the file is ignored, resulting in a valid but potentially incomplete map.
+   * @throws IncompatibleFormatException if the file is in an incompatible format
+   * @throws IOException if the file is corrupted or an I/O error occurs
    */
-  private synchronized void loadEntries(Path mapFile, boolean failFast) throws IOException {
+  private synchronized void loadEntries(Path mapFile) throws IOException {
     try (MapCodec<K, V>.Reader in = codec.createReader(mapFile, version)) {
       readEntries(in);
-    } catch (FileNotFoundException e) {
-      // Always treat nonexistence as an empty map.
-    } catch (IncompatibleFormatException e) {
-      // Unless otherwise requested, treat an incompatible format as an empty map, so that format
-      // changes are not interpreted as corruption.
-      if (failFast) {
-        throw e;
-      }
     }
   }
 

@@ -33,15 +33,13 @@ import com.google.devtools.build.lib.analysis.util.AnalysisMock;
 import com.google.devtools.build.lib.bazel.bzlmod.BzlmodTestUtil.InterimModuleBuilder;
 import com.google.devtools.build.lib.bazel.bzlmod.ModuleFileValue.RootModuleFileValue;
 import com.google.devtools.build.lib.bazel.repository.RepositoryOptions.LockfileMode;
+import com.google.devtools.build.lib.bazel.repository.cache.RepoContentsCache;
 import com.google.devtools.build.lib.clock.BlazeClock;
 import com.google.devtools.build.lib.cmdline.LabelConstants;
 import com.google.devtools.build.lib.cmdline.RepositoryName;
 import com.google.devtools.build.lib.packages.semantics.BuildLanguageOptions;
 import com.google.devtools.build.lib.pkgcache.PathPackageLocator;
-import com.google.devtools.build.lib.rules.repository.LocalRepositoryFunction;
-import com.google.devtools.build.lib.rules.repository.LocalRepositoryRule;
 import com.google.devtools.build.lib.rules.repository.RepositoryDelegatorFunction;
-import com.google.devtools.build.lib.rules.repository.RepositoryFunction;
 import com.google.devtools.build.lib.skyframe.BazelSkyframeExecutorConstants;
 import com.google.devtools.build.lib.skyframe.BzlmodRepoRuleFunction;
 import com.google.devtools.build.lib.skyframe.ClientEnvironmentFunction;
@@ -127,8 +125,6 @@ public class ModuleFileFunctionTest extends FoundationTestCase {
             directories);
     ConfiguredRuleClassProvider ruleClassProvider = AnalysisMock.get().createRuleClassProvider();
 
-    ImmutableMap<String, RepositoryFunction> repositoryHandlers =
-        ImmutableMap.of(LocalRepositoryRule.NAME, new LocalRepositoryFunction());
     evaluator =
         new InMemoryMemoizingEvaluator(
             ImmutableMap.<SkyFunctionName, SkyFunction>builder()
@@ -140,7 +136,9 @@ public class ModuleFileFunctionTest extends FoundationTestCase {
                             new TimestampGranularityMonitor(BlazeClock.instance())),
                         SyscallCache.NO_CACHE,
                         externalFilesHelper))
-                .put(SkyFunctions.BAZEL_LOCK_FILE, new BazelLockFileFunction(rootDirectory))
+                .put(
+                    SkyFunctions.BAZEL_LOCK_FILE,
+                    new BazelLockFileFunction(rootDirectory, directories.getOutputBase()))
                 .put(
                     SkyFunctions.MODULE_FILE,
                     new ModuleFileFunction(
@@ -152,8 +150,7 @@ public class ModuleFileFunctionTest extends FoundationTestCase {
                     new PackageLookupFunction(
                         new AtomicReference<>(ImmutableSet.of()),
                         CrossRepositoryLabelViolationStrategy.ERROR,
-                        BazelSkyframeExecutorConstants.BUILD_FILES_BY_PRIORITY,
-                        BazelSkyframeExecutorConstants.EXTERNAL_PACKAGE_HELPER))
+                        BazelSkyframeExecutorConstants.BUILD_FILES_BY_PRIORITY))
                 .put(SkyFunctions.IGNORED_SUBDIRECTORIES, IgnoredSubdirectoriesFunction.NOOP)
                 .put(
                     SkyFunctions.LOCAL_REPOSITORY_LOOKUP,
@@ -163,12 +160,11 @@ public class ModuleFileFunctionTest extends FoundationTestCase {
                 .put(
                     SkyFunctions.REPOSITORY_DIRECTORY,
                     new RepositoryDelegatorFunction(
-                        repositoryHandlers,
                         null,
                         new AtomicBoolean(true),
                         ImmutableMap::of,
                         directories,
-                        BazelSkyframeExecutorConstants.EXTERNAL_PACKAGE_HELPER))
+                        new RepoContentsCache()))
                 .put(
                     BzlmodRepoRuleValue.BZLMOD_REPO_RULE,
                     new BzlmodRepoRuleFunction(ruleClassProvider, directories))
@@ -193,8 +189,6 @@ public class ModuleFileFunctionTest extends FoundationTestCase {
     RepositoryDelegatorFunction.VENDOR_DIRECTORY.set(differencer, Optional.empty());
 
     PrecomputedValue.PATH_PACKAGE_LOCATOR.set(differencer, packageLocator.get());
-    RepositoryDelegatorFunction.RESOLVED_FILE_INSTEAD_OF_WORKSPACE.set(
-        differencer, Optional.empty());
     PrecomputedValue.REPO_ENV.set(differencer, ImmutableMap.of());
     ModuleFileFunction.IGNORE_DEV_DEPS.set(differencer, false);
     ModuleFileFunction.INJECTED_REPOSITORIES.set(differencer, ImmutableMap.of());
@@ -1398,8 +1392,8 @@ public class ModuleFileFunctionTest extends FoundationTestCase {
         ImmutableMap.of(
             "bazel_tools",
             new NonRegistryOverride(LocalPathRepoSpecs.create("/tools")),
-            "local_config_platform",
-            new NonRegistryOverride(LocalPathRepoSpecs.create("/local_config_platform")));
+            "other_tools",
+            new NonRegistryOverride(LocalPathRepoSpecs.create("/other_tools")));
     setUpWithBuiltinModules(builtinModules);
     scratch.overwriteFile(
         rootDirectory.getRelative("MODULE.bazel").getPathString(),
@@ -1417,7 +1411,7 @@ public class ModuleFileFunctionTest extends FoundationTestCase {
         .isEqualTo(
             InterimModuleBuilder.create("", "")
                 .addDep("bazel_tools", createModuleKey("bazel_tools", ""))
-                .addDep("local_config_platform", createModuleKey("local_config_platform", ""))
+                .addDep("other_tools", createModuleKey("other_tools", ""))
                 .addDep("foo", createModuleKey("foo", "1.0"))
                 .build());
     assertThat(moduleFileValue.overrides()).containsExactlyEntriesIn(builtinModules);
@@ -1433,8 +1427,8 @@ public class ModuleFileFunctionTest extends FoundationTestCase {
             "bazel_tools",
             new NonRegistryOverride(
                 LocalPathRepoSpecs.create(rootDirectory.getRelative("tools").getPathString())),
-            "local_config_platform",
-            new NonRegistryOverride(LocalPathRepoSpecs.create("/local_config_platform")));
+            "other_tools",
+            new NonRegistryOverride(LocalPathRepoSpecs.create("/other_tools")));
     setUpWithBuiltinModules(builtinModules);
     scratch.overwriteFile(
         rootDirectory.getRelative("MODULE.bazel").getPathString(),
@@ -1456,7 +1450,7 @@ public class ModuleFileFunctionTest extends FoundationTestCase {
         .isEqualTo(
             InterimModuleBuilder.create("bazel_tools", "1.0")
                 .setKey(createModuleKey("bazel_tools", ""))
-                .addDep("local_config_platform", createModuleKey("local_config_platform", ""))
+                .addDep("other_tools", createModuleKey("other_tools", ""))
                 .addDep("foo", createModuleKey("foo", "2.0"))
                 .build());
   }
@@ -2041,6 +2035,56 @@ public class ModuleFileFunctionTest extends FoundationTestCase {
         Error in override_repo: The repo 'my_foo' used as an override for 'bar' in module \
         extension 'ext2' is itself overridden with 'my_bar' at /workspace/MODULE.bazel:4:14, \
         which is not supported.\
+        """);
+  }
+
+  @Test
+  public void testOverrideRepo_extraKeywordArguments_literal() throws Exception {
+    scratch.overwriteFile(
+        rootDirectory.getRelative("MODULE.bazel").getPathString(),
+        """
+        module(name='aaa')
+        ext1 = use_extension('//:defs.bzl', 'ext1')
+        use_repo(ext1, "foo")
+        ext2 = use_extension('//:defs.bzl', 'ext2')
+        use_repo(ext2, "bar.2")
+        override_repo(ext2, **{"foo.2": "foo"})
+        """);
+
+    EvaluationResult<RootModuleFileValue> result =
+        evaluator.evaluate(
+            ImmutableList.of(ModuleFileValue.KEY_FOR_ROOT_MODULE), evaluationContext);
+    assertThat(result.hasError()).isFalse();
+
+    var ext2Usage =
+        result.get(ModuleFileValue.KEY_FOR_ROOT_MODULE).module().getExtensionUsages().get(1);
+    assertThat(ext2Usage.getRepoOverrides().keySet()).containsExactly("foo.2");
+  }
+
+  @Test
+  public void testOverrideRepo_extraKeywordArguments_nonLiteral() throws Exception {
+    scratch.overwriteFile(
+        rootDirectory.getRelative("MODULE.bazel").getPathString(),
+        """
+        module(name='aaa')
+        ext1 = use_extension('//:defs.bzl', 'ext1')
+        use_repo(ext1, "foo")
+        ext2 = use_extension('//:defs.bzl', 'ext2')
+        use_repo(ext2, "bar.2")
+        KWARGS = {"foo.2": "foo"}
+        override_repo(ext2, **KWARGS)
+        """);
+
+    reporter.removeHandler(failFastHandler);
+    EvaluationResult<RootModuleFileValue> result =
+        evaluator.evaluate(
+            ImmutableList.of(ModuleFileValue.KEY_FOR_ROOT_MODULE), evaluationContext);
+    assertThat(result.hasError()).isTrue();
+
+    assertContainsEvent(
+        """
+        ERROR /workspace/MODULE.bazel:7:21: **kwargs arguments must be a literal dict in \
+        MODULE.bazel files.\
         """);
   }
 

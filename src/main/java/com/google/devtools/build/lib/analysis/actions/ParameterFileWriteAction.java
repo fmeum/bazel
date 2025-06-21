@@ -25,10 +25,10 @@ import com.google.devtools.build.lib.actions.ActionKeyContext;
 import com.google.devtools.build.lib.actions.ActionOwner;
 import com.google.devtools.build.lib.actions.ArgChunk;
 import com.google.devtools.build.lib.actions.Artifact;
-import com.google.devtools.build.lib.actions.ArtifactExpander;
 import com.google.devtools.build.lib.actions.CommandLine;
 import com.google.devtools.build.lib.actions.CommandLineExpansionException;
 import com.google.devtools.build.lib.actions.ExecException;
+import com.google.devtools.build.lib.actions.InputMetadataProvider;
 import com.google.devtools.build.lib.actions.ParameterFile;
 import com.google.devtools.build.lib.actions.ParameterFile.ParameterFileType;
 import com.google.devtools.build.lib.actions.PathMapper;
@@ -59,6 +59,7 @@ public final class ParameterFileWriteAction extends AbstractFileWriteAction {
   private final CommandLine commandLine;
   private final ParameterFileType type;
   private final boolean hasInputArtifactToExpand;
+  private final boolean makeExecutable;
 
   /**
    * Creates a new instance.
@@ -69,8 +70,18 @@ public final class ParameterFileWriteAction extends AbstractFileWriteAction {
    * @param type the type of the file
    */
   public ParameterFileWriteAction(
-      ActionOwner owner, Artifact output, CommandLine commandLine, ParameterFileType type) {
-    this(owner, NestedSetBuilder.emptySet(Order.STABLE_ORDER), output, commandLine, type);
+      ActionOwner owner,
+      Artifact output,
+      CommandLine commandLine,
+      ParameterFileType type,
+      boolean makeExecutable) {
+    this(
+        owner,
+        NestedSetBuilder.emptySet(Order.STABLE_ORDER),
+        output,
+        commandLine,
+        type,
+        makeExecutable);
   }
 
   /**
@@ -88,11 +99,18 @@ public final class ParameterFileWriteAction extends AbstractFileWriteAction {
       NestedSet<Artifact> inputs,
       Artifact output,
       CommandLine commandLine,
-      ParameterFileType type) {
+      ParameterFileType type,
+      boolean makeExecutable) {
     super(owner, inputs, output);
     this.commandLine = commandLine;
     this.type = type;
     this.hasInputArtifactToExpand = !inputs.isEmpty();
+    this.makeExecutable = makeExecutable;
+  }
+
+  @Override
+  public boolean makeExecutable() {
+    return makeExecutable;
   }
 
   @VisibleForTesting
@@ -142,8 +160,9 @@ public final class ParameterFileWriteAction extends AbstractFileWriteAction {
       throws ExecException, InterruptedException {
     final ArgChunk arguments;
     try {
-      ArtifactExpander artifactExpander = Preconditions.checkNotNull(ctx.getArtifactExpander());
-      arguments = commandLine.expand(artifactExpander, PathMapper.NOOP);
+      InputMetadataProvider inputMetadataProvider =
+          Preconditions.checkNotNull(ctx.getInputMetadataProvider());
+      arguments = commandLine.expand(inputMetadataProvider, PathMapper.NOOP);
     } catch (CommandLineExpansionException e) {
       throw new UserExecException(
           e,
@@ -166,20 +185,20 @@ public final class ParameterFileWriteAction extends AbstractFileWriteAction {
 
     @Override
     public void writeTo(OutputStream out) throws IOException {
-      ParameterFile.writeParameterFile(out, arguments.arguments(), type);
+      ParameterFile.writeParameterFile(out, arguments.arguments(PathMapper.NOOP), type);
     }
   }
 
   @Override
   protected void computeKey(
       ActionKeyContext actionKeyContext,
-      @Nullable ArtifactExpander artifactExpander,
+      @Nullable InputMetadataProvider inputMetadataProvider,
       Fingerprint fp)
       throws CommandLineExpansionException, InterruptedException {
     fp.addString(GUID);
     fp.addString(type.toString());
     commandLine.addToFingerprint(
-        actionKeyContext, artifactExpander, CoreOptions.OutputPathsMode.OFF, fp);
+        actionKeyContext, inputMetadataProvider, CoreOptions.OutputPathsMode.OFF, fp);
   }
 
   @Override

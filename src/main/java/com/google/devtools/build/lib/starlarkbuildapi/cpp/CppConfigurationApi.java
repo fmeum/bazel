@@ -38,12 +38,6 @@ public interface CppConfigurationApi<InvalidConfigurationExceptionT extends Exce
       documented = false,
       useStarlarkThread = true)
   boolean getExperimentalLinkStaticLibrariesOnce(StarlarkThread thread) throws EvalException;
-  
-  @StarlarkMethod(
-      name = "experimental_platform_cc_test",
-      documented = false,
-      useStarlarkThread = true)
-  boolean getExperimentalPlatformCcTest(StarlarkThread thread) throws EvalException;
 
   @StarlarkMethod(
       name = "copts",
@@ -108,7 +102,7 @@ public interface CppConfigurationApi<InvalidConfigurationExceptionT extends Exce
       structField = true,
       // Only for migration purposes. Intentionally not documented.
       documented = false,
-      doc = "Accessor for <code>--incompatible_macos_set_install_name</code>.")
+      doc = "Deprecated, always true")
   boolean macosSetInstallName();
 
   @StarlarkMethod(name = "force_pic", documented = false, useStarlarkThread = true)

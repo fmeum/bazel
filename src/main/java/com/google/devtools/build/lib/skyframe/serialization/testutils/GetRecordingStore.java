@@ -67,5 +67,14 @@ public final class GetRecordingStore implements FingerprintValueStore {
     public void complete() {
       response().set(checkNotNull(parent().fingerprintToContents.get(fingerprint())));
     }
+
+    /**
+     * Simulates returning null bytes.
+     *
+     * <p>In certain setups, null bytes are used to signal missing data for the given key.
+     */
+    public void completeWithNullBytes() {
+      response().set(null);
+    }
   }
 }

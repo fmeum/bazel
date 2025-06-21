@@ -45,16 +45,15 @@ import com.google.devtools.build.lib.bazel.bzlmod.YankedVersionsUtil;
 import com.google.devtools.build.lib.bazel.repository.RepositoryOptions.BazelCompatibilityMode;
 import com.google.devtools.build.lib.bazel.repository.RepositoryOptions.CheckDirectDepsMode;
 import com.google.devtools.build.lib.bazel.repository.RepositoryOptions.LockfileMode;
+import com.google.devtools.build.lib.bazel.repository.cache.RepoContentsCache;
 import com.google.devtools.build.lib.bazel.repository.starlark.StarlarkRepositoryFunction;
 import com.google.devtools.build.lib.clock.BlazeClock;
 import com.google.devtools.build.lib.cmdline.RepositoryName;
 import com.google.devtools.build.lib.events.StoredEventHandler;
 import com.google.devtools.build.lib.packages.AutoloadSymbols;
-import com.google.devtools.build.lib.packages.PackageFactory;
-import com.google.devtools.build.lib.packages.WorkspaceFileValue;
 import com.google.devtools.build.lib.pkgcache.PathPackageLocator;
-import com.google.devtools.build.lib.repository.ExternalPackageHelper;
-import com.google.devtools.build.lib.rules.repository.RepositoryDirectoryValue.SuccessfulRepositoryDirectoryValue;
+import com.google.devtools.build.lib.rules.repository.RepositoryDirectoryValue.Failure;
+import com.google.devtools.build.lib.rules.repository.RepositoryDirectoryValue.Success;
 import com.google.devtools.build.lib.rules.repository.RepositoryFunction.AlreadyReportedRepositoryAccessException;
 import com.google.devtools.build.lib.skyframe.BazelSkyframeExecutorConstants;
 import com.google.devtools.build.lib.skyframe.BzlCompileFunction;
@@ -64,7 +63,6 @@ import com.google.devtools.build.lib.skyframe.ClientEnvironmentFunction;
 import com.google.devtools.build.lib.skyframe.ContainingPackageLookupFunction;
 import com.google.devtools.build.lib.skyframe.ExternalFilesHelper;
 import com.google.devtools.build.lib.skyframe.ExternalFilesHelper.ExternalFileAction;
-import com.google.devtools.build.lib.skyframe.ExternalPackageFunction;
 import com.google.devtools.build.lib.skyframe.FileFunction;
 import com.google.devtools.build.lib.skyframe.FileStateFunction;
 import com.google.devtools.build.lib.skyframe.IgnoredSubdirectoriesFunction;
@@ -77,7 +75,6 @@ import com.google.devtools.build.lib.skyframe.PrecomputedValue;
 import com.google.devtools.build.lib.skyframe.RepositoryMappingFunction;
 import com.google.devtools.build.lib.skyframe.SkyFunctions;
 import com.google.devtools.build.lib.skyframe.StarlarkBuiltinsFunction;
-import com.google.devtools.build.lib.skyframe.WorkspaceFileFunction;
 import com.google.devtools.build.lib.testutil.FoundationTestCase;
 import com.google.devtools.build.lib.testutil.ManualClock;
 import com.google.devtools.build.lib.testutil.TestConstants;
@@ -127,17 +124,13 @@ public class RepositoryDelegatorTest extends FoundationTestCase {
             rootPath,
             /* defaultSystemJavabase= */ null,
             TestConstants.PRODUCT_NAME);
-    RepositoryFunction localRepositoryFunction = new LocalRepositoryFunction();
-    ImmutableMap<String, RepositoryFunction> repositoryHandlers =
-        ImmutableMap.of(LocalRepositoryRule.NAME, localRepositoryFunction);
     RepositoryDelegatorFunction delegatorFunction =
         new RepositoryDelegatorFunction(
-            repositoryHandlers,
             new StarlarkRepositoryFunction(),
             /* isFetch= */ new AtomicBoolean(true),
             /* clientEnvironmentSupplier= */ ImmutableMap::of,
             directories,
-            BazelSkyframeExecutorConstants.EXTERNAL_PACKAGE_HELPER);
+            new RepoContentsCache());
     AtomicReference<PathPackageLocator> pkgLocator =
         new AtomicReference<>(
             new PathPackageLocator(
@@ -152,11 +145,6 @@ public class RepositoryDelegatorTest extends FoundationTestCase {
     differencer = new SequencedRecordingDifferencer();
 
     ConfiguredRuleClassProvider ruleClassProvider = AnalysisMock.get().createRuleClassProvider();
-
-    PackageFactory pkgFactory =
-        AnalysisMock.get()
-            .getPackageFactoryBuilderForTesting(directories)
-            .build(ruleClassProvider, fileSystem);
 
     registryFactory = new FakeRegistry.Factory();
     FakeRegistry registry =
@@ -186,22 +174,10 @@ public class RepositoryDelegatorTest extends FoundationTestCase {
                     new PackageLookupFunction(
                         new AtomicReference<>(ImmutableSet.of()),
                         CrossRepositoryLabelViolationStrategy.ERROR,
-                        BazelSkyframeExecutorConstants.BUILD_FILES_BY_PRIORITY,
-                        BazelSkyframeExecutorConstants.EXTERNAL_PACKAGE_HELPER))
-                .put(
-                    WorkspaceFileValue.WORKSPACE_FILE,
-                    new WorkspaceFileFunction(
-                        ruleClassProvider,
-                        pkgFactory,
-                        directories,
-                        /* bzlLoadFunctionForInlining= */ null))
+                        BazelSkyframeExecutorConstants.BUILD_FILES_BY_PRIORITY))
                 .put(
                     SkyFunctions.LOCAL_REPOSITORY_LOOKUP,
                     new LocalRepositoryLookupFunction(
-                        BazelSkyframeExecutorConstants.EXTERNAL_PACKAGE_HELPER))
-                .put(
-                    SkyFunctions.EXTERNAL_PACKAGE,
-                    new ExternalPackageFunction(
                         BazelSkyframeExecutorConstants.EXTERNAL_PACKAGE_HELPER))
                 .put(SkyFunctions.PRECOMPUTED, new PrecomputedFunction())
                 .put(
@@ -230,7 +206,9 @@ public class RepositoryDelegatorTest extends FoundationTestCase {
                         rootPath,
                         ImmutableMap.of()))
                 .put(SkyFunctions.BAZEL_DEP_GRAPH, new BazelDepGraphFunction())
-                .put(SkyFunctions.BAZEL_LOCK_FILE, new BazelLockFileFunction(rootDirectory))
+                .put(
+                    SkyFunctions.BAZEL_LOCK_FILE,
+                    new BazelLockFileFunction(rootDirectory, directories.getOutputBase()))
                 .put(SkyFunctions.BAZEL_MODULE_RESOLUTION, new BazelModuleResolutionFunction())
                 .put(
                     BzlmodRepoRuleValue.BZLMOD_REPO_RULE,
@@ -265,8 +243,6 @@ public class RepositoryDelegatorTest extends FoundationTestCase {
     PrecomputedValue.STARLARK_SEMANTICS.set(differencer, semantics);
     AutoloadSymbols.AUTOLOAD_SYMBOLS.set(
         differencer, new AutoloadSymbols(ruleClassProvider, semantics));
-    RepositoryDelegatorFunction.RESOLVED_FILE_INSTEAD_OF_WORKSPACE.set(
-        differencer, Optional.empty());
     PrecomputedValue.REPO_ENV.set(differencer, ImmutableMap.of());
     ModuleFileFunction.IGNORE_DEV_DEPS.set(differencer, false);
     ModuleFileFunction.INJECTED_REPOSITORIES.set(differencer, ImmutableMap.of());
@@ -298,7 +274,7 @@ public class RepositoryDelegatorTest extends FoundationTestCase {
     assertThat(result.hasError()).isFalse();
     RepositoryDirectoryValue repositoryDirectoryValue = (RepositoryDirectoryValue) result.get(key);
     Path expectedPath = scratch.dir("/outputbase/external/foo");
-    Path actualPath = repositoryDirectoryValue.getPath();
+    Path actualPath = ((Success) repositoryDirectoryValue).getPath();
     assertThat(actualPath).isEqualTo(expectedPath);
     assertThat(actualPath.isSymbolicLink()).isTrue();
     assertThat(actualPath.readSymbolicLink()).isEqualTo(overrideDirectory.asFragment());
@@ -312,22 +288,21 @@ public class RepositoryDelegatorTest extends FoundationTestCase {
     RepositoryName repositoryName = RepositoryName.create("repo");
     RepositoryDirectoryValue.Key key = RepositoryDirectoryValue.key(repositoryName);
 
-    SuccessfulRepositoryDirectoryValue usual =
-        RepositoryDirectoryValue.builder()
-            .setPath(rootDirectory.getRelative("a"))
-            .setDigest(new byte[] {1})
-            .build();
+    Success usual =
+        new Success(
+            rootDirectory.getRelative("a"),
+            /* isFetchingDelayed= */ false,
+            /* excludeFromVendoring= */ false);
 
     assertThat(
             checker.check(key, usual, /* oldMtsv= */ null, SyscallCache.NO_CACHE, tsgm).isDirty())
         .isFalse();
 
-    SuccessfulRepositoryDirectoryValue fetchDelayed =
-        RepositoryDirectoryValue.builder()
-            .setPath(rootDirectory.getRelative("b"))
-            .setFetchingDelayed()
-            .setDigest(new byte[] {1})
-            .build();
+    Success fetchDelayed =
+        new Success(
+            rootDirectory.getRelative("b"),
+            /* isFetchingDelayed= */ true,
+            /* excludeFromVendoring= */ false);
 
     assertThat(
             checker
@@ -402,8 +377,8 @@ public class RepositoryDelegatorTest extends FoundationTestCase {
         evaluator.evaluate(ImmutableList.of(key), evaluationContext);
     assertThat(result.hasError()).isFalse();
     RepositoryDirectoryValue repositoryDirectoryValue = (RepositoryDirectoryValue) result.get(key);
-    assertThat(repositoryDirectoryValue.repositoryExists()).isFalse();
-    assertThat(repositoryDirectoryValue.getErrorMsg())
+    assertThat(repositoryDirectoryValue).isInstanceOf(Failure.class);
+    assertThat(((Failure) repositoryDirectoryValue).getErrorMsg())
         .contains("Repository '@@foo' is not defined");
   }
 
@@ -425,11 +400,9 @@ public class RepositoryDelegatorTest extends FoundationTestCase {
 
     assertThat(result.hasError()).isFalse();
     RepositoryDirectoryValue repositoryDirectoryValue = (RepositoryDirectoryValue) result.get(key);
-    assertThat(repositoryDirectoryValue.repositoryExists()).isFalse();
-    assertThat(repositoryDirectoryValue.getErrorMsg())
+    assertThat(repositoryDirectoryValue).isInstanceOf(Failure.class);
+    assertThat(((Failure) repositoryDirectoryValue).getErrorMsg())
         .contains("No repository visible as '@foo' from repository '@@fake_owner_repo'");
-    assertThat(repositoryDirectoryValue.getErrorMsg())
-        .doesNotContain(ExternalPackageHelper.WORKSPACE_DEPRECATION);
   }
 
   @Test
@@ -451,10 +424,8 @@ public class RepositoryDelegatorTest extends FoundationTestCase {
 
     assertThat(result.hasError()).isFalse();
     RepositoryDirectoryValue repositoryDirectoryValue = (RepositoryDirectoryValue) result.get(key);
-    assertThat(repositoryDirectoryValue.repositoryExists()).isFalse();
-    assertThat(repositoryDirectoryValue.getErrorMsg())
+    assertThat(repositoryDirectoryValue).isInstanceOf(Failure.class);
+    assertThat(((Failure) repositoryDirectoryValue).getErrorMsg())
         .contains("No repository visible as '@foo' from main repository");
-    assertThat(repositoryDirectoryValue.getErrorMsg())
-        .contains(ExternalPackageHelper.WORKSPACE_DEPRECATION);
   }
 }

@@ -26,7 +26,7 @@ import com.google.devtools.build.lib.actions.ActionExecutionContext;
 import com.google.devtools.build.lib.actions.ActionKeyContext;
 import com.google.devtools.build.lib.actions.ActionOwner;
 import com.google.devtools.build.lib.actions.Artifact;
-import com.google.devtools.build.lib.actions.ArtifactExpander;
+import com.google.devtools.build.lib.actions.InputMetadataProvider;
 import com.google.devtools.build.lib.analysis.ConfiguredTarget;
 import com.google.devtools.build.lib.analysis.OutputGroupInfo;
 import com.google.devtools.build.lib.analysis.RuleConfiguredTargetBuilder;
@@ -203,9 +203,7 @@ public class GenQuery implements RuleConfiguredTargetFactory {
         .addProvider(
             RunfilesProvider.class,
             RunfilesProvider.simple(
-                new Runfiles.Builder(
-                        ruleContext.getWorkspaceName(),
-                        ruleContext.getConfiguration().legacyExternalRunfiles())
+                new Runfiles.Builder(ruleContext.getWorkspaceName())
                     .addTransitiveArtifacts(filesToBuild)
                     .build()))
         .addOutputGroup(
@@ -233,11 +231,7 @@ public class GenQuery implements RuleConfiguredTargetFactory {
 
     GenQueryPackageProvider packageProvider;
     try {
-      GenQueryPackageProviderFactory packageProviderFactory =
-          ruleContext.getConfiguration().getFragment(GenQueryConfiguration.class).skipTtvs()
-              ? new GenQueryDirectPackageProviderFactory()
-              : new GenQueryTtvPackageProviderFactory();
-      packageProvider = packageProviderFactory.constructPackageMap(env, scope);
+      packageProvider = GenQueryPackageProviderFactory.constructPackageMap(env, scope);
       if (packageProvider == null) {
         return null;
       }
@@ -382,7 +376,7 @@ public class GenQuery implements RuleConfiguredTargetFactory {
     @Override
     protected void computeKey(
         ActionKeyContext actionKeyContext,
-        @Nullable ArtifactExpander artifactExpander,
+        @Nullable InputMetadataProvider inputMetadataProvider,
         Fingerprint fp) {
       result.fingerprint(fp);
     }

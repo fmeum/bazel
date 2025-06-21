@@ -118,7 +118,8 @@ public final class BuildLanguageInfoItem extends InfoItem {
 
       ImmutableList<Attribute> sortedAttributeDefinitions =
           ImmutableList.sortedCopyOf(
-              Comparator.comparing(Attribute::getName), ruleClass.getAttributes());
+              Comparator.comparing(Attribute::getName),
+              ruleClass.getAttributeProvider().getAttributes());
       for (Attribute attr : sortedAttributeDefinitions) {
         Type<?> t = attr.getType();
         AttributeDefinition.Builder attrPb = AttributeDefinition.newBuilder();
@@ -168,9 +169,6 @@ public final class BuildLanguageInfoItem extends InfoItem {
       }
     } else if (t == BuildType.LICENSE) {
       // TODO(adonovan): need dual function of parseLicense.
-      // Treat as empty list for now.
-    } else if (t == BuildType.DISTRIBUTIONS) {
-      // TODO(adonovan): need dual function of parseDistributions.
       // Treat as empty list for now.
     } else if (t == Type.STRING) {
       b.setString(StringEncoding.internalToUnicode((String) v));

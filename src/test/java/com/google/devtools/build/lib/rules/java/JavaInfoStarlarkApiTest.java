@@ -201,47 +201,6 @@ public class JavaInfoStarlarkApiTest extends BuildViewTestCase {
   }
 
   @Test
-  public void javaOutputSourceJarsReturnsDepsetWithIncompatibleFlagEnabled() throws Exception {
-    scratch.file(
-        "foo/extension.bzl",
-        """
-        load("@rules_java//java/common:java_info.bzl", "JavaInfo")
-        MyInfo = provider()
-
-        def _impl(ctx):
-            return MyInfo(source_jars = ctx.attr.dep[JavaInfo].java_outputs[0].source_jars)
-
-        my_rule = rule(
-            implementation = _impl,
-            attrs = {"dep": attr.label()},
-        )
-        """);
-    scratch.file(
-        "foo/BUILD",
-        """
-        load("@rules_java//java:defs.bzl", "java_library")
-        load(":extension.bzl", "my_rule")
-
-        java_library(name = "lib")
-
-        my_rule(
-            name = "my_starlark_rule",
-            dep = ":lib",
-        )
-        """);
-
-    ConfiguredTarget target = getConfiguredTarget("//foo:my_starlark_rule");
-
-    StarlarkInfo info =
-        (StarlarkInfo)
-            target.get(
-                new StarlarkProvider.Key(
-                    keyForBuild(Label.parseCanonical("//foo:extension.bzl")), "MyInfo"));
-    assertThat(info).isNotNull();
-    assertThat(info.getValue("source_jars")).isInstanceOf(Depset.class);
-  }
-
-  @Test
   public void nativeAndStarlarkJavaOutputsCanBeAddedToADepset() throws Exception {
     scratch.file(
         "foo/extension.bzl",
@@ -263,9 +222,8 @@ public class JavaInfoStarlarkApiTest extends BuildViewTestCase {
         """);
     JavaOutput nativeOutput =
         JavaOutput.builder().setClassJar(createArtifact("native.jar")).build();
-    StarlarkList<?> starlarkOutputs =
-        JavaInfo.getJavaInfo(getConfiguredTarget("//foo:my_starlark_rule"))
-            .getValue("java_outputs", StarlarkList.class);
+    ImmutableList<JavaOutput> starlarkOutputs =
+        JavaInfo.getJavaInfo(getConfiguredTarget("//foo:my_starlark_rule")).getJavaOutputs();
 
     Depset depset =
         Depset.fromDirectAndTransitive(
@@ -446,6 +404,7 @@ public class JavaInfoStarlarkApiTest extends BuildViewTestCase {
         .put("transitive_runtime_jars", emptyDepset)
         .put("_transitive_full_compile_time_jars", emptyDepset)
         .put("_compile_time_java_dependencies", emptyDepset)
+        .put("header_compilation_direct_deps", emptyDepset)
         .put("plugins", JavaPluginData.empty())
         .put("api_generating_plugins", JavaPluginData.empty())
         .put("java_outputs", StarlarkList.empty())

@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 #
 # Copyright 2015 The Bazel Authors. All rights reserved.
 #
@@ -147,8 +147,11 @@ git_repository(
     $shallow_since
 )
 EOF
+  add_rules_shell "MODULE.bazel"
   mkdir -p planets
   cat > planets/BUILD <<EOF
+load("@rules_shell//shell:sh_binary.bzl", "sh_binary")
+
 sh_binary(
     name = "planet-info",
     srcs = ["planet_info.sh"],
@@ -272,9 +275,12 @@ filegroup(
 )
 EOF
   fi
+  add_rules_shell "MODULE.bazel"
 
   mkdir -p planets
   cat > planets/BUILD <<EOF
+load("@rules_shell//shell:sh_binary.bzl", "sh_binary")
+
 sh_binary(
     name = "planet-info",
     srcs = ["planet_info.sh"],
@@ -337,6 +343,7 @@ new_git_repository(
     build_file = "//:outer_planets.BUILD",
 )
 EOF
+  add_rules_shell "MODULE.bazel"
 
   cat > BUILD <<EOF
 exports_files(['outer_planets.BUILD'])
@@ -357,6 +364,8 @@ EOF
 
   mkdir -p planets
   cat > planets/BUILD <<EOF
+load("@rules_shell//shell:sh_binary.bzl", "sh_binary")
+
 sh_binary(
     name = "planet-info",
     srcs = ["planet_info.sh"],
@@ -394,6 +403,7 @@ new_git_repository(
     build_file = "//:outer_planets.BUILD",
 )
 EOF
+  add_rules_shell "MODULE.bazel"
 
   cat > BUILD <<EOF
 exports_files(['outer_planets.BUILD'])
@@ -414,6 +424,8 @@ EOF
 
   mkdir -p planets
   cat > planets/BUILD <<EOF
+load("@rules_shell//shell:sh_binary.bzl", "sh_binary")
+
 sh_binary(
     name = "planet-info",
     srcs = ["planet_info.sh"],
@@ -438,6 +450,8 @@ EOF
 }
 
 function test_git_repository_not_refetched_on_server_restart() {
+  # Testing refetch behavior, so disable the repo contents cache
+  add_to_bazelrc "common --repo_contents_cache="
   local repo_dir=$TEST_TMPDIR/repos/refetch
 
   rm MODULE.bazel
@@ -482,6 +496,8 @@ EOF
 }
 
 function test_git_repository_not_refetched_on_server_restart_strip_prefix() {
+  # Testing refetch behavior, so disable the repo contents cache
+  add_to_bazelrc "common --repo_contents_cache="
   local repo_dir=$TEST_TMPDIR/repos/refetch
   # Change the strip_prefix which should cause a new checkout
   rm MODULE.bazel
@@ -505,6 +521,8 @@ EOF
 
 
 function test_git_repository_refetched_when_commit_changes() {
+  # Testing refetch behavior, so disable the repo contents cache
+  add_to_bazelrc "common --repo_contents_cache="
   local repo_dir=$TEST_TMPDIR/repos/refetch
 
   rm MODULE.bazel
@@ -530,6 +548,8 @@ EOF
 }
 
 function test_git_repository_and_nofetch() {
+  # Testing refetch behavior, so disable the repo contents cache
+  add_to_bazelrc "common --repo_contents_cache="
   local repo_dir=$TEST_TMPDIR/repos/refetch
 
   rm MODULE.bazel
@@ -576,6 +596,7 @@ EOF
 #     planet_info.sh
 #     BUILD
 function setup_error_test() {
+  add_rules_shell "MODULE.bazel"
   mkdir -p planets
   cat > planets/planet_info.sh <<EOF
 #!/bin/sh
@@ -583,6 +604,8 @@ cat external/+git_repository+pluto/info
 EOF
 
   cat > planets/BUILD <<EOF
+load("@rules_shell//shell:sh_binary.bzl", "sh_binary")
+
 sh_binary(
     name = "planet-info",
     srcs = ["planet_info.sh"],
@@ -719,6 +742,86 @@ load("@foo//:defs.bzl", "FOO")
 EOF
 
   bazel build //:all >& $TEST_log || fail "Expect bazel build to succeed."
+}
+
+# Message printed by the rule to indicate that the Git executable does not support sparse checkout,
+# and that it is falling back to a full checkout.
+sparse_checkout_fallback_message="WARNING: Sparse checkout is not supported\. Doing a full checkout\."
+
+function test_git_repository_with_sparse_checkout_patterns() {
+  local pluto_repo_dir=$(get_pluto_repo)
+
+  # Use sparse-checkout to only checkout the BUILD and WORKSPACE files.
+  cat >> MODULE.bazel <<EOF
+git_repository = use_repo_rule('@bazel_tools//tools/build_defs/repo:git.bzl', 'git_repository')
+git_repository(
+    name = "pluto",
+    remote = "$pluto_repo_dir",
+    tag = "1-build",
+    sparse_checkout_patterns = ["BUILD", "WORKSPACE"],
+)
+EOF
+  bazel fetch --noshow_progress @pluto >& $TEST_log
+
+  repo_dir=$(bazel info output_base)/external/+git_repository+pluto
+  assert_exists "$repo_dir/BUILD"
+  assert_exists "$repo_dir/WORKSPACE"
+  # If the Git executable does not support sparse checkout, then the implementation will fall back
+  # to a full checkout.
+  if grep -sq -- "$sparse_checkout_fallback_message" $TEST_log; then
+    assert_exists "$repo_dir/info"
+  else
+    assert_not_exists "$repo_dir/info"
+  fi
+}
+
+function test_git_repository_with_sparse_checkout_file() {
+  local pluto_repo_dir=$(get_pluto_repo)
+
+  # Use sparse-checkout to checkout everything but the `info` file
+  cat >> pluto-sparse-checkout.txt <<EOF
+/*
+!/info
+EOF
+  touch BUILD
+
+  cat >> MODULE.bazel <<EOF
+git_repository = use_repo_rule('@bazel_tools//tools/build_defs/repo:git.bzl', 'git_repository')
+git_repository(
+    name = "pluto",
+    remote = "$pluto_repo_dir",
+    tag = "1-build",
+    sparse_checkout_file = "pluto-sparse-checkout.txt",
+)
+EOF
+  bazel fetch --noshow_progress @pluto >& $TEST_log
+
+  repo_dir=$(bazel info output_base)/external/+git_repository+pluto
+  echo $repo_dir
+  assert_exists "$repo_dir/BUILD"
+  assert_exists "$repo_dir/WORKSPACE"
+  # If the Git executable does not support sparse checkout, then the implementation will fall back
+  # to a full checkout.
+  if grep -sq -- "$sparse_checkout_fallback_message" $TEST_log; then
+    assert_exists "$repo_dir/info"
+  else
+    assert_not_exists "$repo_dir/info"
+  fi
+}
+
+function test_git_repository_with_sparse_checkout_patterns_and_file_fails() {
+  cat >> MODULE.bazel <<EOF
+git_repository = use_repo_rule('@bazel_tools//tools/build_defs/repo:git.bzl', 'git_repository')
+git_repository(
+    name = "pluto",
+    remote = "does-not-matter",
+    tag = "1-build",
+    sparse_checkout_file = "foobar",
+    sparse_checkout_patterns = ["foo", "bar"],
+)
+EOF
+  bazel fetch @pluto >& $TEST_log && fail "Fetch succeeded"
+  expect_log "Only one of sparse_checkout_patterns and sparse_checkout_file can be provided."
 }
 
 run_suite "Starlark git_repository tests"

@@ -15,7 +15,6 @@
 package com.google.devtools.build.lib.analysis;
 
 import static com.google.devtools.build.lib.packages.Attribute.attr;
-import static com.google.devtools.build.lib.packages.BuildType.DISTRIBUTIONS;
 import static com.google.devtools.build.lib.packages.BuildType.LABEL;
 import static com.google.devtools.build.lib.packages.BuildType.LABEL_LIST;
 import static com.google.devtools.build.lib.packages.BuildType.LICENSE;
@@ -61,9 +60,7 @@ import com.google.devtools.build.lib.util.FileTypeSet;
 import javax.annotation.Nullable;
 import net.starlark.java.eval.StarlarkInt;
 
-/**
- * Rule class definitions used by (almost) every rule.
- */
+/** Rule class definitions used by (almost) every rule. */
 public class BaseRuleClasses {
 
   private BaseRuleClasses() {}
@@ -208,9 +205,7 @@ public class BaseRuleClasses {
             return config.getRunUnder() instanceof LabelRunUnder runUnder ? runUnder.label() : null;
           });
 
-  /**
-   * A base rule for all test rules.
-   */
+  /** A base rule for all test rules. */
   public static final class TestBaseRule implements RuleDefinition {
     @Override
     public RuleClass build(RuleClass.Builder builder, RuleDefinitionEnvironment env) {
@@ -252,31 +247,37 @@ public class BaseRuleClasses {
           // Input files for every test action
           .add(
               attr("$test_wrapper", LABEL)
-                  .cfg(ExecutionTransitionFactory.createFactory())
+                  .cfg(
+                      ExecutionTransitionFactory.createFactory(DEFAULT_TEST_RUNNER_EXEC_GROUP_NAME))
                   .singleArtifact()
                   .value(env.getToolsLabel("//tools/test:test_wrapper")))
           .add(
               attr("$xml_writer", LABEL)
-                  .cfg(ExecutionTransitionFactory.createFactory())
+                  .cfg(
+                      ExecutionTransitionFactory.createFactory(DEFAULT_TEST_RUNNER_EXEC_GROUP_NAME))
                   .singleArtifact()
                   .value(env.getToolsLabel("//tools/test:xml_writer")))
           .add(
               attr("$test_runtime", LABEL_LIST)
-                  .cfg(ExecutionTransitionFactory.createFactory())
+                  .cfg(
+                      ExecutionTransitionFactory.createFactory(DEFAULT_TEST_RUNNER_EXEC_GROUP_NAME))
                   .value(getTestRuntimeLabelList(env)))
           .add(
               attr("$test_setup_script", LABEL)
-                  .cfg(ExecutionTransitionFactory.createFactory())
+                  .cfg(
+                      ExecutionTransitionFactory.createFactory(DEFAULT_TEST_RUNNER_EXEC_GROUP_NAME))
                   .singleArtifact()
                   .value(env.getToolsLabel("//tools/test:test_setup")))
           .add(
               attr("$xml_generator_script", LABEL)
-                  .cfg(ExecutionTransitionFactory.createFactory())
+                  .cfg(
+                      ExecutionTransitionFactory.createFactory(DEFAULT_TEST_RUNNER_EXEC_GROUP_NAME))
                   .singleArtifact()
                   .value(env.getToolsLabel("//tools/test:test_xml_generator")))
           .add(
               attr("$collect_coverage_script", LABEL)
-                  .cfg(ExecutionTransitionFactory.createFactory())
+                  .cfg(
+                      ExecutionTransitionFactory.createFactory(DEFAULT_TEST_RUNNER_EXEC_GROUP_NAME))
                   .singleArtifact()
                   .value(env.getToolsLabel("//tools/test:collect_coverage")))
           // Input files for test actions collecting code coverage
@@ -287,7 +288,8 @@ public class BaseRuleClasses {
           // Used in the one-per-build coverage report generation action.
           .add(
               attr(":coverage_report_generator", LABEL)
-                  .cfg(ExecutionTransitionFactory.createFactory())
+                  .cfg(
+                      ExecutionTransitionFactory.createFactory(DEFAULT_TEST_RUNNER_EXEC_GROUP_NAME))
                   .value(
                       coverageReportGeneratorAttribute(
                           env.getToolsLabel(DEFAULT_COVERAGE_REPORT_GENERATOR_VALUE))))
@@ -306,7 +308,8 @@ public class BaseRuleClasses {
           // RunCommand.java to self-transition --run_under to the exec configuration.
           .add(
               attr(":run_under_exec_config", LABEL)
-                  .cfg(ExecutionTransitionFactory.createFactory("test"))
+                  .cfg(
+                      ExecutionTransitionFactory.createFactory(DEFAULT_TEST_RUNNER_EXEC_GROUP_NAME))
                   .value(RUN_UNDER_EXEC_CONFIG)
                   .skipPrereqValidatorCheck())
           .add(
@@ -463,8 +466,8 @@ public class BaseRuleClasses {
               attr("licenses", LICENSE)
                   .nonconfigurable("Used in core loading phase logic with no access to configs"))
           .add(
-              attr("distribs", DISTRIBUTIONS)
-                  .nonconfigurable("Used in core loading phase logic with no access to configs"))
+              // TODO: b/148549967 - Remove for Bazel 9.0
+              attr("distribs", STRING_LIST).nonconfigurable("deprecated - no op"))
           // Any rule that provides its own meaning for the "target_compatible_with" attribute
           // has to be excluded in `IncompatibleTargetChecker`.
           .add(
@@ -487,9 +490,7 @@ public class BaseRuleClasses {
     }
   }
 
-  /**
-   * A rule that contains a {@code variables=} attribute to allow referencing Make variables.
-   */
+  /** A rule that contains a {@code variables=} attribute to allow referencing Make variables. */
   public static final class MakeVariableExpandingRule implements RuleDefinition {
     @Override
     public RuleClass build(RuleClass.Builder builder, RuleDefinitionEnvironment env) {
@@ -555,31 +556,6 @@ public class BaseRuleClasses {
           .name("$native_buildable_rule")
           .type(RuleClassType.ABSTRACT)
           .ancestors(BaseRuleClasses.NativeBuildRule.class)
-          .build();
-    }
-  }
-
-  /** A base rule for all binary rules. */
-  public static final class BinaryBaseRule implements RuleDefinition {
-    @Override
-    public RuleClass build(RuleClass.Builder builder, RuleDefinitionEnvironment env) {
-      return builder
-          .add(attr("args", STRING_LIST))
-          .add(attr("env", STRING_DICT))
-          .add(attr("output_licenses", LICENSE))
-          .add(
-              attr(Rule.IS_EXECUTABLE_ATTRIBUTE_NAME, BOOLEAN)
-                  .value(true)
-                  .nonconfigurable("Called from RunCommand.isExecutable, which takes a Target"))
-          .build();
-    }
-
-    @Override
-    public Metadata getMetadata() {
-      return RuleDefinition.Metadata.builder()
-          .name("$binary_base_rule")
-          .type(RuleClassType.ABSTRACT)
-          .ancestors(MakeVariableExpandingRule.class)
           .build();
     }
   }
@@ -651,7 +627,7 @@ public class BaseRuleClasses {
             """
                 .formatted(ruleName, bzlLoadLabel, ruleName));
       } else {
-        ruleContext.ruleError("Rule is unimplemented.");
+        ruleContext.ruleError("Rule '" + ruleName + "' is unimplemented.");
       }
       return null;
     }

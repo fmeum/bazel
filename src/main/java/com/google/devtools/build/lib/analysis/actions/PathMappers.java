@@ -17,10 +17,9 @@ package com.google.devtools.build.lib.analysis.actions;
 
 import com.google.common.collect.ImmutableSet;
 import com.google.devtools.build.lib.actions.AbstractAction;
-import com.google.devtools.build.lib.actions.Action;
+import com.google.devtools.build.lib.actions.ActionAnalysisMetadata;
 import com.google.devtools.build.lib.actions.ActionKeyContext;
 import com.google.devtools.build.lib.actions.Artifact;
-import com.google.devtools.build.lib.actions.ArtifactExpander;
 import com.google.devtools.build.lib.actions.CommandLineExpansionException;
 import com.google.devtools.build.lib.actions.CommandLineLimits;
 import com.google.devtools.build.lib.actions.ExecutionRequirements;
@@ -64,7 +63,8 @@ public final class PathMappers {
 
   /**
    * Actions that support path mapping should call this method from {@link
-   * Action#getKey(ActionKeyContext, ArtifactExpander)}.
+   * ActionAnalysisMetadata#getKey(ActionKeyContext,
+   * com.google.devtools.build.lib.actions.InputMetadataProvider)}.
    *
    * <p>Compared to {@link #create}, this method does not flatten nested sets and thus can't result
    * in memory regressions.
@@ -97,17 +97,20 @@ public final class PathMappers {
    * Actions that support path mapping should call this method when creating their {@link Spawn}.
    *
    * <p>The returned {@link PathMapper} has to be passed to {@link
-   * com.google.devtools.build.lib.actions.CommandLine#arguments(ArtifactExpander, PathMapper)},
-   * {@link com.google.devtools.build.lib.actions.CommandLines#expand(ArtifactExpander,
-   * PathFragment, PathMapper, CommandLineLimits)} )} or any other variants of these functions. The
-   * same instance should also be passed to the {@link Spawn} constructor so that the executor can
-   * obtain it via {@link Spawn#getPathMapper()}.
+   * com.google.devtools.build.lib.actions.CommandLine#arguments(InputMetadataProvider,
+   * PathMapper)}, {@link
+   * com.google.devtools.build.lib.actions.CommandLines#expand(InputMetadataProvider, PathFragment,
+   * PathMapper, CommandLineLimits)} )} or any other variants of these functions. The same instance
+   * should also be passed to the {@link Spawn} constructor so that the executor can obtain it via
+   * {@link Spawn#getPathMapper()}.
    *
    * <p>Note: This method flattens nested sets and should thus not be called from methods that are
    * executed in the analysis phase.
    *
    * <p>Actions calling this method should also call {@link #addToFingerprint} from {@link
-   * Action#getKey(ActionKeyContext, ArtifactExpander)} to ensure correct incremental builds.
+   * ActionAnalysisMetadata#getKey(ActionKeyContext,
+   * com.google.devtools.build.lib.actions.InputMetadataProvider)} to ensure correct incremental
+   * builds.
    *
    * @param action the {@link AbstractAction} for which a {@link Spawn} is to be created
    * @param outputPathsMode the value of {@link CoreOptions#outputPathsMode}

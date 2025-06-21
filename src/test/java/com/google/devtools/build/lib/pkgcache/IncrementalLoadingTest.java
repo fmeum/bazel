@@ -46,7 +46,6 @@ import com.google.devtools.build.lib.packages.util.LoadingMock;
 import com.google.devtools.build.lib.rules.repository.RepositoryDelegatorFunction;
 import com.google.devtools.build.lib.runtime.QuiescingExecutorsImpl;
 import com.google.devtools.build.lib.skyframe.BazelSkyframeExecutorConstants;
-import com.google.devtools.build.lib.skyframe.BrokenDiffAwarenessException;
 import com.google.devtools.build.lib.skyframe.DiffAwareness;
 import com.google.devtools.build.lib.skyframe.PrecomputedValue;
 import com.google.devtools.build.lib.skyframe.RepositoryMappingFunction;
@@ -406,8 +405,13 @@ public class IncrementalLoadingTest {
     tester.addSymlink("a/b.bzl", "/b.bzl");
     tester.sync();
     tester.getTarget("//a:BUILD");
+    PackageOptions packageOptions = Options.getDefaults(PackageOptions.class);
+    packageOptions.checkExternalOtherFiles = false;
     tester.modifyFile("/b.bzl", "ERROR ERROR");
-    tester.sync();
+    tester.syncWithOptions(packageOptions);
+    tester.getTarget("//a:BUILD");
+    packageOptions.checkExternalOtherFiles = true;
+    tester.syncWithOptions(packageOptions);
 
     assertThrows(NoSuchThingException.class, () -> tester.getTarget("//a:BUILD"));
   }
@@ -431,12 +435,6 @@ public class IncrementalLoadingTest {
         } else {
           return ModifiedFileSet.EVERYTHING_MODIFIED;
         }
-      }
-
-      @Override
-      public ModifiedFileSet getDiffFromEvaluatingVersion(OptionsProvider options, FileSystem fs)
-          throws BrokenDiffAwarenessException {
-        throw new UnsupportedOperationException("not implemented");
       }
 
       @Override
@@ -527,8 +525,6 @@ public class IncrementalLoadingTest {
       skyframeExecutor.injectExtraPrecomputedValues(
           ImmutableList.of(
               PrecomputedValue.injected(
-                  RepositoryDelegatorFunction.RESOLVED_FILE_INSTEAD_OF_WORKSPACE, Optional.empty()),
-              PrecomputedValue.injected(
                   RepositoryDelegatorFunction.VENDOR_DIRECTORY, Optional.empty()),
               PrecomputedValue.injected(
                   RepositoryMappingFunction.REPOSITORY_OVERRIDES, ImmutableMap.of())));
@@ -618,10 +614,14 @@ public class IncrementalLoadingTest {
     }
 
     void sync() throws InterruptedException, AbruptExitException {
+      syncWithOptions(Options.getDefaults(PackageOptions.class));
+    }
+
+    void syncWithOptions(PackageOptions packageOptions)
+        throws InterruptedException, AbruptExitException {
       clock.advanceMillis(1);
 
       modifiedFileSet = getModifiedFileSet();
-      PackageOptions packageOptions = Options.getDefaults(PackageOptions.class);
       packageOptions.defaultVisibility = RuleVisibility.PUBLIC;
       packageOptions.showLoadingProgress = true;
       packageOptions.globbingThreads = 7;
@@ -642,7 +642,7 @@ public class IncrementalLoadingTest {
       skyframeExecutor.invalidateFilesUnderPathForTesting(
           new Reporter(new EventBus()), modifiedFileSet, Root.fromPath(workspace));
       ((SequencedSkyframeExecutor) skyframeExecutor)
-          .handleDiffsForTesting(new Reporter(new EventBus()));
+          .handleDiffsForTesting(new Reporter(new EventBus()), packageOptions);
 
       changes.clear();
     }

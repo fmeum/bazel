@@ -35,6 +35,7 @@ import com.google.common.collect.Sets;
 import com.google.common.eventbus.Subscribe;
 import com.google.common.eventbus.SubscriberExceptionContext;
 import com.google.common.eventbus.SubscriberExceptionHandler;
+import com.google.common.flogger.GoogleLogger;
 import com.google.devtools.build.lib.actions.Action;
 import com.google.devtools.build.lib.actions.ActionAnalysisMetadata;
 import com.google.devtools.build.lib.actions.ActionGraph;
@@ -65,7 +66,6 @@ import com.google.devtools.build.lib.bugreport.Crash;
 import com.google.devtools.build.lib.bugreport.CrashContext;
 import com.google.devtools.build.lib.buildtool.BuildRequest;
 import com.google.devtools.build.lib.buildtool.BuildResult;
-import com.google.devtools.build.lib.buildtool.BuildTool;
 import com.google.devtools.build.lib.buildtool.buildevent.BuildStartingEvent;
 import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.cmdline.LabelSyntaxException;
@@ -182,6 +182,8 @@ import org.junit.Before;
  */
 public abstract class BuildIntegrationTestCase {
 
+  private static final GoogleLogger logger = GoogleLogger.forEnclosingClass();
+
   /** Thrown when an integration test case fails. */
   public static class IntegrationTestExecException extends ExecException {
     public IntegrationTestExecException(String message) {
@@ -255,7 +257,7 @@ public abstract class BuildIntegrationTestCase {
             /* installBase= */ outputBase,
             /* outputBase= */ outputBase,
             /* outputUserRoot= */ outputBase,
-            /* execRootBase= */ getExecRootBase(),
+            /* execRootBase= */ outputBase.getRelative(ServerDirectories.EXECROOT),
             /* virtualSourceRoot= */ getVirtualSourceRoot(),
             // Arbitrary install base hash.
             /* installMD5= */ "83bc4458738962b9b77480bac76164a9");
@@ -333,10 +335,6 @@ public abstract class BuildIntegrationTestCase {
     return null;
   }
 
-  protected Path getExecRootBase() {
-    return outputBase.getRelative(ServerDirectories.EXECROOT);
-  }
-
   protected void createRuntimeWrapper() throws Exception {
     if (runtimeWrapper != null) {
       cleanupInterningPools();
@@ -398,6 +396,17 @@ public abstract class BuildIntegrationTestCase {
 
   @After
   public final void cleanUp() throws Exception {
+    try {
+      doCleanup();
+    } finally {
+      for (BlazeModule module : getRuntime().getBlazeModules()) {
+        logger.atFine().log("Calling blazeShutdown on %s", module);
+        module.blazeShutdown();
+      }
+    }
+  }
+
+  private void doCleanup() throws Exception {
     if (subscriberException.getException() != null) {
       throwIfUnchecked(subscriberException.getException());
       throw new RuntimeException(subscriberException.getException());
@@ -663,8 +672,6 @@ public abstract class BuildIntegrationTestCase {
     runtimeWrapper.addOptions("--experimental_extended_sanity_checks");
     runtimeWrapper.addOptions(TestConstants.PRODUCT_SPECIFIC_FLAGS);
     runtimeWrapper.addOptions(TestConstants.PRODUCT_SPECIFIC_BUILD_LANG_OPTIONS);
-    // TODO(rosica): Remove this once g3 is migrated.
-    runtimeWrapper.addOptions("--noincompatible_use_specific_tool_files");
 
     if (AnalysisMock.get().isThisBazel()) {
       // We have to explicitly override @bazel_tools to the version in the workspace (which is where
@@ -784,7 +791,7 @@ public abstract class BuildIntegrationTestCase {
   }
 
   /** Gets all the already computed configured targets. */
-  protected Iterable<ConfiguredTarget> getAllConfiguredTargets() {
+  protected ImmutableList<ConfiguredTarget> getAllConfiguredTargets() {
     return SkyframeExecutorTestUtils.getAllExistingConfiguredTargets(getSkyframeExecutor());
   }
 
@@ -850,17 +857,17 @@ public abstract class BuildIntegrationTestCase {
   }
 
   /** Runs the {@code info} command. */
-  public void info() throws Exception {
+  protected void info() throws Exception {
     events.setOutErr(outErr);
     runtimeWrapper.newCommand(InfoCommand.class);
-    runtimeWrapper.executeNonBuildCommand();
+    runtimeWrapper.executeCustomCommand();
   }
 
   /** Runs the {@code clean} command. */
   public void clean() throws Exception {
     events.setOutErr(outErr);
     runtimeWrapper.newCommand(CleanCommand.class);
-    runtimeWrapper.executeNonBuildCommand();
+    runtimeWrapper.executeCustomCommand();
   }
 
   /** Utility function: parse a string as a label. */
@@ -1007,7 +1014,7 @@ public abstract class BuildIntegrationTestCase {
       boolean verboseFailures)
       throws ExecException, InterruptedException {
     Command command =
-        new CommandBuilder()
+        new CommandBuilder(System.getenv())
             .addArgs(argv)
             .setEnv(environment)
             .setWorkingDir(workingDirectory)
@@ -1033,6 +1040,15 @@ public abstract class BuildIntegrationTestCase {
 
   protected void assertContents(String expectedContents, String target) throws Exception {
     assertContents(expectedContents, Iterables.getOnlyElement(getArtifacts(target)).getPath());
+  }
+
+  protected void assertContentsContainsAtLeast(String expectedContents, String target)
+      throws Exception {
+    String actualContents =
+        new String(
+            FileSystemUtils.readContentAsLatin1(
+                Iterables.getOnlyElement(getArtifacts(target)).getPath()));
+    assertThat(actualContents).contains(expectedContents);
   }
 
   protected void assertContents(String expectedContents, Path path) throws Exception {
@@ -1075,7 +1091,7 @@ public abstract class BuildIntegrationTestCase {
     return (FileArtifactValue) sourceArtifactValue;
   }
 
-  private ActionExecutionValue getActionExecutionValue(Artifact output)
+  protected ActionExecutionValue getActionExecutionValue(Artifact output)
       throws InterruptedException {
     assertThat(output).isInstanceOf(DerivedArtifact.class);
     SkyValue actionExecutionValue =

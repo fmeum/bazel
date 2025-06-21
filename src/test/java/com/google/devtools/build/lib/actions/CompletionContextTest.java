@@ -14,7 +14,6 @@
 package com.google.devtools.build.lib.actions;
 
 import static com.google.common.truth.Truth.assertThat;
-import static org.junit.Assert.assertThrows;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -28,14 +27,14 @@ import com.google.devtools.build.lib.actions.ArtifactRoot.RootType;
 import com.google.devtools.build.lib.actions.CompletionContext.ArtifactReceiver;
 import com.google.devtools.build.lib.actions.util.ActionsTestUtil;
 import com.google.devtools.build.lib.skyframe.TreeArtifactValue;
-import com.google.devtools.build.lib.testutil.Scratch;
+import com.google.devtools.build.lib.vfs.DigestHashFunction;
 import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.build.lib.vfs.PathFragment;
+import com.google.devtools.build.lib.vfs.inmemoryfs.InMemoryFileSystem;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
@@ -51,14 +50,11 @@ public final class CompletionContextTest {
   private final ActionInputMap inputMap = new ActionInputMap(0);
   private final Map<Artifact, TreeArtifactValue> treeExpansions = new HashMap<>();
   private final Map<Artifact, FilesetOutputTree> filesetExpansions = new HashMap<>();
-  private Path execRoot;
-  private ArtifactRoot outputRoot;
-
-  @Before
-  public void createRoots() throws Exception {
-    execRoot = new Scratch().dir("/execroot");
-    outputRoot = ArtifactRoot.asDerivedRoot(execRoot, RootType.Output, "out");
-  }
+  private final ArtifactRoot outputRoot =
+      ArtifactRoot.asDerivedRoot(
+          new InMemoryFileSystem(DigestHashFunction.SHA256).getPath("/execroot"),
+          RootType.Output,
+          "out");
 
   @Test
   public void regularArtifact() {
@@ -67,8 +63,6 @@ public final class CompletionContextTest {
     CompletionContext ctx = createCompletionContext(/* expandFilesets= */ true);
 
     assertThat(visit(ctx, file)).containsExactly(file);
-    assertThrows(IllegalArgumentException.class, () -> ctx.expandTreeArtifact(file));
-    assertThrows(IllegalArgumentException.class, () -> ctx.expandFileset(file));
   }
 
   @Test
@@ -86,7 +80,6 @@ public final class CompletionContextTest {
     CompletionContext ctx = createCompletionContext(/* expandFilesets= */ true);
 
     assertThat(visit(ctx, tree)).containsExactly(treeFile1, treeFile2).inOrder();
-    assertThat(ctx.expandTreeArtifact(tree)).isEqualTo(treeValue.getChildren());
   }
 
   @Test
@@ -96,7 +89,9 @@ public final class CompletionContextTest {
     filesetExpansions.put(
         fileset,
         FilesetOutputTree.create(
-            ImmutableList.of(filesetLink("a1", "b1"), filesetLink("a2", "b2"))));
+            ImmutableList.of(
+                filesetLink("a1", ActionsTestUtil.createArtifact(outputRoot, "b1")),
+                filesetLink("a2", ActionsTestUtil.createArtifact(outputRoot, "b2")))));
     CompletionContext ctx = createCompletionContext(/* expandFilesets= */ false);
 
     ArtifactReceiver receiver = mock(ArtifactReceiver.class);
@@ -104,15 +99,16 @@ public final class CompletionContextTest {
     verifyNoInteractions(receiver);
 
     assertThat(visit(ctx, fileset)).isEmpty();
-    assertThrows(IllegalStateException.class, () -> ctx.expandFileset(fileset));
   }
 
   @Test
   public void fileset_withExpansion() throws Exception {
     SpecialArtifact fileset = createFileset("fs");
+    Artifact b1 = ActionsTestUtil.createArtifact(outputRoot, "b1");
+    Artifact b2 = ActionsTestUtil.createArtifact(outputRoot, "b2");
     inputMap.put(fileset, DUMMY_METADATA);
     ImmutableList<FilesetOutputSymlink> links =
-        ImmutableList.of(filesetLink("a1", "b1"), filesetLink("a2", "b2"));
+        ImmutableList.of(filesetLink("a1", b1), filesetLink("a2", b2));
     filesetExpansions.put(fileset, FilesetOutputTree.create(links));
     CompletionContext ctx = createCompletionContext(/* expandFilesets= */ true);
 
@@ -121,12 +117,10 @@ public final class CompletionContextTest {
     InOrder inOrder = inOrder(receiver);
     inOrder
         .verify(receiver)
-        .acceptFilesetMapping(fileset, PathFragment.create("a1"), execRoot.getRelative("b1"));
+        .acceptFilesetMapping(fileset, PathFragment.create("a1"), b1.getPath(), DUMMY_METADATA);
     inOrder
         .verify(receiver)
-        .acceptFilesetMapping(fileset, PathFragment.create("a2"), execRoot.getRelative("b2"));
-
-    assertThat(ctx.expandFileset(fileset).symlinks()).isEqualTo(links);
+        .acceptFilesetMapping(fileset, PathFragment.create("a2"), b2.getPath(), DUMMY_METADATA);
   }
 
   private static List<Artifact> visit(CompletionContext ctx, Artifact artifact) {
@@ -141,7 +135,7 @@ public final class CompletionContextTest {
 
           @Override
           public void acceptFilesetMapping(
-              Artifact fileset, PathFragment relName, Path targetFile) {
+              Artifact fileset, PathFragment relName, Path targetFile, FileArtifactValue metadata) {
             throw new AssertionError(fileset);
           }
         });
@@ -161,20 +155,16 @@ public final class CompletionContextTest {
         SpecialArtifactType.FILESET);
   }
 
-  private FilesetOutputSymlink filesetLink(String from, String to) {
-    return FilesetOutputSymlink.createForTesting(
-        PathFragment.create(from), execRoot.getRelative(to).asFragment(), execRoot.asFragment());
+  private static FilesetOutputSymlink filesetLink(String from, Artifact target) {
+    return new FilesetOutputSymlink(PathFragment.create(from), target, DUMMY_METADATA);
   }
 
   private CompletionContext createCompletionContext(boolean expandFilesets) {
     return new CompletionContext(
-        execRoot,
         ImmutableMap.copyOf(treeExpansions),
         ImmutableMap.copyOf(filesetExpansions),
-        /* baselineCoverageValue= */ null,
         ArtifactPathResolver.IDENTITY,
         inputMap,
-        expandFilesets,
-        /* fullyResolveFilesetLinks= */ false);
+        expandFilesets);
   }
 }

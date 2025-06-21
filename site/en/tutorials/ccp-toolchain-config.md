@@ -17,7 +17,7 @@ In this tutorial you learn how to:
 *   Configure the C++ toolchain
 *   Create a Starlark rule that provides additional configuration for the
     `cc_toolchain` so that Bazel can build the application with `clang`
-*   Build the C++ binary for by running `bazel build //main:hello-world` on a
+*   Build the C++ binary by running `bazel build //main:hello-world` on a
     Linux machine
 *   Cross-compile the binary for android by running `bazel build
     //main:hello-world --platforms=//:android_x86_64`
@@ -215,7 +215,7 @@ slightly between different versions of clang.
     def _impl(ctx):
         tool_paths = [ # NEW
             tool_path(
-                name = "gcc",
+                name = "gcc",  # Compiler is referenced by the name "gcc" for historic reasons.
                 path = "/usr/bin/clang",
             ),
             tool_path(
@@ -263,7 +263,8 @@ slightly between different versions of clang.
     ```
 
     Make sure that `/usr/bin/clang` and `/usr/bin/ld` are the correct paths for
-    your system.
+    your system. Note that the compiler is referenced by the name "gcc" for
+    historic reasons.
 
 6.  Run the build again. Bazel throws the following error:
 
@@ -342,7 +343,7 @@ slightly between different versions of clang.
     def _impl(ctx):
         tool_paths = [
             tool_path(
-                name = "gcc",
+                name = "gcc",  # Compiler is referenced by the name "gcc" for historic reasons.
                 path = "/usr/bin/clang",
             ),
             tool_path(
@@ -418,6 +419,9 @@ slightly between different versions of clang.
         provides = [CcToolchainConfigInfo],
     )
     ```
+
+    Note that this code uses the GNU C++ library libstdc++. If you want to use
+    the LLVM C++ library, use "-lc++" instead of "-lstdc++".
 
 8.  Running `bazel build //main:hello-world`, it should finally build the binary
     successfully for host.

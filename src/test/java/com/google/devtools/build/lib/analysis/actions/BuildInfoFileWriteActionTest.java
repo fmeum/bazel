@@ -78,7 +78,7 @@ public class BuildInfoFileWriteActionTest extends BuildViewTestCase {
               BazelModuleContext.create(
                   BazelModuleKey.createFakeModuleKeyForTesting(
                       Label.parseCanonicalUnchecked("//test:label")),
-                  RepositoryMapping.ALWAYS_FALLBACK,
+                  RepositoryMapping.EMPTY,
                   "test/label.bzl",
                   /* loads= */ ImmutableList.of(),
                   /* bzlTransitiveDigest= */ new byte[0])),
@@ -108,8 +108,6 @@ public class BuildInfoFileWriteActionTest extends BuildViewTestCase {
             new FileOutErr(),
             new StoredEventHandler(),
             /* clientEnv= */ ImmutableMap.of(),
-            /* topLevelFilesets= */ ImmutableMap.of(),
-            /* artifactExpander= */ null,
             /* actionFileSystem= */ null,
             DiscoveredModulesPruner.DEFAULT,
             SyscallCache.NO_CACHE,

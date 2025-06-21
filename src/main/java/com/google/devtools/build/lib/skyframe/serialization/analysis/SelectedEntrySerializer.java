@@ -17,7 +17,6 @@ import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.util.concurrent.Futures.immediateFailedFuture;
 import static com.google.common.util.concurrent.MoreExecutors.directExecutor;
 import static com.google.devtools.build.lib.skyframe.FileOpNodeOrFuture.EmptyFileOpNode.EMPTY_FILE_OP_NODE;
-import static com.google.devtools.build.lib.skyframe.serialization.analysis.FrontierSerializer.SelectionMarking.FRONTIER_CANDIDATE;
 import static com.google.devtools.build.lib.skyframe.serialization.analysis.InvalidationDataInfoOrFuture.ConstantFileData.CONSTANT_FILE;
 import static com.google.devtools.build.lib.skyframe.serialization.analysis.InvalidationDataInfoOrFuture.ConstantListingData.CONSTANT_LISTING;
 import static com.google.devtools.build.lib.skyframe.serialization.analysis.InvalidationDataInfoOrFuture.ConstantNodeData.CONSTANT_NODE;
@@ -101,12 +100,9 @@ final class SelectedEntrySerializer implements Consumer<Map.Entry<SkyKey, Select
 
   private final EventBus eventBus;
   private final ProfileCollector profileCollector;
-  private final AtomicInteger frontierValueCount;
+  private final AtomicInteger serializedCount;
 
-  /**
-   * Uploads the {@link FRONTIER_CANDIDATE} marked entries of {@code selection} to {@code
-   * fingerprintValueService}.
-   */
+  /** Uploads the entries of {@code selection} to {@code fingerprintValueService}. */
   static ListenableFuture<Void> uploadSelection(
       InMemoryGraph graph,
       LongVersionGetter versionGetter,
@@ -116,7 +112,7 @@ final class SelectedEntrySerializer implements Consumer<Map.Entry<SkyKey, Select
       FingerprintValueService fingerprintValueService,
       EventBus eventBus,
       ProfileCollector profileCollector,
-      AtomicInteger frontierValueCount) {
+      AtomicInteger serializedCount) {
     var fileOpNodes = new FileOpNodeMemoizingLookup(graph);
     var fileDependencySerializer =
         new FileDependencySerializer(versionGetter, graph, fingerprintValueService);
@@ -132,7 +128,7 @@ final class SelectedEntrySerializer implements Consumer<Map.Entry<SkyKey, Select
             writeStatuses,
             eventBus,
             profileCollector,
-            frontierValueCount);
+            serializedCount);
     selection.entrySet().parallelStream().forEach(serializer);
     writeStatuses.notifyAllStarted();
     return writeStatuses;
@@ -148,29 +144,25 @@ final class SelectedEntrySerializer implements Consumer<Map.Entry<SkyKey, Select
       WriteStatusesFuture writeStatuses,
       EventBus eventBus,
       ProfileCollector profileCollector,
-      AtomicInteger frontierValueCount) {
+      AtomicInteger serializedCount) {
     this.graph = graph;
     this.codecs = codecs;
     this.frontierVersion = frontierVersion;
+
     this.fingerprintValueService = fingerprintValueService;
     this.fileOpNodes = fileOpNodes;
     this.fileDependencySerializer = fileDependencySerializer;
     this.writeStatuses = writeStatuses;
     this.eventBus = eventBus;
     this.profileCollector = profileCollector;
-    this.frontierValueCount = frontierValueCount;
+    this.serializedCount = serializedCount;
   }
 
   @Override
   public void accept(Map.Entry<SkyKey, SelectionMarking> entry) {
-    if (!entry.getValue().equals(FRONTIER_CANDIDATE)) {
-      return;
-    }
-    SkyKey key = entry.getKey();
-
     // TODO: b/371508153 - only upload nodes that were freshly computed by this invocation and
     // unaffected by local, un-submitted changes.
-
+    SkyKey key = entry.getKey();
     try {
       switch (key) {
         case ActionLookupKey actionLookupKey:
@@ -185,9 +177,9 @@ final class SelectedEntrySerializer implements Consumer<Map.Entry<SkyKey, Select
           uploadEntry(artifact, checkNotNull(artifact.getArtifactOwner(), artifact));
           break;
         default:
-          throw new AssertionError("Unexpected selected type: " + key + " " + key.getClass());
+          throw new AssertionError("Unexpected selected type: " + key.getCanonicalName());
       }
-      frontierValueCount.getAndIncrement();
+      serializedCount.getAndIncrement();
       eventBus.post(new SerializedNodeEvent(key));
     } catch (SerializationException e) {
       writeStatuses.addWriteStatus(immediateFailedFuture(e));

@@ -258,8 +258,6 @@ final class ActionOutputMetadataStore implements OutputMetadataStore {
       return TreeArtifactValue.MISSING_TREE_ARTIFACT;
     }
 
-    AtomicBoolean anyRemote = new AtomicBoolean(false);
-
     TreeArtifactValue.Builder tree = TreeArtifactValue.newBuilder(parent);
 
     TreeArtifactValue.visitTree(
@@ -279,9 +277,6 @@ final class ActionOutputMetadataStore implements OutputMetadataStore {
           FileArtifactValue metadata = constructFileArtifactValueFromFilesystem(child);
           // visitTree() uses multiple threads and putChild() is not thread-safe
           synchronized (tree) {
-            if (metadata.isRemote()) {
-              anyRemote.set(true);
-            }
             tree.putChild(child, metadata);
           }
         });
@@ -335,12 +330,6 @@ final class ActionOutputMetadataStore implements OutputMetadataStore {
   public void injectTree(SpecialArtifact output, TreeArtifactValue tree) {
     checkArgument(isKnownOutput(output), "%s is not a declared output of this action", output);
     checkArgument(output.isTreeArtifact(), "Output must be a tree artifact: %s", output);
-    checkArgument(
-        archivedTreeArtifactsEnabled == tree.getArchivedRepresentation().isPresent(),
-        "Archived representation presence mismatched for: %s with archivedTreeArtifactsEnabled: %s",
-        tree,
-        archivedTreeArtifactsEnabled);
-
     treeArtifactData.put(output, tree);
   }
 
@@ -478,11 +467,7 @@ final class ActionOutputMetadataStore implements OutputMetadataStore {
       @Nullable TimestampGranularityMonitor tsgm)
       throws IOException {
     return fileArtifactValueFromArtifact(
-            artifact,
-            ArtifactPathResolver.IDENTITY,
-            statNoFollow,
-            xattrProvider,
-            tsgm)
+            artifact, ArtifactPathResolver.IDENTITY, statNoFollow, xattrProvider, tsgm)
         .fileArtifactValue();
   }
 
@@ -575,7 +560,6 @@ final class ActionOutputMetadataStore implements OutputMetadataStore {
         FileArtifactValue fileArtifactValue) {
       return new FileArtifactStatAndValue(pathNoFollow, realPath, statNoFollow, fileArtifactValue);
     }
-
   }
 
   private static FileArtifactValue fileArtifactValueFromStat(

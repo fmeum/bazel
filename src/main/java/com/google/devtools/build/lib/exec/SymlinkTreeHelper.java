@@ -13,6 +13,8 @@
 // limitations under the License.
 package com.google.devtools.build.lib.exec;
 
+import static com.google.common.base.Preconditions.checkArgument;
+
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.devtools.build.lib.actions.Artifact;
@@ -130,9 +132,12 @@ public final class SymlinkTreeHelper {
     try (SilentCloseable c = Profiler.instance().profile("Create symlink tree")) {
       Directory<T> root = new Directory<>();
       for (Map.Entry<PathFragment, T> entry : symlinkMap.entrySet()) {
+        PathFragment path = entry.getKey();
+        T value = entry.getValue();
+        checkArgument(!path.isEmpty() && !path.isAbsolute(), path);
         // This creates intermediate directory nodes as a side effect.
-        Directory<T> parentDir = root.walk(entry.getKey().getParentDirectory());
-        parentDir.addSymlink(entry.getKey().getBaseName(), entry.getValue());
+        Directory<T> parentDir = root.walk(path.getParentDirectory());
+        parentDir.addSymlink(path.getBaseName(), value);
       }
       root.syncTreeRecursively(symlinkTreeRoot, targetPathFn);
       createWorkspaceSubdirectory();
@@ -189,11 +194,11 @@ public final class SymlinkTreeHelper {
    * <p>By convention, all symlinks are placed under a directory with the given workspace name.
    */
   static ImmutableMap<PathFragment, PathFragment> processFilesetLinks(
-      ImmutableList<FilesetOutputSymlink> links, String workspaceName, PathFragment execRoot) {
+      ImmutableList<FilesetOutputSymlink> links, String workspaceName) {
     PathFragment root = PathFragment.create(workspaceName);
     var symlinks = ImmutableMap.<PathFragment, PathFragment>builderWithExpectedSize(links.size());
     for (FilesetOutputSymlink symlink : links) {
-      symlinks.put(root.getRelative(symlink.name()), symlink.reconstituteTargetPath(execRoot));
+      symlinks.put(root.getRelative(symlink.name()), symlink.target().getPath().asFragment());
     }
     // Fileset links are already deduplicated by name in SkyframeFilesetManifestAction.
     return symlinks.buildOrThrow();
