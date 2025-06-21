@@ -69,6 +69,7 @@ import com.google.devtools.build.lib.server.FailureDetails.FailureDetail;
 import com.google.devtools.build.lib.server.FailureDetails.ModCommand.Code;
 import com.google.devtools.build.lib.shell.AbnormalTerminationException;
 import com.google.devtools.build.lib.shell.CommandException;
+import com.google.devtools.build.lib.shell.CommandResult;
 import com.google.devtools.build.lib.skyframe.RepositoryMappingValue;
 import com.google.devtools.build.lib.skyframe.SkyframeExecutor;
 import com.google.devtools.build.lib.util.AbruptExitException;
@@ -76,8 +77,6 @@ import com.google.devtools.build.lib.util.CommandBuilder;
 import com.google.devtools.build.lib.util.DetailedExitCode;
 import com.google.devtools.build.lib.util.InterruptedFailureDetails;
 import com.google.devtools.build.lib.util.MaybeCompleteSet;
-import com.google.devtools.build.lib.vfs.FileSystemUtils;
-import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.build.lib.vfs.PathFragment;
 import com.google.devtools.build.skyframe.EvaluationContext;
 import com.google.devtools.build.skyframe.EvaluationResult;
@@ -103,11 +102,7 @@ import javax.annotation.Nullable;
 @Command(
     name = ModCommand.NAME,
     buildPhase = LOADS,
-    options = {
-      ModOptions.class,
-      PackageOptions.class,
-      LoadingPhaseThreadsOption.class
-    },
+    options = {ModOptions.class, PackageOptions.class, LoadingPhaseThreadsOption.class},
     help = "resource:mod.txt",
     shortDescription = "Queries the Bzlmod external dependency graph",
     allowResidue = true)
@@ -267,7 +262,7 @@ public final class ModCommand implements BlazeCommand {
       }
       try (SilentCloseable c =
           Profiler.instance().profile(ProfilerTask.BZLMOD, "execute mod " + subcommand)) {
-        return runTidy(env, modTidyValue, modOptions.write);
+        return runTidy(env, modTidyValue, modOptions.checkOnly);
       }
     }
 
@@ -552,7 +547,8 @@ public final class ModCommand implements BlazeCommand {
     }
   }
 
-  private BlazeCommandResult runTidy(CommandEnvironment env, BazelModTidyValue modTidyValue, boolean write) {
+  private BlazeCommandResult runTidy(
+      CommandEnvironment env, BazelModTidyValue modTidyValue, boolean checkOnly) {
     ImmutableListMultimap<PathFragment, String> allCommandsPerFile =
         modTidyValue.fixups().stream()
             .flatMap(fixup -> fixup.moduleFilePathToBuildozerCommands().entries().stream())
@@ -566,35 +562,27 @@ public final class ModCommand implements BlazeCommand {
       buildozerInput.append("format\n");
     }
 
+    CommandResult cmdResult;
     try (var stdin = CharSource.wrap(buildozerInput).asByteSource(UTF_8).openStream()) {
-      var cmd = new CommandBuilder()
-            .setWorkingDir(env.getWorkspace())
-            .addArg(modTidyValue.buildozer().getPathString());
-      if (write) {
-        cmd.addArg("-f")
-          .addArg("-")
-          .build()
-          .executeAsync(stdin, /* killSubprocessOnInterrupt= */ true)
-          .get();
-      } else {
-        var out = cmd.addArg("-stdout")
-          .addArg("-f")
-          .addArg("-")
-          .build()
-          .executeAsync(stdin, /* killSubprocessOnInterrupt= */ true)
-          .get()
-          .getStdout();
-        return reportAndCreateTidyDryRunResult(env, modTidyValue, new String(out));
+      var cmd =
+          new CommandBuilder()
+              .setWorkingDir(env.getWorkspace())
+              .addArg(modTidyValue.buildozer().getPathString())
+              .addArg("-f");
+      if (checkOnly) {
+        cmd.addArg("-stdout");
       }
+      cmdResult =
+          cmd.addArg("-").build().executeAsync(stdin, /* killSubprocessOnInterrupt= */ true).get();
     } catch (InterruptedException | CommandException | IOException e) {
       String suffix = "";
       if (e instanceof AbnormalTerminationException abnormalTerminationException) {
         if (abnormalTerminationException.getResult().terminationStatus().getRawExitCode() == 3) {
-          // Buildozer exits with exit code 3 if it didn't make any changes.
+          // Buildozer exits with exit code 3 if it didn't make any changes and wasn't run with
+          // -stdout.
           return reportAndCreateTidyResult(env, modTidyValue);
         }
-        suffix =
-            ":\n" + new String(((AbnormalTerminationException) e).getResult().getStderr(), UTF_8);
+        suffix = ":\n" + new String(abnormalTerminationException.getResult().getStderr(), UTF_8);
       }
       return reportAndCreateFailureResult(
           env,
@@ -606,54 +594,26 @@ public final class ModCommand implements BlazeCommand {
       env.getReporter().handle(Event.info(fixupEvent.getSuccessMessage()));
     }
 
-    return reportAndCreateTidyResult(env, modTidyValue);
-  }
-
-  private static ImmutableList<String> compareOutputWithFiles(CommandEnvironment env, BazelModTidyValue modTidyValue, String out) {
-    ImmutableList<String> filesNeedingFormat = ImmutableList.of();
-    Path rootString = env.getWorkspace();
-    for (PathFragment moduleFilePath : modTidyValue.moduleFilePaths()) {
-      Path fullPath = rootString.getRelative(moduleFilePath);
-      if (fullPath.exists()) {
-        try {
-          String contents = FileSystemUtils.readContent(fullPath, UTF_8);
-          if (!out.contains(contents)) {
-            filesNeedingFormat = ImmutableList.<String>builder().addAll(filesNeedingFormat).add(moduleFilePath.getPathString()).build();
-          }
-        } catch (IOException e) {
-          env.getReporter().handle(Event.error("Failed to read file: " + fullPath));
-        }
-      }
+    if (checkOnly) {
+      return reportAndCreateTidyCheckOnlyResult(env, cmdResult);
+    } else {
+      return reportAndCreateTidyResult(env, modTidyValue);
     }
-    return filesNeedingFormat;
   }
 
-  private static BlazeCommandResult reportAndCreateTidyDryRunResult(
-    CommandEnvironment env, BazelModTidyValue modTidyValue, String out) {
-    ImmutableList<String> filesNeedingFormat = compareOutputWithFiles(env, modTidyValue, out);
-    if (modTidyValue.fixups().isEmpty() && filesNeedingFormat.isEmpty()) {
+  private static BlazeCommandResult reportAndCreateTidyCheckOnlyResult(
+      CommandEnvironment env, CommandResult cmdResult) {
+    var error =
+        new String(cmdResult.getStderr())
+            .lines()
+            // https://github.com/bazelbuild/buildtools/blob/4ee5cc34c8a48ed3e5c5b946fe0570e1dbc226fc/edit/buildozer.go#L1620-L1622
+            .filter(line -> line.startsWith("fixed "))
+            .map(line -> "Needs tidy: " + line.substring("fixed ".length()))
+            .collect(joining("\n"));
+    if (error.isEmpty()) {
       return BlazeCommandResult.success();
     } else {
-      String lintErrors = "";
-      if (!modTidyValue.fixups().isEmpty()) {
-        lintErrors += String.format("Files with errors:\n%s",
-          modTidyValue.fixups().stream()
-            .flatMap(fixup -> {
-              String extensionId =
-                fixup.usage().getExtensionBzlFile() + "%" + fixup.usage().getExtensionName();
-              return fixup.usage().getProxies().stream()
-                .map(p -> String.format("  %s: %s", p.getLocation().toString(), extensionId));
-            }).collect(joining("\n", "", "\n")));
-      }
-      if (!filesNeedingFormat.isEmpty()) {
-        lintErrors += String.format("Files needing format:\n  %s",
-          filesNeedingFormat.stream().collect(joining("\n")));
-      }
-      lintErrors = lintErrors.stripTrailing();
-      return reportAndCreateFailureResult(
-          env,
-          lintErrors,
-          Code.MODULE_NEEDS_TIDY);
+      return reportAndCreateFailureResult(env, error, Code.MODULE_NEEDS_TIDY);
     }
   }
 

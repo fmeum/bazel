@@ -165,14 +165,14 @@ public class ModOptions extends OptionsBase {
   public OutputFormat outputFormat;
 
   @Option(
-      name = "write",
-      defaultValue = "true",
+      name = "check_only",
+      defaultValue = "false",
       documentationCategory = OptionDocumentationCategory.MOD_COMMAND,
-      effectTags = {OptionEffectTag.TERMINAL_OUTPUT, OptionEffectTag.BUILD_FILE_SEMANTICS},
+      effectTags = {OptionEffectTag.TERMINAL_OUTPUT},
       help =
-          "Whether or not to write tidy changes to MODULE.bazel files."
-              + "Default is true, pass --nowrite to disable.")
-  public boolean write;
+          "If enabled, tidy does not actually change any files, but fails with exit code 3 if it "
+              + "otherwise would.")
+  public boolean checkOnly;
 
   /** Possible subcommands that can be specified for the `mod` command. */
   public enum ModSubcommand {

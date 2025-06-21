@@ -301,7 +301,7 @@ public final class Command implements DescribableExecutionUnit {
   }
 
   /**
-   * Execute this command with no input to stdin, and with the output captured in memory. This call
+   * Execute this command with input to stdin, and with the output captured in memory. This call
    * blocks until the subprocess is started or throws an error if that fails, but does not wait for
    * the subprocess to exit.
    *
@@ -322,7 +322,7 @@ public final class Command implements DescribableExecutionUnit {
   }
 
   /**
-   * Execute this command with no input to stdin, and with the output streamed to the given output
+   * Execute this command with input to stdin, and with the output streamed to the given output
    * streams, which must be thread-safe. This call blocks until the subprocess is started or throws
    * an error if that fails, but does not wait for the subprocess to exit.
    *
