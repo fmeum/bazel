@@ -995,7 +995,11 @@ public final class CcCompilationHelper {
       boolean usePic,
       ImmutableMap<Artifact, String> outputNameMap)
       throws RuleErrorException, EvalException, InterruptedException {
-    var directModuleFilesBuilder = NestedSetBuilder.<Artifact>newBuilder(Order.STABLE_ORDER);
+    // .ddi files and module files are in 1-to-1 correspondence and must maintain the same order
+    // (hence the use of compile order for directModuleFilesBuilder, which specifies the order for
+    // direct children). Making directModuleFiles a NestedSet allows it to be reused for
+    // allModuleFilesBuilder below.
+    var directModuleFilesBuilder = NestedSetBuilder.<Artifact>newBuilder(Order.COMPILE_ORDER);
     var sourceToModuleFileMapBuilder =
         ImmutableMap.<Artifact, DerivedArtifact>builderWithExpectedSize(
             moduleInterfaceSources.size());
