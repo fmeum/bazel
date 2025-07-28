@@ -505,6 +505,7 @@ public class StandaloneTestStrategy extends TestStrategy {
         "TEST_TOTAL_SHARDS", Integer.toString(action.getExecutionSettings().getTotalShards()));
     testEnvironment.put(TEST_NAME_ENV, action.getTestName());
     testEnvironment.put("IS_COVERAGE_SPAWN", "1");
+    testEnvironment.put("VERBOSE_COVERAGE", "1");
 
     return new SimpleSpawn(
         action,
