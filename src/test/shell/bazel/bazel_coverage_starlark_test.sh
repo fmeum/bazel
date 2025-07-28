@@ -58,7 +58,8 @@ function get_coverage_file_path_from_test_log() {
 
 function set_up() {
     touch WORKSPACE
-    add_to_bazelrc "common --test_output=errors"
+    add_to_bazelrc "common --test_output=streamed"
+    add_to_bazelrc "common --test_env=VERBOSE_COVERAGE=1"
 }
 
 function test_starlark_rule_without_lcov_merger() {

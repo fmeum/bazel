@@ -359,6 +359,7 @@ public class StandaloneTestStrategy extends TestStrategy {
               InputStream in = inFilePath.getInputStream()) {
             ByteStreams.copy(in, out);
           }
+          System.err.println(FileSystemUtils.readContentAsLatin1(outFilePath));
         }
       } finally {
         inFilePath.delete();
