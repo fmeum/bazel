@@ -1,12 +1,54 @@
 # Bazel - Google's Build System
 
 load("@bazel_skylib//rules:write_file.bzl", "write_file")
+load("@rules_java//toolchains:default_java_toolchain.bzl", "default_java_toolchain")
 load("@rules_license//rules:license.bzl", "license")
 load("@rules_pkg//pkg:mappings.bzl", "pkg_attributes", "pkg_files")
 load("@rules_pkg//pkg:tar.bzl", "pkg_tar")
 load("@rules_python//python:defs.bzl", "py_binary")
 load("//src/tools/bzlmod:utils.bzl", "get_canonical_repo_name")
 load("//tools/distributions:distribution_rules.bzl", "distrib_jar_filegroup")
+
+# This toolchain is used to bootstrap Bazel.
+default_java_toolchain(
+    name = "toolchain",
+    jvm_opts = [
+
+        # Allow JavaBuilder to access internal javac APIs.
+        "--add-exports=jdk.compiler/com.sun.tools.javac.api=ALL-UNNAMED",
+        "--add-exports=jdk.compiler/com.sun.tools.javac.main=ALL-UNNAMED",
+        "--add-exports=jdk.compiler/com.sun.tools.javac.model=ALL-UNNAMED",
+        "--add-exports=jdk.compiler/com.sun.tools.javac.processing=ALL-UNNAMED",
+        "--add-exports=jdk.compiler/com.sun.tools.javac.resources=ALL-UNNAMED",
+        "--add-exports=jdk.compiler/com.sun.tools.javac.tree=ALL-UNNAMED",
+        "--add-exports=jdk.compiler/com.sun.tools.javac.util=ALL-UNNAMED",
+        "--add-opens=jdk.compiler/com.sun.tools.javac.code=ALL-UNNAMED",
+        "--add-opens=jdk.compiler/com.sun.tools.javac.comp=ALL-UNNAMED",
+        "--add-opens=jdk.compiler/com.sun.tools.javac.file=ALL-UNNAMED",
+        "--add-opens=jdk.compiler/com.sun.tools.javac.parser=ALL-UNNAMED",
+
+        # quiet warnings from com.google.protobuf.UnsafeUtil,
+        # see: https://github.com/google/protobuf/issues/3781
+        # and: https://github.com/bazelbuild/bazel/issues/5599
+        "--add-opens=java.base/java.nio=ALL-UNNAMED",
+        "--add-opens=java.base/java.lang=ALL-UNNAMED",
+
+        # TODO(b/64485048): Disable this option in persistent worker mode only.
+        # Disable symlinks resolution cache since symlinks in exec root change
+        "-Dsun.io.useCanonCaches=false",
+
+        # Compact strings make JavaBuilder slightly slower.
+        # "-XX:-CompactStrings",
+
+        # Since https://bugs.openjdk.org/browse/JDK-8153723, JVM logging goes to stdout. This
+        # makes it go to stderr instead.
+        "-Xlog:disable",
+        "-Xlog:all=warning:stderr:uptime,level,tags",
+    ],
+    source_version = "21",
+    target_version = "21",
+    visibility = ["//visibility:public"],
+)
 
 package(default_visibility = ["//scripts/release:__pkg__"])
 
