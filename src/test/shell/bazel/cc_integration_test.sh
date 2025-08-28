@@ -2132,6 +2132,7 @@ function test_cpp20_modules_with_clang() {
   add_to_bazelrc "common --repo_env=CC=clang"
   # TODO: Make it so that --cxxopt applies to module_interfaces as well.
   add_to_bazelrc "common --copt=-std=c++20"
+  add_to_bazelrc "common --repo_env=CC=/opt/homebrew/opt/llvm/bin/clang"
 
   cat > BUILD.bazel <<'EOF'
 load("@rules_cc//cc:defs.bzl", "cc_library", "cc_binary")
@@ -2218,6 +2219,7 @@ function test_cpp20_modules_with_clang_no_cycle() {
   add_to_bazelrc "common --repo_env=CC=clang"
   # TODO: Make it so that --cxxopt applies to module_interfaces as well.
   add_to_bazelrc "common --copt=-std=c++20"
+  add_to_bazelrc "common --repo_env=CC=/opt/homebrew/opt/llvm/bin/clang"
 
   cat > BUILD.bazel <<'EOF'
 load("@rules_cc//cc:defs.bzl", "cc_library", "cc_binary")
