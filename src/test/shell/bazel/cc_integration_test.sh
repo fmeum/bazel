@@ -2196,11 +2196,11 @@ export void f_base() {
 }
 EOF
 
-  bazel build //:main --experimental_cpp_modules --disk_cache=disk || fail "Expected build C++20 Modules success with compiler 'clang'"
+  bazel build //:main --experimental_cpp_modules --disk_cache=disk &> $TEST_log || fail "Expected build C++20 Modules success with compiler 'clang'"
 
   # Verify that the build can hit the cache without action cycles.
   bazel clean || fail "Expected clean success"
-  bazel build //:main --experimental_cpp_modules --disk_cache=disk || fail "Expected build C++20 Modules success with compiler 'clang'"
+  bazel build //:main --experimental_cpp_modules --disk_cache=disk &> $TEST_log || fail "Expected build C++20 Modules success with compiler 'clang'"
   expect_log "20 disk cache hit"
 }
 
@@ -2239,7 +2239,7 @@ EOF
 export module bar;
 EOF
 
-  bazel build //:lib --experimental_cpp_modules || fail "Expected build C++20 Modules success with compiler 'clang'"
+  bazel build //:lib --experimental_cpp_modules &> $TEST_log || fail "Expected build C++20 Modules success with compiler 'clang'"
 
   cat > foo.cppm <<'EOF'
 export module foo;
@@ -2249,7 +2249,7 @@ export module bar;
 import foo;
 EOF
 
-  bazel build //:lib --experimental_cpp_modules || fail "Expected build C++20 Modules success with compiler 'clang'"
+  bazel build //:lib --experimental_cpp_modules &> $TEST_log || fail "Expected build C++20 Modules success with compiler 'clang'"
 }
 
 run_suite "cc_integration_test"
