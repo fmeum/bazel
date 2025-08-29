@@ -17,6 +17,7 @@ The cc_common.compile function.
 Used for C++ compiling.
 """
 
+load(":common/cc/action_names.bzl", "ACTION_NAMES")
 load(
     ":common/cc/cc_helper_internal.bzl",
     "CPP_SOURCE_TYPE_CLIF_INPUT_PROTO",
@@ -32,7 +33,6 @@ load(":common/cc/compile/compile_action_templates.bzl", "create_compile_action_t
 load(":common/cc/compile/compile_build_variables.bzl", "get_copts", "get_specific_compile_build_variables")
 load(":common/cc/semantics.bzl", _starlark_cc_semantics = "semantics")
 load(":common/paths.bzl", "paths")
-load(":common/cc/action_names.bzl", "ACTION_NAMES")
 
 cc_common_internal = _builtins.internal.cc_common
 cc_internal = _builtins.internal.cc_internal
@@ -356,7 +356,7 @@ def compile(
     if feature_configuration.is_enabled("cpp_modules"):
         public_compilation_context = cc_internal.create_cc_compilation_context_with_cpp20_modules(
             cc_compilation_context = public_compilation_context,
-            cc_compilation_outputs = cc_outputs
+            cc_compilation_outputs = cc_outputs,
         )
     if cpp_configuration.process_headers_in_dependencies():
         compilation_context = cc_internal.create_cc_compilation_context_with_extra_header_tokens(
@@ -643,7 +643,7 @@ def _create_cc_compile_actions_with_cpp20_module_helper(
             output_name = label.name,
         ),
     )
-    outputs.add_modules_info_file(modules_info_file=modules_info_file, use_pic=use_pic)
+    outputs.add_modules_info_file(modules_info_file = modules_info_file, use_pic = use_pic)
 
     native_cc_semantics = cc_common_internal.get_cpp_semantics(language = language)
     for cpp_source in module_interfaces_sources.values():
@@ -719,7 +719,7 @@ def _create_cc_compile_actions_with_cpp20_module_helper(
         modules_info_file = modules_info_file,
     )
     compiled_basenames = set()
-    all_module_files = depset(direct_module_files, transitive = [cc_compilation_context.module_files(use_pic = use_pic)])
+    transitive_module_files = cc_compilation_context.module_files(use_pic = use_pic)
     for cpp_source in module_interfaces_sources.values():
         source_artifact = cpp_source.file
         output_name = output_name_map[source_artifact]
@@ -762,6 +762,10 @@ def _create_cc_compile_actions_with_cpp20_module_helper(
             modmap_file = modmap_file,
             modmap_input_file = modmap_input_file,
         )
+        all_other_module_files = depset(
+            [m for m in direct_module_files if m != module_file],
+            transitive = [transitive_module_files],
+        )
         cpp_compile_action_builder = cc_internal.create_cpp_compile_action_builder(
             action_construction_context = action_construction_context,
             cc_compilation_context = cc_compilation_context,
@@ -773,7 +777,7 @@ def _create_cc_compile_actions_with_cpp20_module_helper(
             source_artifact = source_artifact,
             additional_compilation_inputs = additional_compilation_inputs,
             additional_include_scanning_roots = additional_include_scanning_roots,
-            module_files = all_module_files,
+            module_files = all_other_module_files,
             modmap_file = modmap_file,
             modmap_input_file = modmap_input_file,
             action_name = ACTION_NAMES.cpp20_module_compile,
@@ -813,9 +817,11 @@ def _create_cc_compile_actions_with_cpp20_module_helper(
             bitcode_output = bitcode_output,
             additional_build_variables = {
                 "cpp_module_output_file": module_file,
-                "cpp_module_modmap_file": modmap_file
-            }
+                "cpp_module_modmap_file": modmap_file,
+            },
         )
+
+    all_module_files = depset(direct_module_files, transitive = [transitive_module_files])
     for cpp_source in compilation_unit_sources.values():
         source_artifact = cpp_source.file
         output_name = output_name_map[source_artifact]
@@ -834,6 +840,7 @@ def _create_cc_compile_actions_with_cpp20_module_helper(
         additional_build_variables = {}
         modmap_file = None
         modmap_input_file = None
+
         # Only C++ compilation unit will be compiled with C++20 Modules.
         if "." + source_artifact.extension in extensions.CC_SOURCE:
             modmap_file = _get_compile_output_file(
