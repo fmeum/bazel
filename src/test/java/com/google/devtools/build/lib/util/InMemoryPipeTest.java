@@ -47,7 +47,7 @@ public class InMemoryPipeTest {
     LongAdder counter = new LongAdder();
     for (int i = 0; i < 1000; i++) {
       threads.add(
-          Thread.ofPlatform()
+          Thread.ofVirtual()
               .start(
                   () -> {
                     InMemoryPipe pipe = new InMemoryPipe(CAPACITY);
@@ -82,7 +82,7 @@ public class InMemoryPipeTest {
     LongAdder counter = new LongAdder();
     for (int i = 0; i < 1000; i++) {
       threads.add(
-          Thread.ofPlatform()
+          Thread.ofVirtual()
               .start(
                   () -> {
                     try {
