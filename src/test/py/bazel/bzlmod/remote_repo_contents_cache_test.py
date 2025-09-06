@@ -56,7 +56,7 @@ class RemoteRepoContentsCacheTest(test_base.TestBase):
     mapping = json.loads(stdout[0])
     canonical_repo_name = mapping[repo_name]
 
-    return os.path.join(output_base, 'external', canonical_repo_name)
+    return output_base + '/external/' + canonical_repo_name
 
   def testCachedAfterCleanExpunge(self):
     self.ScratchFile(
