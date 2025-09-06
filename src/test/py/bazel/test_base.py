@@ -423,7 +423,7 @@ class TestBase(absltest.TestCase):
       # worker path must be as short as possible so we don't exceed Windows
       # path length limits, so we run straight in TEMP. This should ideally
       # be set to something like C:\temp. On CI this is set to D:\temp.
-      worker_path = TestBase.GetEnv('TEMP')
+      worker_path = tempfile.mkdtemp(dir=TestBase.GetEnv('TEMP'))
       worker_exe = self.Rlocation('io_bazel/src/tools/remote/worker.exe')
     else:
       worker_path = tempfile.mkdtemp(dir=self._tests_root)
