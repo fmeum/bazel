@@ -28,6 +28,7 @@ import com.google.devtools.build.lib.remote.util.DigestUtil;
 import com.google.devtools.build.lib.remote.util.TracingMetadataUtils;
 import com.google.devtools.build.lib.remote.util.Utils;
 import com.google.devtools.build.lib.server.FailureDetails;
+import com.google.devtools.build.lib.skyframe.SkyFunctions;
 import com.google.devtools.build.lib.vfs.DetailedIOException;
 import com.google.devtools.build.lib.vfs.DigestHashFunction;
 import com.google.devtools.build.lib.vfs.Dirent;
@@ -38,6 +39,7 @@ import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.build.lib.vfs.PathFragment;
 import com.google.devtools.build.lib.vfs.SymlinkTargetType;
 import com.google.devtools.build.lib.vfs.Symlinks;
+import com.google.devtools.build.skyframe.MemoizingEvaluator;
 import com.google.devtools.build.skyframe.SkyFunctionException;
 import java.io.ByteArrayInputStream;
 import java.io.File;
@@ -83,6 +85,7 @@ public final class RemoteExternalOverlayFileSystem extends FileSystem {
   @Nullable private Reporter reporter;
   @Nullable private String buildRequestId;
   @Nullable private String commandId;
+  @Nullable private MemoizingEvaluator evaluator;
 
   public RemoteExternalOverlayFileSystem(PathFragment externalDirectory, FileSystem nativeFs) {
     super(nativeFs.getDigestFunction());
@@ -97,18 +100,21 @@ public final class RemoteExternalOverlayFileSystem extends FileSystem {
       AbstractActionInputPrefetcher inputPrefetcher,
       Reporter reporter,
       String buildRequestId,
-      String commandId) {
+      String commandId,
+      MemoizingEvaluator evaluator) {
     checkState(
         this.cache == null
             && this.inputPrefetcher == null
             && this.reporter == null
             && this.buildRequestId == null
-            && this.commandId == null);
+            && this.commandId == null
+            && this.evaluator == null);
     this.cache = cache;
     this.inputPrefetcher = inputPrefetcher;
     this.reporter = reporter;
     this.buildRequestId = buildRequestId;
     this.commandId = commandId;
+    this.evaluator = evaluator;
   }
 
   public void afterCommand() {
@@ -128,7 +134,14 @@ public final class RemoteExternalOverlayFileSystem extends FileSystem {
                 ? repoName
                 : null,
         this::deleteRepo);
+    if (!reposWithLostFiles.isEmpty()) {
+      evaluator.delete(
+          k ->
+              k.functionName().equals(SkyFunctions.REPOSITORY_DIRECTORY)
+                  && reposWithLostFiles.contains(((RepositoryName) k.argument()).getName()));
+    }
     reposWithLostFiles.clear();
+    this.evaluator = null;
   }
 
   public void injectRemoteRepo(RepositoryName repo, Tree remoteContents, String markerFile)

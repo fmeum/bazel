@@ -819,7 +819,8 @@ public final class RemoteModule extends BlazeModule {
           actionInputFetcher,
           env.getReporter(),
           buildRequestId,
-          invocationId);
+          invocationId,
+          env.getSkyframeExecutor().getEvaluator());
     }
 
     buildEventArtifactUploaderFactoryDelegate.init(

@@ -570,20 +570,20 @@ class RemoteRepoContentsCacheTest(test_base.TestBase):
     self.assertRegex(stderr,
                      'external/%s/sub/BUILD with digest .*/.* no longer available in the remote cache' % re.escape(
                        canonical_repo_name))
-    # self.assertIn('JUST FETCHED', stderr)
-    # self.assertTrue(os.path.exists(os.path.join(repo_dir, 'BUILD')))
-    # self.assertTrue(os.path.exists(os.path.join(repo_dir, 'root.txt')))
-    # self.assertTrue(os.path.exists(os.path.join(repo_dir, 'sub/BUILD')))
-    # self.assertTrue(os.path.exists(os.path.join(repo_dir, 'sub/sub.txt')))
-    #
-    # # After expunging again: cached
-    # self.RunBazel(['clean', '--expunge'])
-    # _, _, stderr = self.RunBazel(['build', '@my_repo//sub:sub'])
-    # self.assertNotIn('JUST FETCHED', '\n'.join(stderr))
-    # self.assertFalse(os.path.exists(os.path.join(repo_dir, 'BUILD')))
-    # self.assertFalse(os.path.exists(os.path.join(repo_dir, 'root.txt')))
-    # self.assertFalse(os.path.exists(os.path.join(repo_dir, 'sub/BUILD')))
-    # self.assertFalse(os.path.exists(os.path.join(repo_dir, 'sub/sub.txt')))
+    self.assertIn('JUST FETCHED', stderr)
+    self.assertTrue(os.path.exists(os.path.join(repo_dir, 'BUILD')))
+    self.assertTrue(os.path.exists(os.path.join(repo_dir, 'root.txt')))
+    self.assertTrue(os.path.exists(os.path.join(repo_dir, 'sub/BUILD')))
+    self.assertTrue(os.path.exists(os.path.join(repo_dir, 'sub/sub.txt')))
+
+    # After expunging again: cached
+    self.RunBazel(['clean', '--expunge'])
+    _, _, stderr = self.RunBazel(['build', '@my_repo//sub:sub'])
+    self.assertNotIn('JUST FETCHED', '\n'.join(stderr))
+    self.assertFalse(os.path.exists(os.path.join(repo_dir, 'BUILD')))
+    self.assertFalse(os.path.exists(os.path.join(repo_dir, 'root.txt')))
+    self.assertFalse(os.path.exists(os.path.join(repo_dir, 'sub/BUILD')))
+    self.assertFalse(os.path.exists(os.path.join(repo_dir, 'sub/sub.txt')))
 
 
 if __name__ == '__main__':

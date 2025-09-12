@@ -489,7 +489,8 @@ class TestBase(absltest.TestCase):
     """Clears the CAS of the "local remote worker"."""
     self.assertIsNotNone(self._cas_path)
     shutil.rmtree(self._cas_path)
-    os.makedirs(self._cas_path)
+    # The worker needs the CAS path as well as the tmp dir to exist.
+    os.makedirs(os.path.join(self._cas_path, "tmp"))
 
   def RunProgram(
       self,
