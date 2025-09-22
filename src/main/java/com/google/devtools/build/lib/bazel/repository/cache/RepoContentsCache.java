@@ -119,9 +119,10 @@ public final class RepoContentsCache {
   }
 
   /** Returns the list of candidate repos for the given predeclared input hash. */
-  public ImmutableList<CandidateRepo> getCandidateRepos(String predeclaredInputHash) {
+  public ImmutableList<CandidateRepo> getCandidateRepos(
+      RepositoryName repoName, String predeclaredInputHash) {
     Preconditions.checkState(path != null);
-    Path entryDir = path.getRelative(predeclaredInputHash);
+    Path entryDir = path.getRelative(computeEntryDir(repoName, predeclaredInputHash));
     try {
       // Prefer more recently used cache entries over older ones. They're more likely to be
       // up-to-date; plus, if a repo is force-fetched, we want to use the new repo instead of always
@@ -169,14 +170,13 @@ public final class RepoContentsCache {
    */
   public Path moveToCache(
       Path fetchedRepoDir,
-      RepositoryName repoName,
       Path fetchedRepoMarkerFile,
+      RepositoryName repoName,
       String predeclaredInputHash)
-      throws IOException, InterruptedException {
+      throws IOException {
     Preconditions.checkState(path != null);
 
-    // Keep in sync with ExternalFilesHelper#getRepositoryName
-    Path entryDir = path.getRelative(repoName.getName() + '-' + predeclaredInputHash);
+    Path entryDir = path.getRelative(computeEntryDir(repoName, predeclaredInputHash));
     // The entry name needs to be unique across Bazel instances so that the repo cache supports
     // concurrent operations for the same repo definition. It also has to be unique over time even
     // when the repo contents cache directory is deleted since otherwise the following can happen:
@@ -213,6 +213,11 @@ public final class RepoContentsCache {
     fetchedRepoDir.deleteTree();
     FileSystemUtils.ensureSymbolicLink(fetchedRepoDir, cacheRepoDir);
     return cacheRepoDir;
+  }
+
+  private static String computeEntryDir(RepositoryName repoName, String predeclaredInputHash) {
+    // Keep in sync with ExternalFilesHelper#getRepositoryName
+    return repoName.getName() + '-' + predeclaredInputHash;
   }
 
   public void acquireSharedLock() throws IOException, InterruptedException {

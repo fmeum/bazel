@@ -237,7 +237,8 @@ public final class RepositoryFetchFunction implements SkyFunction {
         // Then check if the global repo contents cache has this.
         if (repoContentsCache.isEnabled()) {
           for (CandidateRepo candidate :
-              repoContentsCache.getCandidateRepos(digestWriter.predeclaredInputHash)) {
+              repoContentsCache.getCandidateRepos(
+                  repositoryName, digestWriter.predeclaredInputHash)) {
             repoState =
                 digestWriter.areRepositoryAndMarkerFileConsistent(
                     env, candidate.recordedInputsFile());
@@ -280,8 +281,8 @@ public final class RepositoryFetchFunction implements SkyFunction {
             cachedRepoDir =
                 repoContentsCache.moveToCache(
                     repoRoot,
-                    repositoryName,
                     digestWriter.markerPath,
+                    repositoryName,
                     digestWriter.predeclaredInputHash);
           } catch (IOException e) {
             throw new RepositoryFunctionException(
