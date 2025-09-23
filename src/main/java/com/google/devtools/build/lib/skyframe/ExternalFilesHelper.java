@@ -169,9 +169,15 @@ public class ExternalFilesHelper {
      * particular predeclared input hash or the root of the repo contents cache itself. Bazel may
      * create these directories when they are found to be missing at the beginning of an invocation.
      */
-    REPO_CONTENTS_CACHE_MUTABLE,
+    REPO_CONTENTS_CACHE_TOP_LEVEL_DIRECTORY,
 
-    REPO_CONTENTS_CACHE_IMMUTABLE,
+    /**
+     * A particular entry in the repo contents cache, i.e., either a candidate repo directory or its
+     * associated recorded inputs file. Bazel creates these entries with names that include a fresh
+     * UUID and thus never modifies a given path after it has been created once. However, other
+     * Bazel instances may delete old entries as part of the GC idle task.
+     */
+    REPO_CONTENTS_CACHE_ENTRY,
 
     /**
      * None of the above. We encounter these paths when outputs, source files or external repos
@@ -187,10 +193,10 @@ public class ExternalFilesHelper {
         // Output files are regularly modified during execution. External repos, including their
         // corresponding directories in the repo contents cache, may be refetched by Bazel if it
         // notices that they have been deleted.
-        case OUTPUT, EXTERNAL_REPO, REPO_CONTENTS_CACHE_MUTABLE -> true;
+        case OUTPUT, EXTERNAL_REPO, REPO_CONTENTS_CACHE_TOP_LEVEL_DIRECTORY -> true;
         // Other external files are not managed by Bazel. The immutable parts of the repo contents
         // cache are created under UUIDs.
-        case INTERNAL, BUNDLED, EXTERNAL_OTHER, REPO_CONTENTS_CACHE_IMMUTABLE -> false;
+        case INTERNAL, BUNDLED, EXTERNAL_OTHER, REPO_CONTENTS_CACHE_ENTRY -> false;
       };
     }
 
@@ -200,7 +206,7 @@ public class ExternalFilesHelper {
      */
     public boolean mayBelongToExternalRepository() {
       return switch (this) {
-        case EXTERNAL_REPO, REPO_CONTENTS_CACHE_MUTABLE, REPO_CONTENTS_CACHE_IMMUTABLE -> true;
+        case EXTERNAL_REPO, REPO_CONTENTS_CACHE_TOP_LEVEL_DIRECTORY, REPO_CONTENTS_CACHE_ENTRY -> true;
         case BUNDLED, INTERNAL, OUTPUT, EXTERNAL_OTHER -> false;
       };
     }
@@ -303,9 +309,9 @@ public class ExternalFilesHelper {
     if (repoContentsCachePath != null && rootedPath.asPath().startsWith(repoContentsCachePath)) {
       if (rootedPath.asPath().asFragment().segmentCount()
           <= repoContentsCachePath.asFragment().segmentCount() + 1) {
-        return FileType.REPO_CONTENTS_CACHE_MUTABLE;
+        return FileType.REPO_CONTENTS_CACHE_TOP_LEVEL_DIRECTORY;
       } else {
-        return FileType.REPO_CONTENTS_CACHE_IMMUTABLE;
+        return FileType.REPO_CONTENTS_CACHE_ENTRY;
       }
     }
     return FileType.EXTERNAL_OTHER;

@@ -15,8 +15,8 @@
 # pylint: disable=g-long-ternary
 
 import os
-import tempfile
 import shutil
+import tempfile
 import time
 
 from absl.testing import absltest
@@ -35,7 +35,8 @@ class RepoContentsCacheTest(test_base.TestBase):
         [
             'build --verbose_failures',
             'common --repo_contents_cache=%s' % self.repo_contents_cache,
-        ],
+            'common --experimental_check_external_repository_files=%s' % os.getenv('CHECK_EXTERNAL_REPOSITORY_FILES'),
+        ]
     )
 
   def hasCacheEntry(self):

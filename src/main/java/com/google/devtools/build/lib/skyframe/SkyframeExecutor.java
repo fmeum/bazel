@@ -3801,7 +3801,7 @@ public abstract class SkyframeExecutor implements WalkableGraphFactory {
       Set<Root> diffPackageRootsUnderWhichToCheck =
           getDiffPackageRootsUnderWhichToCheck(pathEntriesWithoutDiffInformation);
 
-      EnumSet<FileType> fileTypesToCheck = EnumSet.of(FileType.REPO_CONTENTS_CACHE_MUTABLE);
+      EnumSet<FileType> fileTypesToCheck = EnumSet.of(FileType.REPO_CONTENTS_CACHE_TOP_LEVEL_DIRECTORY);
       Iterable<SkyValueDirtinessChecker> dirtinessCheckers = ImmutableList.of();
 
       if (!diffPackageRootsUnderWhichToCheck.isEmpty()) {
@@ -3813,7 +3813,7 @@ public abstract class SkyframeExecutor implements WalkableGraphFactory {
       }
       if (checkExternalRepositoryFiles) {
         fileTypesToCheck =
-            EnumSet.of(FileType.EXTERNAL_REPO, FileType.REPO_CONTENTS_CACHE_IMMUTABLE);
+            EnumSet.of(FileType.EXTERNAL_REPO, FileType.REPO_CONTENTS_CACHE_ENTRY);
       }
       if (checkExternalOtherFiles
           && (externalFilesKnowledge.tooManyExternalOtherFilesSeen

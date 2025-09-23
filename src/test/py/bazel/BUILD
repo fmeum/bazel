@@ -388,16 +388,27 @@ py_test(
     ],
 )
 
-py_test(
-    name = "repo_contents_cache_test",
-    size = "large",
-    srcs = ["bzlmod/repo_contents_cache_test.py"],
-    tags = ["requires-network"],
-    deps = [
-        ":bzlmod_test_utils",
-        ":test_base",
-    ],
-)
+[
+    py_test(
+        name = "repo_contents_cache_test_{}check_external".format(
+            "" if check_external_repo_files == "true" else "no_",
+        ),
+        size = "large",
+        srcs = ["bzlmod/repo_contents_cache_test.py"],
+        env = {
+            "CHECK_EXTERNAL_REPO_FILES": check_external_repo_files,
+        },
+        tags = ["requires-network"],
+        deps = [
+            ":bzlmod_test_utils",
+            ":test_base",
+        ],
+    )
+    for check_external_repo_files in [
+        "true",
+        "false",
+    ]
+]
 
 py_test(
     name = "bzlmod_credentials_test",
