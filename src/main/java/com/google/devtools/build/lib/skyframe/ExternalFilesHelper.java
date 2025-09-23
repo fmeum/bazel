@@ -17,6 +17,8 @@ import com.google.common.base.Preconditions;
 import com.google.common.collect.Iterables;
 import com.google.common.collect.Sets;
 import com.google.common.flogger.GoogleLogger;
+import com.google.devtools.build.lib.actions.FileStateValue;
+import com.google.devtools.build.lib.actions.FileValue;
 import com.google.devtools.build.lib.analysis.BlazeDirectories;
 import com.google.devtools.build.lib.analysis.ConfiguredRuleClassProvider.BundledFileSystem;
 import com.google.devtools.build.lib.cmdline.LabelConstants;
@@ -32,7 +34,6 @@ import com.google.devtools.build.lib.util.TestType;
 import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.build.lib.vfs.PathFragment;
 import com.google.devtools.build.lib.vfs.RootedPath;
-import com.google.devtools.build.skyframe.SkyFunction;
 import com.google.devtools.build.skyframe.SkyFunction.Environment;
 import com.google.devtools.build.skyframe.SkyKey;
 import java.io.IOException;
@@ -145,14 +146,11 @@ public class ExternalFilesHelper {
      * Bazel to assume these paths are immutable.
      *
      * <p>Note that {@link ExternalFilesHelper#maybeHandleExternalFile} is only used for {@link
-     * com.google.devtools.build.lib.actions.FileStateValue} and {@link DirectoryListingStateValue},
-     * and also note that output files do not normally have corresponding {@link
-     * com.google.devtools.build.lib.actions.FileValue} instances (and thus also {@link
-     * com.google.devtools.build.lib.actions.FileStateValue} instances) in the Skyframe graph
-     * ({@link ArtifactFunction} only uses {@link com.google.devtools.build.lib.actions.FileValue}s
-     * for source files). But {@link com.google.devtools.build.lib.actions.FileStateValue}s for
-     * output files can still make their way into the Skyframe graph if e.g. a source file is a
-     * symlink to an output file.
+     * FileStateValue} and {@link DirectoryListingStateValue}, and also note that output files do
+     * not normally have corresponding {@link FileValue} instances (and thus also {@link
+     * FileStateValue} instances) in the Skyframe graph ({@link ArtifactFunction} only uses {@link
+     * FileValue}s for source files). But {@link FileStateValue}s for output files can still make
+     * their way into the Skyframe graph if e.g. a source file is a symlink to an output file.
      */
     // TODO(nharmata): Consider an alternative design where we have an OutputFileDiffAwareness. This
     // could work but would first require that we clean up all RootedPath usage.
@@ -166,6 +164,11 @@ public class ExternalFilesHelper {
      */
     EXTERNAL_REPO,
 
+    /**
+     * A top-level directory in the repo contents cache, i.e., either a directory corresponding to a
+     * particular predeclared input hash or the root of the repo contents cache itself. Bazel may
+     * create these directories when they are found to be missing at the beginning of an invocation.
+     */
     REPO_CONTENTS_CACHE_MUTABLE,
 
     REPO_CONTENTS_CACHE_IMMUTABLE,
@@ -176,7 +179,31 @@ public class ExternalFilesHelper {
      * by the host compiler may depend on /usr/bin/gcc. Bazel makes a best-effort attempt to detect
      * changes in such files.
      */
-    EXTERNAL_OTHER,
+    EXTERNAL_OTHER;
+
+    /** Whether Bazel may modify files of this type after they have first been tracked. */
+    public boolean mayBeModifiedByBazel() {
+      return switch (this) {
+        // Output files are regularly modified during execution. External repos, including their
+        // corresponding directories in the repo contents cache, may be refetched by Bazel if it
+        // notices that they have been deleted.
+        case OUTPUT, EXTERNAL_REPO, REPO_CONTENTS_CACHE_MUTABLE -> true;
+        // Other external files are not managed by Bazel. The immutable parts of the repo contents
+        // cache are created under UUIDs.
+        case INTERNAL, BUNDLED, EXTERNAL_OTHER, REPO_CONTENTS_CACHE_IMMUTABLE -> false;
+      };
+    }
+
+    /**
+     * Whether files of this type may belong to an external repository and thus can be passed to
+     * {@link ExternalFilesHelper#getRepositoryName(RootedPath)}.
+     */
+    public boolean mayBelongToExternalRepository() {
+      return switch (this) {
+        case EXTERNAL_REPO, REPO_CONTENTS_CACHE_MUTABLE, REPO_CONTENTS_CACHE_IMMUTABLE -> true;
+        case BUNDLED, INTERNAL, OUTPUT, EXTERNAL_OTHER -> false;
+      };
+    }
   }
 
   /**
@@ -292,7 +319,7 @@ public class ExternalFilesHelper {
    * a {@link NonexistentImmutableExternalFileException} instead.
    */
   @ThreadSafe
-  FileType maybeHandleExternalFile(RootedPath rootedPath, SkyFunction.Environment env)
+  FileType maybeHandleExternalFile(RootedPath rootedPath, Environment env)
       throws NonexistentImmutableExternalFileException, IOException, InterruptedException {
     FileType fileType = Preconditions.checkNotNull(getAndNoteFileType(rootedPath));
     switch (fileType) {
