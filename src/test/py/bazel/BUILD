@@ -396,8 +396,9 @@ py_test(
         size = "large",
         srcs = ["bzlmod/repo_contents_cache_test.py"],
         env = {
-            "CHECK_EXTERNAL_REPO_FILES": check_external_repo_files,
+            "CHECK_EXTERNAL_REPOSITORY_FILES": check_external_repo_files,
         },
+        main = "bzlmod/repo_contents_cache_test.py",
         tags = ["requires-network"],
         deps = [
             ":bzlmod_test_utils",
