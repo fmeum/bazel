@@ -308,7 +308,7 @@ public class ExternalFilesHelper {
     var repoContentsCachePath = repoContentsCachePathSupplier.get();
     if (repoContentsCachePath != null && rootedPath.asPath().startsWith(repoContentsCachePath)) {
       if (rootedPath.asPath().asFragment().segmentCount()
-          <= repoContentsCachePath.asFragment().segmentCount() + 1) {
+          <= repoContentsCachePath.asFragment().segmentCount() + 2) {
         return FileType.REPO_CONTENTS_CACHE_TOP_LEVEL_DIRECTORY;
       } else {
         return FileType.REPO_CONTENTS_CACHE_ENTRY;
