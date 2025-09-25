@@ -35,9 +35,12 @@ class RepoContentsCacheTest(test_base.TestBase):
         [
             'build --verbose_failures',
             'common --repo_contents_cache=%s' % self.repo_contents_cache,
-            'common --experimental_check_external_repository_files=%s' % os.getenv('CHECK_EXTERNAL_REPOSITORY_FILES'),
+            'common --experimental_check_external_repository_files=%s' % ("true" if self.checkExternalRepositoryFiles() else "false"),
         ]
     )
+
+  def checkExternalRepositoryFiles(self):
+    return os.getenv('CHECK_EXTERNAL_REPOSITORY_FILES') == '1'
 
   def hasCacheEntry(self):
     for l1 in os.listdir(self.repo_contents_cache):
@@ -436,6 +439,63 @@ class RepoContentsCacheTest(test_base.TestBase):
       cwd=workspace,
     )
     self.assertIn('JUST FETCHED', '\n'.join(stderr))
+
+  def testEntryCorrupted(self):
+    self.ScratchFile(
+      'MODULE.bazel',
+      [
+        'repo = use_repo_rule("//:repo.bzl", "repo")',
+        'repo(name = "my_repo")',
+      ],
+    )
+    self.ScratchFile('BUILD.bazel')
+    self.ScratchFile(
+      'repo.bzl',
+      [
+        'def _repo_impl(rctx):',
+        '  rctx.file("BUILD", "filegroup(name=\'haha\')")',
+        '  print("JUST FETCHED")',
+        '  return rctx.repo_metadata(reproducible=True)',
+        'repo = repository_rule(_repo_impl)',
+      ],
+    )
+    # First fetch: not cached
+    _, _, stderr = self.RunBazel(['build', '@my_repo//:haha'])
+    self.assertIn('JUST FETCHED', '\n'.join(stderr))
+
+    # After expunging: cached
+    self.RunBazel(['clean', '--expunge'])
+    _, _, stderr = self.RunBazel(['build', '@my_repo//:haha'])
+    self.assertNotIn('JUST FETCHED', '\n'.join(stderr))
+
+    found = False
+    for l1 in os.listdir(self.repo_contents_cache):
+      l1_path = os.path.join(self.repo_contents_cache, l1)
+      if l1 != '_trash' and os.path.isdir(l1_path):
+        for l2 in os.listdir(l1_path):
+          if not l2.endswith('.recorded_inputs'):
+            with open(os.path.join(l1_path, l2, 'BUILD'), 'w') as f:
+              f.write('filegroup(name="corrupted")\n')
+            found = True
+            break
+    self.assertTrue(found, 'failed to find a cache entry to corrupt')
+
+    # After the entry is corrupted with the server running:
+    # * not cached, with a warning, if checking external repo files
+    # * silent corruption if not checking external repo files
+    if self.checkExternalRepositoryFiles():
+      _, _, stderr = self.RunBazel(['build', '@my_repo//:haha'])
+      stderr = '\n'.join(stderr)
+      self.assertIn('JUST FETCHED', stderr)
+      self.assertIn('WARNING: The repo contents cache entry', stderr)
+    else:
+      exit_code, _, stderr = self.RunBazel(
+          ['build', '@my_repo//:haha'], allow_failure=True
+      )
+      self.AssertNotExitCode(exit_code, 0, stderr)
+      stderr = '\n'.join(stderr)
+      self.assertNotIn('JUST FETCHED', stderr)
+      self.assertIn('FOOBAR', stderr)
 
 
 if __name__ == '__main__':
