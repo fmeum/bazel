@@ -35,12 +35,12 @@ class RepoContentsCacheTest(test_base.TestBase):
         [
             'build --verbose_failures',
             'common --repo_contents_cache=%s' % self.repo_contents_cache,
-            'common --experimental_check_external_repository_files=%s' % ("true" if self.checkExternalRepositoryFiles() else "false"),
+          'common --experimental_check_external_repository_files=%s' % str(self.checkExternalRepositoryFiles()).lower(),
         ]
     )
 
   def checkExternalRepositoryFiles(self):
-    return os.getenv('CHECK_EXTERNAL_REPOSITORY_FILES') == '1'
+    return os.getenv('CHECK_EXTERNAL_REPOSITORY_FILES') == 'True'
 
   def hasCacheEntry(self):
     for l1 in os.listdir(self.repo_contents_cache):
@@ -468,34 +468,32 @@ class RepoContentsCacheTest(test_base.TestBase):
     _, _, stderr = self.RunBazel(['build', '@my_repo//:haha'])
     self.assertNotIn('JUST FETCHED', '\n'.join(stderr))
 
+    # Corrupt the only cache entry
     found = False
     for l1 in os.listdir(self.repo_contents_cache):
       l1_path = os.path.join(self.repo_contents_cache, l1)
-      if l1 != '_trash' and os.path.isdir(l1_path):
+      if os.path.isdir(l1_path) and 'my_repo' in l1:
         for l2 in os.listdir(l1_path):
           if not l2.endswith('.recorded_inputs'):
             with open(os.path.join(l1_path, l2, 'BUILD'), 'w') as f:
               f.write('filegroup(name="corrupted")\n')
             found = True
-            break
-    self.assertTrue(found, 'failed to find a cache entry to corrupt')
+    self.assertTrue(found, 'failed to find cache entry to corrupt')
 
-    # After the entry is corrupted with the server running:
-    # * not cached, with a warning, if checking external repo files
-    # * silent corruption if not checking external repo files
+    _, _, stderr = self.RunBazel(['build', '@my_repo//:haha'])
+    stderr = '\n'.join(stderr)
     if self.checkExternalRepositoryFiles():
-      _, _, stderr = self.RunBazel(['build', '@my_repo//:haha'])
-      stderr = '\n'.join(stderr)
+      # Modification is detected and triggers a refetch with a warning.
       self.assertIn('JUST FETCHED', stderr)
-      self.assertIn('WARNING: The repo contents cache entry', stderr)
+      self.assertIn('WARNING: Repository \'@@+repo+my_repo\' will be fetched again since the file', stderr)
     else:
-      exit_code, _, stderr = self.RunBazel(
-          ['build', '@my_repo//:haha'], allow_failure=True
-      )
-      self.AssertNotExitCode(exit_code, 0, stderr)
-      stderr = '\n'.join(stderr)
+      # Modification is not detected while the server is running.
       self.assertNotIn('JUST FETCHED', stderr)
-      self.assertIn('FOOBAR', stderr)
+      self.assertNotIn('WARNING', stderr)
+
+      # Modification is picked up after server restart.
+      self.RunBazel(['shutdown'])
+      self.RunBazel(['build', '@my_repo//:corrupted'])
 
 
 if __name__ == '__main__':

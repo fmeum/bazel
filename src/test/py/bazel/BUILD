@@ -391,12 +391,12 @@ py_test(
 [
     py_test(
         name = "repo_contents_cache_test_{}check_external".format(
-            "" if check_external_repo_files == "true" else "no_",
+            "" if check_external_repo_files else "no_",
         ),
         size = "large",
         srcs = ["bzlmod/repo_contents_cache_test.py"],
         env = {
-            "CHECK_EXTERNAL_REPOSITORY_FILES": check_external_repo_files,
+            "CHECK_EXTERNAL_REPOSITORY_FILES": str(check_external_repo_files),
         },
         main = "bzlmod/repo_contents_cache_test.py",
         tags = ["requires-network"],
@@ -406,8 +406,8 @@ py_test(
         ],
     )
     for check_external_repo_files in [
-        "true",
-        "false",
+        True,
+        False,
     ]
 ]
 

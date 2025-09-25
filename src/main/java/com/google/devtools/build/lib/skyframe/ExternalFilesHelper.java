@@ -61,6 +61,7 @@ public class ExternalFilesHelper {
   private boolean anyOutputFilesSeen = false;
   private boolean tooManyExternalOtherFilesSeen = false;
   private boolean anyFilesInExternalReposSeen = false;
+  private boolean anyRepoCacheEntriesSeen = false;
 
   // This is the set of EXTERNAL_OTHER files.
   private Set<RootedPath> externalOtherFilesSeen = Sets.newConcurrentHashSet();
@@ -222,16 +223,19 @@ public class ExternalFilesHelper {
     final boolean anyOutputFilesSeen;
     final Set<RootedPath> externalOtherFilesSeen;
     final boolean anyFilesInExternalReposSeen;
+    final boolean anyRepoCacheEntriesSeen;
     final boolean tooManyExternalOtherFilesSeen;
 
     private ExternalFilesKnowledge(
         boolean anyOutputFilesSeen,
         Set<RootedPath> externalOtherFilesSeen,
         boolean anyFilesInExternalReposSeen,
+        boolean anyRepoCacheEntriesSeen,
         boolean tooManyExternalOtherFilesSeen) {
       this.anyOutputFilesSeen = anyOutputFilesSeen;
       this.externalOtherFilesSeen = externalOtherFilesSeen;
       this.anyFilesInExternalReposSeen = anyFilesInExternalReposSeen;
+      this.anyRepoCacheEntriesSeen = anyRepoCacheEntriesSeen;
       this.tooManyExternalOtherFilesSeen = tooManyExternalOtherFilesSeen;
     }
   }
@@ -242,6 +246,7 @@ public class ExternalFilesHelper {
         anyOutputFilesSeen,
         externalOtherFilesSeen,
         anyFilesInExternalReposSeen,
+        anyRepoCacheEntriesSeen,
         tooManyExternalOtherFilesSeen);
   }
 
@@ -250,6 +255,7 @@ public class ExternalFilesHelper {
     anyOutputFilesSeen = externalFilesKnowledge.anyOutputFilesSeen;
     externalOtherFilesSeen = externalFilesKnowledge.externalOtherFilesSeen;
     anyFilesInExternalReposSeen = externalFilesKnowledge.anyFilesInExternalReposSeen;
+    anyRepoCacheEntriesSeen = externalFilesKnowledge.anyRepoCacheEntriesSeen;
     tooManyExternalOtherFilesSeen = externalFilesKnowledge.tooManyExternalOtherFilesSeen;
   }
 
@@ -264,18 +270,18 @@ public class ExternalFilesHelper {
 
   public FileType getAndNoteFileType(RootedPath rootedPath) {
     FileType fileType = detectFileType(rootedPath);
-    if (fileType == FileType.EXTERNAL_OTHER) {
-      if (externalOtherFilesSeen.size() >= MAX_EXTERNAL_FILES_TO_TRACK) {
-        tooManyExternalOtherFilesSeen = true;
-      } else {
-        externalOtherFilesSeen.add(rootedPath);
+    switch (fileType) {
+      case EXTERNAL_OTHER -> {
+        if (externalOtherFilesSeen.size() >= MAX_EXTERNAL_FILES_TO_TRACK) {
+          tooManyExternalOtherFilesSeen = true;
+        } else {
+          externalOtherFilesSeen.add(rootedPath);
+        }
       }
-    }
-    if (FileType.EXTERNAL_REPO == fileType) {
-      anyFilesInExternalReposSeen = true;
-    }
-    if (FileType.OUTPUT == fileType) {
-      anyOutputFilesSeen = true;
+      case EXTERNAL_REPO, REPO_CONTENTS_CACHE_ENTRY -> anyFilesInExternalReposSeen = true;
+      case REPO_CONTENTS_CACHE_TOP_LEVEL_DIRECTORY -> anyRepoCacheEntriesSeen = true;
+      case OUTPUT -> anyOutputFilesSeen = true;
+      case BUNDLED, INTERNAL -> {}
     }
     return fileType;
   }
@@ -420,13 +426,36 @@ public class ExternalFilesHelper {
               Repository '%s' will be fetched again since the file '%s' has been modified \
               externally. External modifications can lead to incorrect builds."""
                       .formatted(repoName, file.getRootRelativePath())));
-          // Delete the marker file so that invalidating the RepositoryDirectoryValue actually
-          // causes a re-fetch of the repository.
-          try {
-            getExternalDirectory().getRelative(repoName.getMarkerFileName()).delete();
-          } catch (IOException e) {
-            // Any failure to delete the file should also make it non-readable, so we still achieve
-            // our goal of forcing a re-fetch of the repository.
+          var fileType = getAndNoteFileType(file);
+          switch (fileType) {
+            case EXTERNAL_REPO -> {
+              // Delete the marker file so that invalidating the RepositoryDirectoryValue actually
+              // causes a re-fetch of the repository.
+              try {
+                getExternalDirectory().getRelative(repoName.getMarkerFileName()).delete();
+              } catch (IOException e) {
+                // Any failure to delete the file should also make it non-readable, so we still
+                // achieve our goal of forcing a re-fetch of the repository.
+              }
+            }
+            case REPO_CONTENTS_CACHE_ENTRY -> {
+              var cacheRelativePath = file.asPath().relativeTo(repoContentsCachePathSupplier.get());
+              if (cacheRelativePath.segmentCount() > 2) {
+                var candidateDir =
+                    repoContentsCachePathSupplier
+                        .get()
+                        .getRelative(cacheRelativePath.subFragment(0, 2));
+                var recordedInputsFile =
+                    candidateDir.replaceName(candidateDir.getBaseName() + ".recorded_inputs");
+                try {
+                  // TODO: GC the stale directory.
+                  recordedInputsFile.delete();
+                } catch (IOException e) {
+                  // Any failure to delete the file should also make it non-readable, so we still
+                  // achieve our goal of forcing a re-fetch of the repository.
+                }
+              }
+            }
           }
         });
     return Iterables.transform(dirtyExternalRepos.keySet(), RepositoryDirectoryValue::key);

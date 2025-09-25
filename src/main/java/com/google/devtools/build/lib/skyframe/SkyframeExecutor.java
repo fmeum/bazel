@@ -3777,7 +3777,8 @@ public abstract class SkyframeExecutor implements WalkableGraphFactory {
         || (checkOutputFiles && externalFilesKnowledge.anyOutputFilesSeen)
         || (checkExternalRepositoryFiles && allowExternalRepositories)
         || (checkExternalRepositoryFiles && externalFilesKnowledge.anyFilesInExternalReposSeen)
-        || (checkExternalOtherFiles && externalFilesKnowledge.tooManyExternalOtherFilesSeen)) {
+        || (checkExternalOtherFiles && externalFilesKnowledge.tooManyExternalOtherFilesSeen)
+        || externalFilesKnowledge.anyRepoCacheEntriesSeen) {
       // We freshly compute knowledge of the presence of external files in the skyframe graph. We
       // use a fresh ExternalFilesHelper instance and only set the real instance's knowledge *after*
       // we are done with the graph scan, lest an interrupt during the graph scan causes us to
@@ -3812,8 +3813,8 @@ public abstract class SkyframeExecutor implements WalkableGraphFactory {
                     new MissingDiffDirtinessChecker(diffPackageRootsUnderWhichToCheck)));
       }
       if (checkExternalRepositoryFiles) {
-        fileTypesToCheck =
-            EnumSet.of(FileType.EXTERNAL_REPO, FileType.REPO_CONTENTS_CACHE_ENTRY);
+        fileTypesToCheck.add(FileType.EXTERNAL_REPO);
+        fileTypesToCheck.add(FileType.REPO_CONTENTS_CACHE_ENTRY);
       }
       if (checkExternalOtherFiles
           && (externalFilesKnowledge.tooManyExternalOtherFilesSeen
