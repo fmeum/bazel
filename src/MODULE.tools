@@ -43,6 +43,7 @@ bazel_dep(name = "rules_python", version = "1.4.1")
 bazel_dep(name = "rules_shell", version = "0.6.1")
 bazel_dep(name = "apple_support", version = "1.22.1", repo_name = None)
 bazel_dep(name = "rules_swift", version = "2.8.2", repo_name = None) # version bump, older versions don't load JavaInfo
+bazel_dep(name = "abseil-cpp", version = "20250814.1", repo_name = None) # version bump, fixes errors with older compilers
 # add rules_android
 
 register_toolchains(
