@@ -213,7 +213,10 @@ public final class RepoContentsCache {
   }
 
   public void releaseSharedLock() throws IOException {
-    Preconditions.checkState(sharedLock != null);
+    if (sharedLock == null) {
+      // Lock was never acquired (e.g., command was interrupted before acquiring it)
+      return;
+    }
     sharedLock.close();
     sharedLock = null;
   }
