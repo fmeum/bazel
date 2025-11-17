@@ -40,6 +40,7 @@ java_library(
         "testdata/phase1.star",
         "testdata/phase2.star",
         "testdata/phase3.star",
+        "testdata/phase4.star",
         "//src/test/java/net/starlark/java/eval:testdata/assign.star",
         # TODO: Add more test files as features are implemented
     ],

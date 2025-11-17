@@ -4,14 +4,19 @@ import com.oracle.truffle.api.frame.FrameDescriptor;
 import com.oracle.truffle.api.frame.FrameSlotKind;
 import net.starlark.truffle.nodes.ExpressionNode;
 import net.starlark.truffle.nodes.StatementNode;
+import net.starlark.truffle.nodes.arithmetic.UnaryMinusNodeGen;
 import net.starlark.truffle.nodes.binary.*;
 import net.starlark.truffle.nodes.literal.*;
 import net.starlark.truffle.nodes.local.ReadLocalVariableNodeGen;
 import net.starlark.truffle.nodes.local.WriteLocalValueNode;
 import net.starlark.truffle.nodes.local.WriteLocalVariableNodeGen;
+import net.starlark.truffle.nodes.builtin.LenBuiltinNodeGen;
 import net.starlark.truffle.nodes.builtin.Range1NodeGen;
 import net.starlark.truffle.nodes.builtin.Range2NodeGen;
 import net.starlark.truffle.nodes.builtin.Range3NodeGen;
+import net.starlark.truffle.nodes.expression.IndexReadNodeGen;
+import net.starlark.truffle.nodes.expression.IndexWriteNodeGen;
+import net.starlark.truffle.nodes.literal.ListLiteralNode;
 import net.starlark.truffle.nodes.controlflow.BreakNode;
 import net.starlark.truffle.nodes.controlflow.ContinueNode;
 import net.starlark.truffle.nodes.controlflow.ForNode;
@@ -83,13 +88,35 @@ public final class Parser {
       return ContinueNode.INSTANCE;
     }
 
-    // Simple assignment: IDENTIFIER = expression
+    // Assignment: IDENTIFIER = expression or IDENTIFIER[index] = expression
     if (current.kind == TokenKind.IDENTIFIER) {
       // Save position to check for assignment
       int startPos = current.start;
       String name = (String) current.value;
       advance();
 
+      // Check for indexed assignment: var[index] = value
+      if (current.kind == TokenKind.LBRACKET) {
+        advance();
+        ExpressionNode index = parseExpression();
+        expect(TokenKind.RBRACKET);
+
+        if (current.kind == TokenKind.EQUALS) {
+          advance();
+          ExpressionNode value = parseExpression();
+          consumeNewlineOrEof();
+
+          // Read the variable, then write to its index
+          int slot = getOrCreateLocal(name);
+          ExpressionNode object = ReadLocalVariableNodeGen.create(slot);
+          ExpressionNode writeNode = IndexWriteNodeGen.create(object, index, value);
+          return new AssignmentNode(writeNode);
+        } else {
+          throw new ParseException("Expected = after index", current);
+        }
+      }
+
+      // Simple assignment: var = value
       if (current.kind == TokenKind.EQUALS) {
         // It's an assignment
         advance(); // consume =
@@ -290,21 +317,37 @@ public final class Parser {
 
   /** Parse multiplicative expression: * / // % */
   private ExpressionNode parseMultiplicativeExpression() {
-    ExpressionNode left = parsePrimaryExpression();
+    ExpressionNode left = parseUnaryExpression();
 
     while (current.kind == TokenKind.STAR || current.kind == TokenKind.SLASH
         || current.kind == TokenKind.SLASH_SLASH || current.kind == TokenKind.PERCENT) {
       TokenKind op = current.kind;
       advance();
-      ExpressionNode right = parsePrimaryExpression();
+      ExpressionNode right = parseUnaryExpression();
       left = createArithmeticNode(op, left, right);
     }
 
     return left;
   }
 
-  /** Parse primary expression: literals, identifiers, parenthesized expressions */
+  /** Parse unary expression: -expr */
+  private ExpressionNode parseUnaryExpression() {
+    if (current.kind == TokenKind.MINUS) {
+      advance();
+      ExpressionNode operand = parseUnaryExpression();  // right-associative
+      return UnaryMinusNodeGen.create(operand);
+    }
+    return parsePrimaryExpression();
+  }
+
+  /** Parse primary expression with postfix operations: literals, identifiers, indexing, calls */
   private ExpressionNode parsePrimaryExpression() {
+    ExpressionNode base = parsePrimaryBase();
+    return parsePostfixExpression(base);
+  }
+
+  /** Parse the base of a primary expression (before postfix operations). */
+  private ExpressionNode parsePrimaryBase() {
     switch (current.kind) {
       case INT:
         long intValue = (long) current.value;
@@ -352,9 +395,50 @@ public final class Parser {
         expect(TokenKind.RPAREN);
         return expr;
 
+      case LBRACKET:
+        return parseListLiteral();
+
       default:
         throw new ParseException("Unexpected token: " + current.kind, current);
     }
+  }
+
+  /** Parse list literal: [e1, e2, ...] */
+  private ExpressionNode parseListLiteral() {
+    expect(TokenKind.LBRACKET);
+
+    List<ExpressionNode> elements = new ArrayList<>();
+
+    if (current.kind != TokenKind.RBRACKET) {
+      elements.add(parseExpression());
+
+      while (current.kind == TokenKind.COMMA) {
+        advance();
+        if (current.kind == TokenKind.RBRACKET) {
+          break;  // Trailing comma
+        }
+        elements.add(parseExpression());
+      }
+    }
+
+    expect(TokenKind.RBRACKET);
+
+    return new ListLiteralNode(elements.toArray(new ExpressionNode[0]));
+  }
+
+  /** Parse postfix operations (indexing, calls, etc.). */
+  private ExpressionNode parsePostfixExpression(ExpressionNode base) {
+    while (true) {
+      if (current.kind == TokenKind.LBRACKET) {
+        advance();
+        ExpressionNode index = parseExpression();
+        expect(TokenKind.RBRACKET);
+        base = IndexReadNodeGen.create(base, index);
+      } else {
+        break;
+      }
+    }
+    return base;
   }
 
   /** Create a binary arithmetic/comparison node based on operator. */
@@ -425,9 +509,14 @@ public final class Parser {
 
     expect(TokenKind.RPAREN);
 
-    // For Phase 3, only support range() builtin
+    // Built-in functions
     if (functionName.equals("range")) {
       return createRangeCall(args);
+    } else if (functionName.equals("len")) {
+      if (args.size() != 1) {
+        throw new ParseException("len() takes exactly 1 argument, got " + args.size(), current);
+      }
+      return LenBuiltinNodeGen.create(args.get(0));
     }
 
     throw new ParseException("Unknown function: " + functionName, current);
