@@ -16,6 +16,7 @@ package net.starlark.truffle.nodes;
 
 import com.oracle.truffle.api.frame.VirtualFrame;
 import net.starlark.truffle.TruffleStarlarkContext;
+import net.starlark.truffle.values.NoneValue;
 
 /**
  * Node for the print() builtin function.
@@ -32,6 +33,6 @@ public final class PrintNode extends StarlarkNode {
   public Object execute(VirtualFrame frame, TruffleStarlarkContext context) {
     Object value = argument.execute(frame, context);
     context.print(value);
-    return null; // print() returns None
+    return NoneValue.INSTANCE; // print() returns None
   }
 }

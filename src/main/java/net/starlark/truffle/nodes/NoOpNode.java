@@ -16,14 +16,15 @@ package net.starlark.truffle.nodes;
 
 import com.oracle.truffle.api.frame.VirtualFrame;
 import net.starlark.truffle.TruffleStarlarkContext;
+import net.starlark.truffle.values.NoneValue;
 
 /**
- * No-op node that does nothing and returns null.
+ * No-op node that does nothing and returns None.
  */
 public final class NoOpNode extends StarlarkNode {
 
   @Override
   public Object execute(VirtualFrame frame, TruffleStarlarkContext context) {
-    return null;
+    return NoneValue.INSTANCE;
   }
 }

@@ -13,7 +13,7 @@ filegroup(
 # Truffle-based Starlark implementation
 java_library(
     name = "truffle",
-    srcs = glob(["*.java", "nodes/*.java"]),
+    srcs = glob(["*.java", "nodes/*.java", "values/*.java"]),
     visibility = ["//visibility:public"],
     deps = [
         "//third_party:truffle",

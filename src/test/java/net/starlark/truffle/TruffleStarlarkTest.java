@@ -31,15 +31,13 @@ public class TruffleStarlarkTest {
   @Test
   public void testPrintHelloWorld() {
     ByteArrayOutputStream out = new ByteArrayOutputStream();
+    ByteArrayOutputStream err = new ByteArrayOutputStream(); // Separate stream for Truffle logs
 
-    try (Context context = Context.newBuilder()
-        .allowAllAccess(true)
+    try (Context context = Context.newBuilder("starlark")
         .out(out)
-        .err(out)
+        .err(err) // Truffle warnings go to err
+        .option("engine.WarnInterpreterOnly", "false") // Disable interpreter warning
         .build()) {
-
-      // Register the language manually since service discovery isn't working
-      context.initialize("starlark");
 
       Source source = Source.newBuilder("starlark", "print(\"Hello world!\")", "test.star")
           .buildLiteral();
@@ -48,20 +46,18 @@ public class TruffleStarlarkTest {
 
       String output = out.toString().trim();
       assertEquals("Hello world!", output);
-    } catch (Exception e) {
-      // For now, just verify the language loads
-      // The annotation processor issue needs to be resolved for full functionality
-      throw new RuntimeException("Language loading failed - annotation processor needs investigation", e);
     }
   }
 
   @Test
   public void testPrintSimpleString() {
     ByteArrayOutputStream out = new ByteArrayOutputStream();
+    ByteArrayOutputStream err = new ByteArrayOutputStream();
 
     try (Context context = Context.newBuilder("starlark")
         .out(out)
-        .err(out)
+        .err(err)
+        .option("engine.WarnInterpreterOnly", "false")
         .build()) {
 
       Source source = Source.newBuilder("starlark", "print(\"Test\")", "test.star")
