@@ -14,53 +14,59 @@
 
 package net.starlark.truffle.nodes;
 
+import com.oracle.truffle.api.frame.FrameDescriptor;
 import com.oracle.truffle.api.frame.VirtualFrame;
 import com.oracle.truffle.api.nodes.RootNode;
 import com.oracle.truffle.api.source.Source;
 import net.starlark.truffle.TruffleStarlarkContext;
 import net.starlark.truffle.TruffleStarlarkLanguage;
+import net.starlark.truffle.parser.Lexer;
+import net.starlark.truffle.parser.Parser;
+import net.starlark.truffle.values.NoneValue;
 
 /**
  * Root node for Truffle Starlark execution.
  *
  * <p>This is the entry point for executing a Starlark source file.
- * For now, it implements a minimal parser that only recognizes print("...") statements.
  */
 public final class TruffleStarlarkRootNode extends RootNode {
 
   private final Source source;
-  @Child private StarlarkNode body;
+  @Child private StatementNode body;
 
   public TruffleStarlarkRootNode(TruffleStarlarkLanguage language, Source source) {
-    super(language);
-    this.source = source;
-    this.body = parseSource(source);
+    this(language, source, parseAndBuildDescriptor(source));
   }
 
-  private StarlarkNode parseSource(Source source) {
-    // Minimal parser: recognize print("...") pattern
-    String code = source.getCharacters().toString().trim();
+  private TruffleStarlarkRootNode(TruffleStarlarkLanguage language, Source source, ParseResult parseResult) {
+    super(language, parseResult.descriptor);
+    this.source = source;
+    this.body = parseResult.body;
+  }
 
-    if (code.startsWith("print(") && code.endsWith(")")) {
-      // Extract the argument
-      String arg = code.substring(6, code.length() - 1).trim();
+  private static class ParseResult {
+    final FrameDescriptor descriptor;
+    final StatementNode body;
 
-      // Check if it's a string literal
-      if (arg.startsWith("\"") && arg.endsWith("\"")) {
-        String value = arg.substring(1, arg.length() - 1);
-        return new PrintNode(new StringLiteralNode(value));
-      }
+    ParseResult(FrameDescriptor descriptor, StatementNode body) {
+      this.descriptor = descriptor;
+      this.body = body;
     }
+  }
 
-    // For now, return a no-op if we don't recognize the pattern
-    return new NoOpNode();
+  private static ParseResult parseAndBuildDescriptor(Source source) {
+    String code = source.getCharacters().toString();
+    Lexer lexer = new Lexer(code);
+    FrameDescriptor.Builder builder = FrameDescriptor.newBuilder();
+    Parser parser = new Parser(lexer, builder);
+    StatementNode body = parser.parseFile();
+    return new ParseResult(builder.build(), body);
   }
 
   @Override
   public Object execute(VirtualFrame frame) {
-    TruffleStarlarkLanguage language = TruffleStarlarkLanguage.get(this);
-    TruffleStarlarkContext context = TruffleStarlarkContext.get(this);
-    return body.execute(frame, context);
+    body.executeVoid(frame);
+    return NoneValue.INSTANCE;
   }
 
   @Override

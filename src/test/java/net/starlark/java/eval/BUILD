@@ -9,6 +9,12 @@ filegroup(
     visibility = ["//src/test/java/net/starlark/java:__pkg__"],
 )
 
+# Export testdata files for reuse in Truffle tests
+exports_files(
+    glob(["testdata/*.star"]),
+    visibility = ["//src/test/java/net/starlark/truffle:__pkg__"],
+)
+
 # EvalTests test the Starlark interpreter.
 java_test(
     name = "EvalTests",
