@@ -17,17 +17,6 @@ java_test(
         "//src/main/java/net/starlark/truffle",
         "//third_party:junit4",
         "//third_party:polyglot",
-        "//third_party:truffle_api",
-    ],
-)
-
-java_test(
-    name = "DirectTruffleStarlarkTest",
-    size = "small",
-    srcs = ["DirectTruffleStarlarkTest.java"],
-    deps = [
-        "//src/main/java/net/starlark/truffle",
-        "//third_party:junit4",
-        "//third_party:truffle_api",
+        "//third_party:truffle",
     ],
 )

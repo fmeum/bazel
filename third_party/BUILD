@@ -657,10 +657,13 @@ alias(
     actual = "@maven//:com_google_turbine_turbine",
 )
 
-# Truffle dependencies for Starlark Truffle implementation
-alias(
-    name = "truffle_api",
-    actual = "@maven//:org_graalvm_truffle_truffle_api",
+java_library(
+    name = "truffle",
+    exports = ["@maven//:org_graalvm_truffle_truffle_api"],
+    exported_plugins = [
+        ":truffle_processor",
+        ":language_registration_processor",
+    ],
 )
 
 alias(
@@ -669,12 +672,21 @@ alias(
 )
 
 java_plugin(
-    name = "truffle_dsl_processor",
-    generates_api = 1,
+    name = "truffle_processor",
     processor_class = "com.oracle.truffle.dsl.processor.TruffleProcessor",
     deps = [
         "@maven//:org_graalvm_truffle_truffle_dsl_processor",
     ],
+    visibility = ["//visibility:private"],
+)
+
+java_plugin(
+    name = "language_registration_processor",
+    processor_class = "com.oracle.truffle.dsl.processor.LanguageRegistrationProcessor",
+    deps = [
+        "@maven//:org_graalvm_truffle_truffle_dsl_processor",
+    ],
+    visibility = ["//visibility:private"],
 )
 
 java_library(

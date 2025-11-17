@@ -33,7 +33,8 @@ import net.starlark.truffle.nodes.TruffleStarlarkRootNode;
     version = "1.0",
     defaultMimeType = TruffleStarlarkLanguage.MIME_TYPE,
     characterMimeTypes = TruffleStarlarkLanguage.MIME_TYPE,
-    contextPolicy = TruffleLanguage.ContextPolicy.SHARED
+    contextPolicy = TruffleLanguage.ContextPolicy.SHARED,
+    fileTypeDetectors = TruffleStarlarkFileDetector.class
 )
 public final class TruffleStarlarkLanguage extends TruffleLanguage<TruffleStarlarkContext> {
 

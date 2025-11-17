@@ -14,13 +14,8 @@ filegroup(
 java_library(
     name = "truffle",
     srcs = glob(["*.java", "nodes/*.java"]),
-    plugins = [
-        "//third_party:truffle_dsl_processor",
-    ],
-    resources = glob(["META-INF/**"]),
-    resource_strip_prefix = "src/main/java/net/starlark/truffle",
     visibility = ["//visibility:public"],
     deps = [
-        "//third_party:truffle_api",
+        "//third_party:truffle",
     ],
 )
