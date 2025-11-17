@@ -16,6 +16,7 @@ import net.starlark.truffle.nodes.builtin.Range2NodeGen;
 import net.starlark.truffle.nodes.builtin.Range3NodeGen;
 import net.starlark.truffle.nodes.expression.IndexReadNodeGen;
 import net.starlark.truffle.nodes.expression.IndexWriteNodeGen;
+import net.starlark.truffle.nodes.expression.ListComprehensionNode;
 import net.starlark.truffle.nodes.expression.SliceNodeGen;
 import net.starlark.truffle.nodes.literal.ListLiteralNode;
 import net.starlark.truffle.nodes.controlflow.BreakNode;
@@ -516,27 +517,86 @@ public final class Parser {
     }
   }
 
-  /** Parse list literal: [e1, e2, ...] */
+  /** Parse list literal: [e1, e2, ...] or list comprehension: [expr for x in iter] */
   private ExpressionNode parseListLiteral() {
     expect(TokenKind.LBRACKET);
 
+    if (current.kind == TokenKind.RBRACKET) {
+      advance();
+      return new ListLiteralNode(new ExpressionNode[0]);
+    }
+
+    // Parse first expression
+    ExpressionNode firstExpr = parseExpression();
+
+    // Check if this is a list comprehension (followed by 'for')
+    if (current.kind == TokenKind.FOR) {
+      return parseListComprehension(firstExpr);
+    }
+
+    // Regular list literal
     List<ExpressionNode> elements = new ArrayList<>();
+    elements.add(firstExpr);
 
-    if (current.kind != TokenKind.RBRACKET) {
-      elements.add(parseExpression());
-
-      while (current.kind == TokenKind.COMMA) {
-        advance();
-        if (current.kind == TokenKind.RBRACKET) {
-          break;  // Trailing comma
-        }
-        elements.add(parseExpression());
+    while (current.kind == TokenKind.COMMA) {
+      advance();
+      if (current.kind == TokenKind.RBRACKET) {
+        break;  // Trailing comma
       }
+      elements.add(parseExpression());
+    }
+
+    expect(TokenKind.RBRACKET);
+    return new ListLiteralNode(elements.toArray(new ExpressionNode[0]));
+  }
+
+  /** Parse list comprehension: [expr for var in iterable if cond ...] */
+  private ExpressionNode parseListComprehension(ExpressionNode expression) {
+    List<ListComprehensionNode.ComprehensionClause> clauses = new ArrayList<>();
+
+    // Parse 'for' clauses
+    while (current.kind == TokenKind.FOR) {
+      advance();  // consume 'for'
+
+      // Parse variable name
+      if (current.kind != TokenKind.IDENTIFIER) {
+        throw new ParseException("Expected variable name after 'for'", current);
+      }
+      String varName = (String) current.value;
+      advance();
+
+      // Allocate slot for loop variable in parent frame
+      // This is simpler than creating a separate comprehension frame
+      int varSlot = getOrCreateLocal(varName);
+
+      // Expect 'in'
+      if (current.kind != TokenKind.IN) {
+        throw new ParseException("Expected 'in' after loop variable", current);
+      }
+      advance();
+
+      // Parse iterable expression
+      ExpressionNode iterableNode = parseExpression();
+
+      // Parse optional 'if' filters
+      List<ExpressionNode> filters = new ArrayList<>();
+      while (current.kind == TokenKind.IF) {
+        advance();  // consume 'if'
+        ExpressionNode filter = parseExpression();
+        filters.add(filter);
+      }
+
+      clauses.add(new ListComprehensionNode.ComprehensionClause(
+          iterableNode,
+          varSlot,
+          filters.toArray(new ExpressionNode[0])));
     }
 
     expect(TokenKind.RBRACKET);
 
-    return new ListLiteralNode(elements.toArray(new ExpressionNode[0]));
+    return new ListComprehensionNode(
+        expression,
+        clauses.toArray(new ListComprehensionNode.ComprehensionClause[0]));
   }
 
   /** Parse dict literal: {k1: v1, k2: v2, ...} */
