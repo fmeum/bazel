@@ -7,7 +7,14 @@ import net.starlark.truffle.nodes.StatementNode;
 import net.starlark.truffle.nodes.binary.*;
 import net.starlark.truffle.nodes.literal.*;
 import net.starlark.truffle.nodes.local.ReadLocalVariableNodeGen;
+import net.starlark.truffle.nodes.local.WriteLocalValueNode;
 import net.starlark.truffle.nodes.local.WriteLocalVariableNodeGen;
+import net.starlark.truffle.nodes.builtin.Range1NodeGen;
+import net.starlark.truffle.nodes.builtin.Range2NodeGen;
+import net.starlark.truffle.nodes.builtin.Range3NodeGen;
+import net.starlark.truffle.nodes.controlflow.BreakNode;
+import net.starlark.truffle.nodes.controlflow.ContinueNode;
+import net.starlark.truffle.nodes.controlflow.ForNode;
 import net.starlark.truffle.nodes.controlflow.IfNode;
 import net.starlark.truffle.nodes.logical.AndNode;
 import net.starlark.truffle.nodes.logical.NotNodeGen;
@@ -55,6 +62,25 @@ public final class Parser {
     // If statement
     if (current.kind == TokenKind.IF) {
       return parseIfStatement();
+    }
+
+    // For loop
+    if (current.kind == TokenKind.FOR) {
+      return parseForStatement();
+    }
+
+    // Break statement
+    if (current.kind == TokenKind.BREAK) {
+      advance();
+      consumeNewlineOrEof();
+      return BreakNode.INSTANCE;
+    }
+
+    // Continue statement
+    if (current.kind == TokenKind.CONTINUE) {
+      advance();
+      consumeNewlineOrEof();
+      return ContinueNode.INSTANCE;
     }
 
     // Simple assignment: IDENTIFIER = expression
@@ -155,6 +181,35 @@ public final class Parser {
         conditions.toArray(new ExpressionNode[0]),
         bodies.toArray(new StatementNode[0]),
         elseBlock);
+  }
+
+  /** Parse for loop: for IDENTIFIER in expression: body */
+  private StatementNode parseForStatement() {
+    expect(TokenKind.FOR);
+
+    // Parse loop variable
+    if (current.kind != TokenKind.IDENTIFIER) {
+      throw new ParseException("Expected identifier after 'for'", current);
+    }
+    String varName = (String) current.value;
+    advance();
+
+    expect(TokenKind.IN);
+
+    // Parse iterable expression
+    ExpressionNode iterable = parseExpression();
+
+    expect(TokenKind.COLON);
+    consumeNewlineOrEof();
+
+    // Parse body
+    StatementNode body = parseSimpleBlock();
+
+    // Create loop variable writer
+    int slot = getOrCreateLocal(varName);
+    WriteLocalValueNode writeVar = new WriteLocalValueNode(slot);
+
+    return new ForNode(iterable, writeVar, body);
   }
 
   /** Parse a simple block of statements (for Phase 2, just a single statement). */
@@ -281,6 +336,13 @@ public final class Parser {
       case IDENTIFIER:
         String name = (String) current.value;
         advance();
+
+        // Check for function call
+        if (current.kind == TokenKind.LPAREN) {
+          return parseFunctionCall(name);
+        }
+
+        // Variable reference
         int slot = getOrCreateLocal(name);
         return ReadLocalVariableNodeGen.create(slot);
 
@@ -340,6 +402,48 @@ public final class Parser {
     return kind == TokenKind.EQUALS_EQUALS || kind == TokenKind.NOT_EQUALS
         || kind == TokenKind.LESS || kind == TokenKind.LESS_EQUALS
         || kind == TokenKind.GREATER || kind == TokenKind.GREATER_EQUALS;
+  }
+
+  /** Parse a function call. */
+  private ExpressionNode parseFunctionCall(String functionName) {
+    expect(TokenKind.LPAREN);
+
+    List<ExpressionNode> args = new ArrayList<>();
+
+    // Parse arguments
+    if (current.kind != TokenKind.RPAREN) {
+      args.add(parseExpression());
+
+      while (current.kind == TokenKind.COMMA) {
+        advance();
+        if (current.kind == TokenKind.RPAREN) {
+          break; // Trailing comma
+        }
+        args.add(parseExpression());
+      }
+    }
+
+    expect(TokenKind.RPAREN);
+
+    // For Phase 3, only support range() builtin
+    if (functionName.equals("range")) {
+      return createRangeCall(args);
+    }
+
+    throw new ParseException("Unknown function: " + functionName, current);
+  }
+
+  /** Create a range() builtin call. */
+  private ExpressionNode createRangeCall(List<ExpressionNode> args) {
+    if (args.size() == 1) {
+      return Range1NodeGen.create(args.get(0));
+    } else if (args.size() == 2) {
+      return Range2NodeGen.create(args.get(0), args.get(1));
+    } else if (args.size() == 3) {
+      return Range3NodeGen.create(args.get(0), args.get(1), args.get(2));
+    } else {
+      throw new ParseException("range() takes 1, 2, or 3 arguments, got " + args.size(), current);
+    }
   }
 
   /** Get or create a frame slot for a local variable. */
