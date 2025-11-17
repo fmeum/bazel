@@ -38,6 +38,7 @@ java_library(
     srcs = ["TruffleScriptTest.java"],
     data = [
         "testdata/phase1.star",
+        "testdata/phase2.star",
         "//src/test/java/net/starlark/java/eval:testdata/assign.star",
         # TODO: Add more test files as features are implemented
     ],

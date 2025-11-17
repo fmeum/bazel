@@ -8,6 +8,10 @@ import net.starlark.truffle.nodes.binary.*;
 import net.starlark.truffle.nodes.literal.*;
 import net.starlark.truffle.nodes.local.ReadLocalVariableNodeGen;
 import net.starlark.truffle.nodes.local.WriteLocalVariableNodeGen;
+import net.starlark.truffle.nodes.controlflow.IfNode;
+import net.starlark.truffle.nodes.logical.AndNode;
+import net.starlark.truffle.nodes.logical.NotNodeGen;
+import net.starlark.truffle.nodes.logical.OrNode;
 import net.starlark.truffle.nodes.statement.AssignmentNode;
 import net.starlark.truffle.nodes.statement.BlockNode;
 import net.starlark.truffle.nodes.statement.ExpressionStatementNode;
@@ -48,6 +52,11 @@ public final class Parser {
 
   /** Parse a single statement. */
   private StatementNode parseStatement() {
+    // If statement
+    if (current.kind == TokenKind.IF) {
+      return parseIfStatement();
+    }
+
     // Simple assignment: IDENTIFIER = expression
     if (current.kind == TokenKind.IDENTIFIER) {
       // Save position to check for assignment
@@ -112,6 +121,49 @@ public final class Parser {
     return left;
   }
 
+  /** Parse if/elif/else statement. */
+  private StatementNode parseIfStatement() {
+    List<ExpressionNode> conditions = new ArrayList<>();
+    List<StatementNode> bodies = new ArrayList<>();
+
+    // Parse if block
+    expect(TokenKind.IF);
+    conditions.add(parseExpression());
+    expect(TokenKind.COLON);
+    consumeNewlineOrEof();
+    bodies.add(parseSimpleBlock());
+
+    // Parse elif blocks
+    while (current.kind == TokenKind.ELIF) {
+      advance();
+      conditions.add(parseExpression());
+      expect(TokenKind.COLON);
+      consumeNewlineOrEof();
+      bodies.add(parseSimpleBlock());
+    }
+
+    // Parse optional else block
+    StatementNode elseBlock = null;
+    if (current.kind == TokenKind.ELSE) {
+      advance();
+      expect(TokenKind.COLON);
+      consumeNewlineOrEof();
+      elseBlock = parseSimpleBlock();
+    }
+
+    return new IfNode(
+        conditions.toArray(new ExpressionNode[0]),
+        bodies.toArray(new StatementNode[0]),
+        elseBlock);
+  }
+
+  /** Parse a simple block of statements (for Phase 2, just a single statement). */
+  private StatementNode parseSimpleBlock() {
+    // For Phase 2, simplified: just parse a single statement
+    // Phase 3 will add proper indentation-based blocks
+    return parseStatement();
+  }
+
   /** Parse an expression. */
   private ExpressionNode parseExpression() {
     return parseOrExpression();
@@ -119,14 +171,38 @@ public final class Parser {
 
   /** Parse 'or' expression (lowest precedence). */
   private ExpressionNode parseOrExpression() {
-    return parseAndExpression();
-    // TODO: Implement 'or' when logical operators are needed
+    ExpressionNode left = parseAndExpression();
+
+    while (current.kind == TokenKind.OR) {
+      advance();
+      ExpressionNode right = parseAndExpression();
+      left = OrNode.create(left, right);
+    }
+
+    return left;
   }
 
   /** Parse 'and' expression. */
   private ExpressionNode parseAndExpression() {
+    ExpressionNode left = parseNotExpression();
+
+    while (current.kind == TokenKind.AND) {
+      advance();
+      ExpressionNode right = parseNotExpression();
+      left = AndNode.create(left, right);
+    }
+
+    return left;
+  }
+
+  /** Parse 'not' expression. */
+  private ExpressionNode parseNotExpression() {
+    if (current.kind == TokenKind.NOT) {
+      advance();
+      ExpressionNode operand = parseNotExpression();  // right-associative
+      return NotNodeGen.create(operand);
+    }
     return parseComparisonExpression();
-    // TODO: Implement 'and' when logical operators are needed
   }
 
   /** Parse comparison expression: <, >, <=, >=, ==, !=, in, not in */
