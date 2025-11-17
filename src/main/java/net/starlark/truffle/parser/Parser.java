@@ -16,6 +16,7 @@ import net.starlark.truffle.nodes.builtin.Range2NodeGen;
 import net.starlark.truffle.nodes.builtin.Range3NodeGen;
 import net.starlark.truffle.nodes.expression.IndexReadNodeGen;
 import net.starlark.truffle.nodes.expression.IndexWriteNodeGen;
+import net.starlark.truffle.nodes.expression.SliceNodeGen;
 import net.starlark.truffle.nodes.literal.ListLiteralNode;
 import net.starlark.truffle.nodes.controlflow.BreakNode;
 import net.starlark.truffle.nodes.controlflow.ContinueNode;
@@ -574,9 +575,36 @@ public final class Parser {
     while (true) {
       if (current.kind == TokenKind.LBRACKET) {
         advance();
-        ExpressionNode index = parseExpression();
-        expect(TokenKind.RBRACKET);
-        base = IndexReadNodeGen.create(base, index);
+
+        // Check for slice syntax: obj[start:end]
+        ExpressionNode start = null;
+        ExpressionNode end = null;
+
+        // Parse start index (or empty for [:end])
+        if (current.kind != TokenKind.COLON) {
+          start = parseExpression();
+        }
+
+        // Check if this is a slice
+        if (current.kind == TokenKind.COLON) {
+          advance();  // consume ':'
+
+          // Parse end index (or empty for [start:])
+          if (current.kind != TokenKind.RBRACKET) {
+            end = parseExpression();
+          }
+
+          expect(TokenKind.RBRACKET);
+
+          // Create slice node with null for missing indices
+          base = SliceNodeGen.create(base,
+              start != null ? start : net.starlark.truffle.nodes.literal.NullLiteralNode.INSTANCE,
+              end != null ? end : net.starlark.truffle.nodes.literal.NullLiteralNode.INSTANCE);
+        } else {
+          // Regular indexing: obj[index]
+          expect(TokenKind.RBRACKET);
+          base = IndexReadNodeGen.create(base, start);
+        }
       } else {
         break;
       }
