@@ -54,9 +54,32 @@ public final class Parser {
     advance();
   }
 
+  /** Initialize builtin functions in the parser's scope. */
+  public List<StatementNode> initializeBuiltins() {
+    List<StatementNode> initStatements = new ArrayList<>();
+
+    // Register builtin functions
+    String[] builtinNames = {"len", "str", "int", "type", "bool"};
+    for (String name : builtinNames) {
+      int slot = getOrCreateLocal(name);
+      initStatements.add(createBuiltinInit(name, slot));
+    }
+
+    return initStatements;
+  }
+
+  /** Create an initialization statement for a builtin function. */
+  private StatementNode createBuiltinInit(String name, int slot) {
+    // We'll create a BuiltinInitNode that stores the builtin at the given slot
+    return new net.starlark.truffle.nodes.builtin.BuiltinInitNode(language, name, slot);
+  }
+
   /** Parse a complete file and return the root statement node. */
   public StatementNode parseFile() {
     List<StatementNode> statements = new ArrayList<>();
+
+    // Initialize builtins first
+    statements.addAll(initializeBuiltins());
 
     while (current.kind != TokenKind.EOF) {
       if (current.kind == TokenKind.NEWLINE) {
