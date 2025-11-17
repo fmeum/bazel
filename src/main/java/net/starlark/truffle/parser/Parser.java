@@ -21,6 +21,11 @@ import net.starlark.truffle.nodes.controlflow.BreakNode;
 import net.starlark.truffle.nodes.controlflow.ContinueNode;
 import net.starlark.truffle.nodes.controlflow.ForNode;
 import net.starlark.truffle.nodes.controlflow.IfNode;
+import net.starlark.truffle.nodes.controlflow.ReturnNode;
+import net.starlark.truffle.nodes.function.FunctionCallNode;
+import net.starlark.truffle.nodes.function.FunctionDefNode;
+import net.starlark.truffle.nodes.function.FunctionRootNode;
+import net.starlark.truffle.values.StarlarkFunction;
 import net.starlark.truffle.nodes.logical.AndNode;
 import net.starlark.truffle.nodes.logical.NotNodeGen;
 import net.starlark.truffle.nodes.logical.OrNode;
@@ -37,12 +42,14 @@ import java.util.Map;
 public final class Parser {
   private final Lexer lexer;
   private Token current;
-  private final FrameDescriptor.Builder frameBuilder;
-  private final Map<String, Integer> locals;
+  private FrameDescriptor.Builder frameBuilder;  // Non-final to allow swapping for functions
+  private Map<String, Integer> locals;  // Non-final to allow swapping for functions
+  private final net.starlark.truffle.TruffleStarlarkLanguage language;
 
-  public Parser(Lexer lexer, FrameDescriptor.Builder frameBuilder) {
+  public Parser(Lexer lexer, FrameDescriptor.Builder frameBuilder, net.starlark.truffle.TruffleStarlarkLanguage language) {
     this.lexer = lexer;
     this.frameBuilder = frameBuilder;
+    this.language = language;
     this.locals = new HashMap<>();
     advance();
   }
@@ -64,6 +71,16 @@ public final class Parser {
 
   /** Parse a single statement. */
   private StatementNode parseStatement() {
+    // Function definition
+    if (current.kind == TokenKind.DEF) {
+      return parseFunctionDef();
+    }
+
+    // Return statement
+    if (current.kind == TokenKind.RETURN) {
+      return parseReturnStatement();
+    }
+
     // If statement
     if (current.kind == TokenKind.IF) {
       return parseIfStatement();
@@ -519,7 +536,10 @@ public final class Parser {
       return LenBuiltinNodeGen.create(args.get(0));
     }
 
-    throw new ParseException("Unknown function: " + functionName, current);
+    // User-defined function - read from variable and call
+    int functionSlot = getOrCreateLocal(functionName);
+    ExpressionNode functionNode = ReadLocalVariableNodeGen.create(functionSlot);
+    return FunctionCallNode.create(functionNode, args.toArray(new ExpressionNode[0]));
   }
 
   /** Create a range() builtin call. */
@@ -533,6 +553,118 @@ public final class Parser {
     } else {
       throw new ParseException("range() takes 1, 2, or 3 arguments, got " + args.size(), current);
     }
+  }
+
+  /** Parse function definition: def name(params): body */
+  private StatementNode parseFunctionDef() {
+    expect(TokenKind.DEF);
+
+    // Parse function name
+    if (current.kind != TokenKind.IDENTIFIER) {
+      throw new ParseException("Expected function name after 'def'", current);
+    }
+    String functionName = (String) current.value;
+    advance();
+
+    // Parse parameters
+    expect(TokenKind.LPAREN);
+    List<String> params = new ArrayList<>();
+    if (current.kind != TokenKind.RPAREN) {
+      if (current.kind != TokenKind.IDENTIFIER) {
+        throw new ParseException("Expected parameter name", current);
+      }
+      params.add((String) current.value);
+      advance();
+
+      while (current.kind == TokenKind.COMMA) {
+        advance();
+        if (current.kind == TokenKind.RPAREN) {
+          break;  // Trailing comma
+        }
+        if (current.kind != TokenKind.IDENTIFIER) {
+          throw new ParseException("Expected parameter name", current);
+        }
+        params.add((String) current.value);
+        advance();
+      }
+    }
+    expect(TokenKind.RPAREN);
+    expect(TokenKind.COLON);
+    consumeNewlineOrEof();
+
+    // Create new frame descriptor builder for function body
+    FrameDescriptor.Builder funcFrameBuilder = FrameDescriptor.newBuilder();
+    Map<String, Integer> funcLocals = new HashMap<>();
+
+    // Add slots for parameters and store their indices
+    if (!params.isEmpty()) {
+      int firstParamSlot = funcFrameBuilder.addSlots(params.size(), FrameSlotKind.Illegal);
+      for (int i = 0; i < params.size(); i++) {
+        funcLocals.put(params.get(i), firstParamSlot + i);
+      }
+    }
+
+    // Save current parser state
+    Map<String, Integer> savedLocals = this.locals;
+    FrameDescriptor.Builder savedFrameBuilder = this.frameBuilder;
+
+    // Parse function body with function's frame
+    try {
+      // Swap to function's frame context
+      this.locals = funcLocals;
+      this.frameBuilder = funcFrameBuilder;
+
+      // Parse the function body (simple block for now)
+      StatementNode functionBody = parseSimpleBlock();
+
+      // Build the function's frame descriptor (using function's frame builder)
+      FrameDescriptor funcFrameDescriptor = funcFrameBuilder.build();
+
+      // Create FunctionRootNode
+      FunctionRootNode functionRootNode = new FunctionRootNode(
+          language,
+          funcFrameDescriptor,
+          functionName,
+          params.size(),
+          functionBody);
+
+      // Create CallTarget from the RootNode
+      com.oracle.truffle.api.CallTarget callTarget = functionRootNode.getCallTarget();
+
+      // Create StarlarkFunction
+      StarlarkFunction function = new StarlarkFunction(
+          functionName,
+          params.toArray(new String[0]),
+          callTarget);
+
+      // Restore parser state BEFORE adding function to module scope
+      this.locals = savedLocals;
+      this.frameBuilder = savedFrameBuilder;
+
+      // Store function in module-level scope
+      int functionSlot = getOrCreateLocal(functionName);
+
+      return new FunctionDefNode(functionSlot, function);
+
+    } catch (Exception e) {
+      // Restore parser state on error
+      this.locals = savedLocals;
+      this.frameBuilder = savedFrameBuilder;
+      throw e;
+    }
+  }
+
+  /** Parse return statement: return [expression] */
+  private StatementNode parseReturnStatement() {
+    expect(TokenKind.RETURN);
+
+    ExpressionNode valueNode = null;
+    if (current.kind != TokenKind.NEWLINE && current.kind != TokenKind.EOF) {
+      valueNode = parseExpression();
+    }
+
+    consumeNewlineOrEof();
+    return new ReturnNode(valueNode);
   }
 
   /** Get or create a frame slot for a local variable. */

@@ -35,7 +35,7 @@ public final class TruffleStarlarkRootNode extends RootNode {
   @Child private StatementNode body;
 
   public TruffleStarlarkRootNode(TruffleStarlarkLanguage language, Source source) {
-    this(language, source, parseAndBuildDescriptor(source));
+    this(language, source, parseAndBuildDescriptor(language, source));
   }
 
   private TruffleStarlarkRootNode(TruffleStarlarkLanguage language, Source source, ParseResult parseResult) {
@@ -54,11 +54,11 @@ public final class TruffleStarlarkRootNode extends RootNode {
     }
   }
 
-  private static ParseResult parseAndBuildDescriptor(Source source) {
+  private static ParseResult parseAndBuildDescriptor(TruffleStarlarkLanguage language, Source source) {
     String code = source.getCharacters().toString();
     Lexer lexer = new Lexer(code);
     FrameDescriptor.Builder builder = FrameDescriptor.newBuilder();
-    Parser parser = new Parser(lexer, builder);
+    Parser parser = new Parser(lexer, builder, language);
     StatementNode body = parser.parseFile();
     return new ParseResult(builder.build(), body);
   }
