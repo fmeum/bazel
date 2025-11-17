@@ -232,6 +232,10 @@ maven.install(
         "org.threeten:threeten-extra:1.5.0",
         "org.tukaani:xz:1.9",
         "org.yaml:snakeyaml:2.0",
+        # Truffle dependencies for Starlark Truffle implementation
+        "org.graalvm.polyglot:polyglot:24.1.1",
+        "org.graalvm.truffle:truffle-api:24.1.1",
+        "org.graalvm.truffle:truffle-dsl-processor:24.1.1",
         # The following jars are for testing.
         # junit is not test only due to //src/java_tools/junitrunner/java/com/google/testing/junit/junit4:runner,
         # and hamcrest is a dependency of junit.
