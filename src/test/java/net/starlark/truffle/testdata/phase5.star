@@ -37,3 +37,24 @@ def no_return(x):
   y = x * 2
 
 result = no_return(5)
+
+---
+
+# Function with multiple statements
+def compute_multi(x):
+  y = x * 2
+  z = y + 10
+  return z
+
+value = compute_multi(5)
+
+---
+
+# Function with local variables
+def calculate(a, b):
+  sum = a + b
+  product = a * b
+  result = sum + product
+  return result
+
+answer = calculate(3, 4)

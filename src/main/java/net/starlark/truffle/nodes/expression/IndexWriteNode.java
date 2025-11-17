@@ -4,6 +4,7 @@ import com.oracle.truffle.api.dsl.NodeChild;
 import com.oracle.truffle.api.dsl.Specialization;
 import com.oracle.truffle.api.nodes.NodeInfo;
 import net.starlark.truffle.nodes.ExpressionNode;
+import net.starlark.truffle.values.DictValue;
 import net.starlark.truffle.values.StarlarkList;
 
 /** Node for indexed assignment: obj[index] = value. */
@@ -28,6 +29,12 @@ public abstract class IndexWriteNode extends ExpressionNode {
     } else {
       throw new IndexOutOfBoundsException("list index out of range: " + index);
     }
+    return value;
+  }
+
+  @Specialization
+  protected Object writeDict(DictValue dict, Object key, Object value) {
+    dict.put(key, value);
     return value;
   }
 }

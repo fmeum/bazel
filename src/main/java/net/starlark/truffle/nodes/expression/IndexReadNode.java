@@ -8,6 +8,7 @@ import com.oracle.truffle.api.interop.UnsupportedMessageException;
 import com.oracle.truffle.api.library.CachedLibrary;
 import com.oracle.truffle.api.nodes.NodeInfo;
 import net.starlark.truffle.nodes.ExpressionNode;
+import net.starlark.truffle.values.DictValue;
 import net.starlark.truffle.values.StarlarkList;
 
 /** Node for indexing operations: obj[index]. */
@@ -19,6 +20,11 @@ public abstract class IndexReadNode extends ExpressionNode {
   @Specialization
   protected Object readList(StarlarkList list, long index) {
     return list.get((int) index);
+  }
+
+  @Specialization
+  protected Object readDict(DictValue dict, Object key) {
+    return dict.get(key);
   }
 
   @Specialization(guards = "interop.hasArrayElements(object)")

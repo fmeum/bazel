@@ -263,6 +263,75 @@ public final class Parser {
     return parseStatement();
   }
 
+  /** Parse an indented block of statements (for functions, loops, if statements). */
+  private StatementNode parseIndentedBlock() {
+    // Expect current token to be after colon and newline
+    // Parse multiple statements at the same indentation level
+
+    List<StatementNode> statements = new ArrayList<>();
+
+    // Parse first statement to establish block indent level
+    statements.add(parseStatement());
+
+    // Continue parsing statements at the same level
+    while (true) {
+      // Skip blank lines (NEWLINEs)
+      while (current.kind == TokenKind.NEWLINE) {
+        advance();
+      }
+
+      // Check if we're at the end of the block
+      if (current.kind == TokenKind.EOF ||
+          current.kind == TokenKind.ELIF ||
+          current.kind == TokenKind.ELSE ||
+          isStatementEnd()) {
+        break;
+      }
+
+      statements.add(parseStatement());
+    }
+
+    if (statements.size() == 1) {
+      return statements.get(0);
+    }
+    return new BlockNode(statements.toArray(new StatementNode[0]));
+  }
+
+  /** Check if we're at the end of a block (heuristic-based). */
+  private boolean isStatementEnd() {
+    // End of block if we see a dedent-like pattern:
+    // Check if the current token appears to be at the start of a line (column 0)
+    // by looking at whether it's a top-level construct
+    if (current.kind == TokenKind.DEF ||
+        current.kind == TokenKind.IDENTIFIER ||
+        current.kind == TokenKind.IF ||
+        current.kind == TokenKind.FOR) {
+      // Check if this is at column 0 by checking the character before the token
+      return isAtLineStart(current.start);
+    }
+    return false;
+  }
+
+  /** Check if a position is at the start of a line (column 0). */
+  private boolean isAtLineStart(int pos) {
+    if (pos == 0) return true;
+
+    // Look backwards to find the last newline
+    // Return true only if there's a newline immediately before (no spaces/tabs)
+    String source = lexer.getSource();
+    for (int i = pos - 1; i >= 0; i--) {
+      char c = source.charAt(i);
+      if (c == '\n') {
+        // Found newline - check if there are any spaces/tabs between it and pos
+        return (i == pos - 1); // True only if newline is immediately before pos
+      }
+      if (c != ' ' && c != '\t') {
+        return false; // Found non-whitespace before newline
+      }
+    }
+    return true; // Reached start of file
+  }
+
   /** Parse an expression. */
   private ExpressionNode parseExpression() {
     return parseOrExpression();
@@ -415,6 +484,9 @@ public final class Parser {
       case LBRACKET:
         return parseListLiteral();
 
+      case LBRACE:
+        return parseDictLiteral();
+
       default:
         throw new ParseException("Unexpected token: " + current.kind, current);
     }
@@ -441,6 +513,37 @@ public final class Parser {
     expect(TokenKind.RBRACKET);
 
     return new ListLiteralNode(elements.toArray(new ExpressionNode[0]));
+  }
+
+  /** Parse dict literal: {k1: v1, k2: v2, ...} */
+  private ExpressionNode parseDictLiteral() {
+    expect(TokenKind.LBRACE);
+
+    List<ExpressionNode> keys = new ArrayList<>();
+    List<ExpressionNode> values = new ArrayList<>();
+
+    if (current.kind != TokenKind.RBRACE) {
+      // Parse first key: value pair
+      keys.add(parseExpression());
+      expect(TokenKind.COLON);
+      values.add(parseExpression());
+
+      while (current.kind == TokenKind.COMMA) {
+        advance();
+        if (current.kind == TokenKind.RBRACE) {
+          break;  // Trailing comma
+        }
+        keys.add(parseExpression());
+        expect(TokenKind.COLON);
+        values.add(parseExpression());
+      }
+    }
+
+    expect(TokenKind.RBRACE);
+
+    return new DictLiteralNode(
+        keys.toArray(new ExpressionNode[0]),
+        values.toArray(new ExpressionNode[0]));
   }
 
   /** Parse postfix operations (indexing, calls, etc.). */
@@ -597,8 +700,9 @@ public final class Parser {
     Map<String, Integer> funcLocals = new HashMap<>();
 
     // Add slots for parameters and store their indices
+    int firstParamSlot = 0;
     if (!params.isEmpty()) {
-      int firstParamSlot = funcFrameBuilder.addSlots(params.size(), FrameSlotKind.Illegal);
+      firstParamSlot = funcFrameBuilder.addSlots(params.size(), FrameSlotKind.Illegal);
       for (int i = 0; i < params.size(); i++) {
         funcLocals.put(params.get(i), firstParamSlot + i);
       }
@@ -614,8 +718,8 @@ public final class Parser {
       this.locals = funcLocals;
       this.frameBuilder = funcFrameBuilder;
 
-      // Parse the function body (simple block for now)
-      StatementNode functionBody = parseSimpleBlock();
+      // Parse the function body (multiple statements)
+      StatementNode functionBody = parseIndentedBlock();
 
       // Build the function's frame descriptor (using function's frame builder)
       FrameDescriptor funcFrameDescriptor = funcFrameBuilder.build();
@@ -626,6 +730,7 @@ public final class Parser {
           funcFrameDescriptor,
           functionName,
           params.size(),
+          firstParamSlot,
           functionBody);
 
       // Create CallTarget from the RootNode

@@ -12,6 +12,7 @@ import net.starlark.truffle.values.NoneValue;
 public final class FunctionRootNode extends RootNode {
   private final String functionName;
   private final int parameterCount;
+  private final int firstParamSlot;
   @Child private StatementNode body;
 
   public FunctionRootNode(
@@ -19,10 +20,12 @@ public final class FunctionRootNode extends RootNode {
       FrameDescriptor frameDescriptor,
       String functionName,
       int parameterCount,
+      int firstParamSlot,
       StatementNode body) {
     super(language, frameDescriptor);
     this.functionName = functionName;
     this.parameterCount = parameterCount;
+    this.firstParamSlot = firstParamSlot;
     this.body = body;
   }
 
@@ -37,9 +40,9 @@ public final class FunctionRootNode extends RootNode {
           arguments.length + " were given");
     }
 
-    // Write arguments to frame slots (slots 0..n-1 are for parameters)
+    // Write arguments to frame slots (starting from firstParamSlot)
     for (int i = 0; i < arguments.length; i++) {
-      frame.setObject(i, arguments[i]);
+      frame.setObject(firstParamSlot + i, arguments[i]);
     }
 
     try {

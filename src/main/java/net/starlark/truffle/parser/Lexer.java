@@ -52,6 +52,10 @@ public final class Lexer {
     this.indentStack.push(0); // Initial indentation level
   }
 
+  public String getSource() {
+    return source;
+  }
+
   public Token nextToken() {
     // Return queued tokens first (for OUTDENT sequences)
     if (!tokenQueue.isEmpty()) {
