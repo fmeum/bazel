@@ -24,6 +24,7 @@ import net.starlark.truffle.nodes.controlflow.ContinueNode;
 import net.starlark.truffle.nodes.controlflow.ForNode;
 import net.starlark.truffle.nodes.controlflow.IfNode;
 import net.starlark.truffle.nodes.controlflow.ReturnNode;
+import net.starlark.truffle.nodes.controlflow.WhileNode;
 import net.starlark.truffle.nodes.function.FunctionCallNode;
 import net.starlark.truffle.nodes.function.FunctionDefNode;
 import net.starlark.truffle.nodes.function.FunctionRootNode;
@@ -114,6 +115,11 @@ public final class Parser {
     // For loop
     if (current.kind == TokenKind.FOR) {
       return parseForStatement();
+    }
+
+    // While loop
+    if (current.kind == TokenKind.WHILE) {
+      return parseWhileStatement();
     }
 
     // Break statement
@@ -279,6 +285,22 @@ public final class Parser {
     WriteLocalValueNode writeVar = new WriteLocalValueNode(slot);
 
     return new ForNode(iterable, writeVar, body);
+  }
+
+  /** Parse while loop: while condition: body */
+  private StatementNode parseWhileStatement() {
+    expect(TokenKind.WHILE);
+
+    // Parse condition
+    ExpressionNode condition = parseExpression();
+
+    expect(TokenKind.COLON);
+    consumeNewlineOrEof();
+
+    // Parse body
+    StatementNode body = parseSimpleBlock();
+
+    return new WhileNode(condition, body);
   }
 
   /** Parse a simple block of statements (for Phase 2, just a single statement). */

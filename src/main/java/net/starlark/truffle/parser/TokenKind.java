@@ -47,6 +47,7 @@ public enum TokenKind {
   PASS("pass"),
   RETURN("return"),
   TRUE("True"),
+  WHILE("while"),
 
   // Operators
   PLUS("+"),
