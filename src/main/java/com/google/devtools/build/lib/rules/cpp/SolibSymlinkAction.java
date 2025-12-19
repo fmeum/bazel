@@ -98,7 +98,7 @@ public final class SolibSymlinkAction extends AbstractAction {
     SpawnLogContext logContext = actionExecutionContext.getContext(SpawnLogContext.class);
     if (logContext != null) {
       try {
-        logContext.logSymlinkAction(this);
+        logContext.logAliasAction(this);
       } catch (IOException e) {
         String message =
             String.format(

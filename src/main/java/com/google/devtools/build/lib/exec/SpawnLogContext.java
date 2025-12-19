@@ -91,13 +91,13 @@ public abstract class SpawnLogContext implements ActionContext {
   }
 
   /**
-   * Logs an internal symlink action, which is not backed by a spawn.
+   * Logs an internal symlink or copy action, which is not backed by a spawn.
    *
    * <p>May be called concurrently.
    *
    * @param action the action to log
    */
-  public abstract void logSymlinkAction(AbstractAction action)
+  public abstract void logAliasAction(AbstractAction action)
       throws IOException, InterruptedException;
 
   /** Finishes writing the log and performs any required post-processing. */

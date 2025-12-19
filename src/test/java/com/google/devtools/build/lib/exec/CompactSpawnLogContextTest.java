@@ -136,7 +136,7 @@ public final class CompactSpawnLogContextTest extends SpawnLogContextTestBase {
         SymlinkAction.toArtifact(owner, source, target, "Creating symlink");
 
     SpawnLogContext context = createSpawnLogContext();
-    context.logSymlinkAction(symlinkAction);
+    context.logAliasAction(symlinkAction);
 
     var entries = closeAndReadCompactLog(context);
     assertThat(entries)

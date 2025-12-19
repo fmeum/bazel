@@ -301,14 +301,14 @@ public class CompactSpawnLogContext extends SpawnLogContext {
   }
 
   @Override
-  public void logSymlinkAction(AbstractAction action) throws IOException, InterruptedException {
-    try (SilentCloseable c = Profiler.instance().profile(SPAWN_LOG, "logSymlinkAction")) {
-      ExecLogEntry.SymlinkAction.Builder builder = ExecLogEntry.SymlinkAction.newBuilder();
+  public void logAliasAction(AbstractAction action) throws IOException, InterruptedException {
+    try (SilentCloseable c = Profiler.instance().profile(SPAWN_LOG, "logAliasAction")) {
+      ExecLogEntry.AliasAction.Builder builder = ExecLogEntry.AliasAction.newBuilder();
 
       Artifact input = action.getPrimaryInput();
       if (input == null) {
-        // Symlinks to absolute paths are only used by FDO and not worth logging as they can be
-        // treated just like source files.
+        // This has to be a symlink to an absolut path, which is only used by FDO and not worth
+        // logging as they can be treated just like source files.
         return;
       }
       builder.setInputPath(internalToUnicode(input.getExecPathString()));

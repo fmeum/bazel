@@ -418,13 +418,14 @@ message ExecLogEntry {
     SpawnMetrics metrics = 18;
   }
 
-  // A symlink action, which is not backed by a spawn.
-  message SymlinkAction {
+  // A symlink or copy action, which is not backed by a spawn.
+  message AliasAction {
     // The path of the input file of the action (i.e., the target of the
-    // symlink).
+    // symlink or source of the copy).
     string input_path = 1;
 
-    // The path of the output file of the action (i.e., the symlink itself).
+    // The path of the output file of the action (i.e., the symlink or the copy
+    // itself).
     string output_path = 2;
 
     // The canonical label of the target this action belongs to.
@@ -446,7 +447,7 @@ message ExecLogEntry {
     UnresolvedSymlink unresolved_symlink = 5;
     InputSet input_set = 6;
     Spawn spawn = 7;
-    SymlinkAction symlink_action = 8;
+    AliasAction symlink_action = 8;
     SymlinkEntrySet symlink_entry_set = 9;
     RunfilesTree runfiles_tree = 10;
   }

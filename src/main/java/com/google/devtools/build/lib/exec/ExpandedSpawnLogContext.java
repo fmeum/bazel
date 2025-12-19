@@ -304,8 +304,8 @@ public class ExpandedSpawnLogContext extends SpawnLogContext {
   }
 
   @Override
-  public void logSymlinkAction(AbstractAction action) {
-    // The expanded log does not report symlink actions.
+  public void logAliasAction(AbstractAction action) {
+    // The expanded log does not report alias actions.
   }
 
   @Override
