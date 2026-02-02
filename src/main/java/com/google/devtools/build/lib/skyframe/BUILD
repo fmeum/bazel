@@ -2687,6 +2687,7 @@ java_library(
     srcs = [
         "SkyfocusExecutor.java",
         "SkyframeFocuser.java",
+        "SkygraftExecutor.java",
     ],
     deps = [
         ":directory_listing_state_value",

@@ -112,6 +112,7 @@ import com.google.devtools.build.skyframe.ErrorInfo;
 import com.google.devtools.build.skyframe.EvaluationProgressReceiver;
 import com.google.devtools.build.skyframe.EvaluationResult;
 import com.google.devtools.build.skyframe.GroupedDeps;
+import com.google.devtools.build.skyframe.InMemoryMemoizingEvaluator;
 import com.google.devtools.build.skyframe.NodeEntry.DirtyType;
 import com.google.devtools.build.skyframe.SkyFunction.Environment;
 import com.google.devtools.build.skyframe.SkyKey;
@@ -229,7 +230,8 @@ public final class SkyframeBuildView {
    */
   @Nullable
   private String describeConfigurationDifference(
-      BuildOptions oldOptions, BuildOptions newOptions, int maxDifferencesToShow) {
+      BuildOptions oldOptions, BuildOptions newOptions, int maxDifferencesToShow)
+      throws InterruptedException {
     OptionsDiff diff = OptionsDiff.diff(oldOptions, newOptions);
 
     ImmutableSet<OptionDefinition> nativeCacheInvalidatingDifferences =
@@ -239,6 +241,12 @@ public final class SkyframeBuildView {
       // The configuration may have changed, but none of the changes required a cache reset. For
       // example, test trimming was turned on and a test option changed. In this case, nothing needs
       // to be done.
+      return null;
+    }
+    if (nativeCacheInvalidatingDifferences.isEmpty()) {
+      SkygraftExecutor.execute(
+          (InMemoryMemoizingEvaluator) skyframeExecutor.getEvaluator(),
+          diff.getChangedStarlarkOptions());
       return null;
     }
 
@@ -305,7 +313,7 @@ public final class SkyframeBuildView {
       int maxDifferencesToShow,
       boolean allowAnalysisCacheDiscards,
       Optional<AdditionalConfigurationChangeEvent> additionalConfigurationChangeEvent)
-      throws InvalidConfigurationException {
+      throws InvalidConfigurationException, InterruptedException {
     if (this.configuration == null) {
       return false;
     }
