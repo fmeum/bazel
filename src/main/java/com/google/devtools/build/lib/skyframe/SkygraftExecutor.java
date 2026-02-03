@@ -1,5 +1,6 @@
 package com.google.devtools.build.lib.skyframe;
 
+import static com.google.common.base.Preconditions.checkState;
 import static java.util.concurrent.TimeUnit.MINUTES;
 import static java.util.stream.Collectors.joining;
 
@@ -57,7 +58,6 @@ public final class SkygraftExecutor extends AbstractQueueVisitor {
   private void run() throws InterruptedException {
     // Phase 1: Find affected leaves and kick off upward propagation
     LongAdder allCtsCount = new LongAdder();
-    LongAdder undoneCtsCount = new LongAdder();
     Set<ConfiguredTargetKey> directlyAffectedCts = Sets.newConcurrentHashSet();
     evaluator
         .getInMemoryGraph()
@@ -65,10 +65,7 @@ public final class SkygraftExecutor extends AbstractQueueVisitor {
             node -> {
               if (node.getKey() instanceof ConfiguredTargetKey ctk) {
                 allCtsCount.increment();
-                if (!node.isDone()) {
-                  undoneCtsCount.increment();
-                  return;
-                }
+                checkState(node.isDone(), "ConfiguredTargetKey not done: %s", ctk);
                 if (isDirectlyAffected(node)) {
                   directlyAffectedCts.add(ctk);
                   markAffectedAndPropagateUp(ctk);
@@ -79,12 +76,12 @@ public final class SkygraftExecutor extends AbstractQueueVisitor {
     //    evaluator.delete(key -> key instanceof ConfiguredTargetKey ctk &&
     // affectedCts.contains(ctk));
     System.err.printf(
-        "Options %s changed; affected %d targets (%d directly) out of %d total (%d not done): %s%n",
+        "Options %s changed; affected %d targets (%d directly) out of %d total (%.2f%% grafted): %s%n",
         starlarkOptions,
         affectedCts.size(),
         directlyAffectedCts.size(),
         allCtsCount.sum(),
-        undoneCtsCount.sum(),
+        100.0 * affectedCts.size() / allCtsCount.sum(),
         directlyAffectedCts.stream()
             .map(ConfiguredTargetKey::getLabel)
             .map(Label::toString)
@@ -102,9 +99,6 @@ public final class SkygraftExecutor extends AbstractQueueVisitor {
   }
 
   private boolean isDirectlyAffected(InMemoryNodeEntry entry) {
-    if (!entry.isDone()) {
-      return false;
-    }
     if (!(entry.getValue() instanceof RuleConfiguredTargetValue rctv)) {
       return false;
     }
