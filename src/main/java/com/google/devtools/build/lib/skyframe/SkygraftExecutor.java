@@ -88,6 +88,8 @@ public final class SkygraftExecutor extends AbstractQueueVisitor {
         directlyAffectedCts.stream()
             .map(ConfiguredTargetKey::getLabel)
             .map(Label::toString)
+            .sorted()
+            .distinct()
             .collect(joining(", ")));
     //    affectedCts.stream()
     //        .map(
