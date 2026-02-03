@@ -4,21 +4,22 @@ import static java.util.concurrent.TimeUnit.MINUTES;
 import static java.util.stream.Collectors.joining;
 
 import com.google.common.collect.ImmutableSet;
+import com.google.common.collect.Lists;
 import com.google.common.collect.Sets;
 import com.google.devtools.build.lib.analysis.config.ConfigMatchingProvider;
-import com.google.devtools.build.lib.analysis.config.StarlarkDefinedConfigTransition;
 import com.google.devtools.build.lib.analysis.config.transitions.TransitionFactory;
 import com.google.devtools.build.lib.analysis.starlark.StarlarkRuleTransitionProvider;
 import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.concurrent.AbstractQueueVisitor;
 import com.google.devtools.build.lib.concurrent.ErrorClassifier;
+import com.google.devtools.build.lib.packages.Attribute;
 import com.google.devtools.build.lib.packages.NoSuchTargetException;
 import com.google.devtools.build.lib.packages.Rule;
 import com.google.devtools.build.lib.packages.RuleClassId;
-import com.google.devtools.build.lib.packages.RuleTransitionData;
 import com.google.devtools.build.skyframe.InMemoryMemoizingEvaluator;
 import com.google.devtools.build.skyframe.InMemoryNodeEntry;
 import com.google.devtools.build.skyframe.SkyKey;
+import java.util.Collections;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -30,6 +31,7 @@ public final class SkygraftExecutor extends AbstractQueueVisitor {
   private final InMemoryMemoizingEvaluator evaluator;
   private final ImmutableSet<Label> starlarkOptions;
   private final Set<ConfiguredTargetKey> affectedCts = Sets.newConcurrentHashSet();
+
   private final Map<RuleClassId, Boolean> affectedRuleClasses = new ConcurrentHashMap<>();
 
   private SkygraftExecutor(
@@ -55,6 +57,7 @@ public final class SkygraftExecutor extends AbstractQueueVisitor {
   private void run() throws InterruptedException {
     // Phase 1: Find affected leaves and kick off upward propagation
     LongAdder allCtsCount = new LongAdder();
+    LongAdder undoneCtsCount = new LongAdder();
     Set<ConfiguredTargetKey> directlyAffectedCts = Sets.newConcurrentHashSet();
     evaluator
         .getInMemoryGraph()
@@ -62,6 +65,10 @@ public final class SkygraftExecutor extends AbstractQueueVisitor {
             node -> {
               if (node.getKey() instanceof ConfiguredTargetKey ctk) {
                 allCtsCount.increment();
+                if (!node.isDone()) {
+                  undoneCtsCount.increment();
+                  return;
+                }
                 if (isDirectlyAffected(node)) {
                   directlyAffectedCts.add(ctk);
                   markAffectedAndPropagateUp(ctk);
@@ -72,15 +79,24 @@ public final class SkygraftExecutor extends AbstractQueueVisitor {
     //    evaluator.delete(key -> key instanceof ConfiguredTargetKey ctk &&
     // affectedCts.contains(ctk));
     System.err.printf(
-        "Options %s changed; affected %d targets (%d directly) out of %d total: %s%n",
+        "Options %s changed; affected %d targets (%d directly) out of %d total (%d not done): %s%n",
         starlarkOptions,
         affectedCts.size(),
         directlyAffectedCts.size(),
         allCtsCount.sum(),
+        undoneCtsCount.sum(),
         directlyAffectedCts.stream()
             .map(ConfiguredTargetKey::getLabel)
             .map(Label::toString)
             .collect(joining(", ")));
+    //    affectedCts.stream()
+    //        .map(
+    //            ct ->
+    //                "%s (%s)".formatted(ct.getLabel(),
+    // ct.getConfigurationKey().getOptions().shortId()))
+    //        .sorted()
+    //        .distinct()
+    //        .forEach(System.err::println);
   }
 
   private boolean isDirectlyAffected(InMemoryNodeEntry entry) {
@@ -101,25 +117,12 @@ public final class SkygraftExecutor extends AbstractQueueVisitor {
         && configMatchingProvider.flagSettingsMap().containsKey(label)) {
       return true;
     }
-    //    // Any select condition that depends on a changed Starlark option.
-    //    for (var configCondition : rctv.getConfiguredTarget().getConfigConditions().values()) {
-    //      if (!Collections.disjoint(configCondition.flagSettingsMap().keySet(), starlarkOptions))
-    // {
-    //        return true;
-    //      }
-    //    }
-    //    boolean isRuleClassAffected =
-    //        affectedRuleClasses.computeIfAbsent(
-    //            rctv.getConfiguredTarget().getRuleClassId(),
-    //            unused -> {
-    //              var ruleClass = getRule(rctv).getRuleClassObject();
-    //              return ruleClass.getBuildSetting() != null;
-    //            });
-    //    if (isRuleClassAffected) {
-    //      return true;
-    //    }
-    var rule = getRule(rctv);
-    rule.getRuleClassObject().getTransitionFactory()
+    // TODO: Handle transitions gracefully.
+    if (hasAffectedTransition(rctv)) {
+      throw new UnsupportedOperationException(
+          "Transitions not yet supported in Skygraft analysis: " + label);
+    }
+    return false;
   }
 
   private Rule getRule(RuleConfiguredTargetValue rctv) {
@@ -134,11 +137,32 @@ public final class SkygraftExecutor extends AbstractQueueVisitor {
     return rule;
   }
 
+  private boolean hasAffectedTransition(RuleConfiguredTargetValue rctv) {
+    return affectedRuleClasses.computeIfAbsent(
+        rctv.getConfiguredTarget().getRuleClassId(),
+        unused -> {
+          var ruleClass = getRule(rctv).getRuleClassObject();
+          if (isAffectedTransition(ruleClass.getTransitionFactory())) {
+            return true;
+          }
+          for (Attribute attribute : ruleClass.getAttributeProvider().getAttributes()) {
+            if (isAffectedTransition(attribute.getTransitionFactory())) {
+              return true;
+            }
+          }
+          return false;
+        });
+  }
+
   private boolean isAffectedTransition(@Nullable TransitionFactory<?> transitionFactory) {
     if (!(transitionFactory instanceof StarlarkRuleTransitionProvider starlarkTransitionFactory)) {
       return false;
     }
-    return starlarkTransitionFactory.getStarlarkDefinedConfigTransitionForTesting().getInputs()
+    return !Collections.disjoint(
+        Lists.transform(
+            starlarkTransitionFactory.getStarlarkDefinedConfigTransitionForTesting().getInputs(),
+            Label::parseCanonicalUnchecked),
+        starlarkOptions);
   }
 
   private void markAffectedAndPropagateUp(SkyKey key) {
