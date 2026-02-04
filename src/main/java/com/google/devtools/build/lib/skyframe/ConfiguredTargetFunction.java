@@ -269,6 +269,11 @@ public final class ConfiguredTargetFunction implements SkyFunction {
               /* postFetch= */ () -> maybeAcquireSemaphoreWithLogging(key));
     }
 
+    ConfiguredTargetKey graftedKey = SkygraftExecutor.maybeGraft(configuredTargetKey);
+    if (graftedKey != null) {
+      return compute(graftedKey, env);
+    }
+
     RemoteAnalysisCachingDependenciesProvider remoteCachingDependencies =
         cachingDependenciesSupplier.get();
     if (remoteCachingDependencies.isRetrievalEnabled()) {

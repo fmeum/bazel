@@ -5,7 +5,6 @@ import static java.util.concurrent.TimeUnit.MINUTES;
 import static java.util.stream.Collectors.joining;
 
 import com.google.common.collect.ImmutableMap;
-import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Lists;
 import com.google.common.collect.Sets;
 import com.google.devtools.build.lib.analysis.config.BuildOptions;
@@ -18,16 +17,12 @@ import com.google.devtools.build.lib.concurrent.ErrorClassifier;
 import com.google.devtools.build.lib.packages.Attribute;
 import com.google.devtools.build.lib.packages.NoSuchTargetException;
 import com.google.devtools.build.lib.packages.Rule;
+import com.google.devtools.build.lib.packages.RuleClass;
 import com.google.devtools.build.lib.packages.RuleClassId;
 import com.google.devtools.build.lib.skyframe.config.BuildConfigurationKey;
-import com.google.devtools.build.skyframe.InMemoryGraph;
 import com.google.devtools.build.skyframe.InMemoryNodeEntry;
 import com.google.devtools.build.skyframe.MemoizingEvaluator;
-import com.google.devtools.build.skyframe.NodeEntry;
-import com.google.devtools.build.skyframe.QueryableGraph.Reason;
 import com.google.devtools.build.skyframe.SkyKey;
-import com.google.devtools.build.skyframe.SkyValue;
-import com.google.devtools.build.skyframe.Version;
 import java.util.Collections;
 import java.util.Map;
 import java.util.Set;
@@ -37,8 +32,10 @@ import javax.annotation.Nullable;
 
 public final class SkygraftExecutor extends AbstractQueueVisitor {
 
+  private static final Set<ConfiguredTargetKey> unaffectedCts = Sets.newConcurrentHashSet();
+  private static Map<Label, Object> newStarlarkOptionValues = ImmutableMap.of();
+
   private final MemoizingEvaluator evaluator;
-  private final Map<Label, Object> newStarlarkOptionValues;
   private final Set<ConfiguredTargetKey> affectedCts = Sets.newConcurrentHashSet();
 
   private final Map<RuleClassId, Boolean> affectedRuleClasses = new ConcurrentHashMap<>();
@@ -56,7 +53,8 @@ public final class SkygraftExecutor extends AbstractQueueVisitor {
         /* poolName= */ "skygraft",
         ErrorClassifier.DEFAULT);
     this.evaluator = evaluator;
-    this.newStarlarkOptionValues = newStarlarkOptionValues;
+    SkygraftExecutor.unaffectedCts.clear();
+    SkygraftExecutor.newStarlarkOptionValues = newStarlarkOptionValues;
   }
 
   /**
@@ -71,6 +69,25 @@ public final class SkygraftExecutor extends AbstractQueueVisitor {
       MemoizingEvaluator evaluator, Map<Label, Object> changedStarlarkOptionValues)
       throws InterruptedException {
     new SkygraftExecutor(evaluator, changedStarlarkOptionValues).run();
+  }
+
+  @Nullable
+  public static ConfiguredTargetKey maybeGraft(ConfiguredTargetKey key) {
+    if (!unaffectedCts.contains(key)) {
+      return null;
+    }
+    BuildConfigurationKey oldConfigKey = key.getConfigurationKey();
+    if (oldConfigKey == null) {
+      return key;
+    }
+    BuildOptions oldOptions = oldConfigKey.getOptions();
+    BuildOptions newOptions =
+        oldOptions.toBuilder().addStarlarkOptions(newStarlarkOptionValues).build();
+    if (oldOptions.equals(newOptions)) {
+      return key;
+    }
+    BuildConfigurationKey newConfigKey = BuildConfigurationKey.create(newOptions);
+    return key.toBuilder().setConfigurationKey(newConfigKey).build();
   }
 
   private void run() throws InterruptedException {
@@ -97,13 +114,13 @@ public final class SkygraftExecutor extends AbstractQueueVisitor {
         .getInMemoryGraph()
         .parallelForEach(
             node -> {
-              if (node.getKey() instanceof ConfiguredTargetKey ctk
-                  && !affectedCts.contains(ctk)
-                  && node.isDone()) {
-                execute(() -> graftValue(ctk, node));
+              if (node.getKey() instanceof ConfiguredTargetKey ctk && !affectedCts.contains(ctk)) {
+                unaffectedCts.add(ctk);
               }
             });
     awaitQuiescence(true);
+
+    evaluator.delete(affectedCts::contains);
 
     System.err.printf(
         "Options %s changed; affected %d targets (%d directly) out of %d total; grafted %d (%.2f%%): %s%n",
@@ -111,80 +128,14 @@ public final class SkygraftExecutor extends AbstractQueueVisitor {
         affectedCts.size(),
         directlyAffectedCts.size(),
         allCtsCount.sum(),
-        graftedCount.sum(),
-        100.0 * graftedCount.sum() / allCtsCount.sum(),
+        unaffectedCts.size(),
+        100.0 * unaffectedCts.size() / allCtsCount.sum(),
         directlyAffectedCts.stream()
             .map(ConfiguredTargetKey::getLabel)
             .map(Label::toString)
             .sorted()
             .distinct()
             .collect(joining(", ")));
-  }
-
-  /**
-   * Copies the value from an existing ConfiguredTargetKey to a new key with updated BuildOptions.
-   */
-  private void graftValue(ConfiguredTargetKey oldCtk, InMemoryNodeEntry oldEntry) {
-    BuildConfigurationKey oldConfigKey = oldCtk.getConfigurationKey();
-    if (oldConfigKey == null) {
-      // Null configuration (e.g., for source files) - no need to graft
-      return;
-    }
-
-    // Create new BuildOptions with updated starlark option values
-    BuildOptions oldOptions = oldConfigKey.getOptions();
-    BuildOptions newOptions =
-        oldOptions.toBuilder().addStarlarkOptions(newStarlarkOptionValues).build();
-
-    // If options are the same (no actual change), skip
-    if (oldOptions.equals(newOptions)) {
-      return;
-    }
-
-    // Create new configuration key and ConfiguredTargetKey
-    BuildConfigurationKey newConfigKey = BuildConfigurationKey.create(newOptions);
-    ConfiguredTargetKey newCtk = oldCtk.toBuilder().setConfigurationKey(newConfigKey).build();
-
-    // Get the value from the old entry (including any metadata).
-    SkyValue value = oldEntry.getValueMaybeWithMetadata();
-    if (value == null) {
-      return;
-    }
-
-    // Inject the value into the graph under the new key
-    try {
-      injectValue(newCtk, value);
-      graftedCount.increment();
-    } catch (InterruptedException e) {
-      Thread.currentThread().interrupt();
-    }
-  }
-
-  /**
-   * Injects a value into the graph under the given key. The node is created with no dependencies
-   * and marked as done.
-   */
-  private void injectValue(ConfiguredTargetKey key, SkyValue value) throws InterruptedException {
-    InMemoryGraph graph = evaluator.getInMemoryGraph();
-
-    // Create the node if it doesn't exist
-    graph.createIfAbsentBatch(null, Reason.OTHER, ImmutableSet.of(key));
-    NodeEntry entry = graph.get(null, Reason.OTHER, key);
-    if (entry == null) {
-      return;
-    }
-
-    // If already done, don't overwrite
-    if (entry.isDone()) {
-      return;
-    }
-
-    // Initialize the node for evaluation
-    entry.addReverseDepAndCheckIfDone(null);
-    entry.markRebuilding();
-
-    // Set the value - this marks the node as done
-    entry.setValue(value, Version.constant(), null);
   }
 
   private boolean isDirectlyAffected(InMemoryNodeEntry entry) {
@@ -210,29 +161,27 @@ public final class SkygraftExecutor extends AbstractQueueVisitor {
     return false;
   }
 
-  private Rule getRule(RuleConfiguredTargetValue rctv) {
+  private Rule getRule(RuleConfiguredTargetValue rctv) throws InterruptedException {
     var label = rctv.getConfiguredTarget().getLabel();
-    PackageValue packageValue;
+    var packageValue = (PackageValue) evaluator.getExistingValue(label.getPackageIdentifier());
     try {
-      packageValue = (PackageValue) evaluator.getExistingValue(label.getPackageIdentifier());
-    } catch (InterruptedException e) {
-      Thread.currentThread().interrupt();
-      throw new IllegalStateException("Interrupted during Skygraft analysis: " + label, e);
-    }
-    Rule rule;
-    try {
-      rule = packageValue.getPackageoid().getTarget(label.getName()).getAssociatedRule();
+      return packageValue.getPackageoid().getTarget(label.getName()).getAssociatedRule();
     } catch (NoSuchTargetException e) {
       throw new IllegalStateException("Target disappeared during Skygraft analysis: " + label, e);
     }
-    return rule;
   }
 
   private boolean hasAffectedTransition(RuleConfiguredTargetValue rctv) {
     return affectedRuleClasses.computeIfAbsent(
         rctv.getConfiguredTarget().getRuleClassId(),
         unused -> {
-          var ruleClass = getRule(rctv).getRuleClassObject();
+          RuleClass ruleClass;
+          try {
+            ruleClass = getRule(rctv).getRuleClassObject();
+          } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return false;
+          }
           if (isAffectedTransition(ruleClass.getTransitionFactory())) {
             return true;
           }
