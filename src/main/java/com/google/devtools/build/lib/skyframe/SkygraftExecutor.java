@@ -23,6 +23,8 @@ import com.google.devtools.build.lib.skyframe.config.BuildConfigurationKey;
 import com.google.devtools.build.skyframe.InMemoryNodeEntry;
 import com.google.devtools.build.skyframe.MemoizingEvaluator;
 import com.google.devtools.build.skyframe.SkyKey;
+import java.time.Duration;
+import java.time.Instant;
 import java.util.Collections;
 import java.util.Map;
 import java.util.Set;
@@ -92,6 +94,7 @@ public final class SkygraftExecutor extends AbstractQueueVisitor {
 
   private void run() throws InterruptedException {
     // Phase 1: Find affected leaves and kick off upward propagation
+    var start = Instant.now();
     LongAdder allCtsCount = new LongAdder();
     Set<ConfiguredTargetKey> directlyAffectedCts = Sets.newConcurrentHashSet();
     evaluator
@@ -123,13 +126,14 @@ public final class SkygraftExecutor extends AbstractQueueVisitor {
     evaluator.delete(affectedCts::contains);
 
     System.err.printf(
-        "Options %s changed; affected %d targets (%d directly) out of %d total; grafted %d (%.2f%%): %s%n",
+        "Options %s changed; affected %d targets (%d directly) out of %d total; grafted %d (%.2f%%) in %.3fs: %s%n",
         newStarlarkOptionValues.keySet(),
         affectedCts.size(),
         directlyAffectedCts.size(),
         allCtsCount.sum(),
         unaffectedCts.size(),
         100.0 * unaffectedCts.size() / allCtsCount.sum(),
+        Duration.between(start, Instant.now()).toNanos() / 1_000_000_000.0,
         directlyAffectedCts.stream()
             .map(ConfiguredTargetKey::getLabel)
             .map(Label::toString)
