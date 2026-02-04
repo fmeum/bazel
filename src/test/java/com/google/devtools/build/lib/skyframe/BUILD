@@ -671,6 +671,20 @@ java_test(
 )
 
 java_test(
+    name = "SkygraftExecutorTest",
+    srcs = ["SkygraftExecutorTest.java"],
+    deps = [
+        "//src/main/java/com/google/devtools/build/lib/actions:action_lookup_key",
+        "//src/main/java/com/google/devtools/build/lib/cmdline",
+        "//src/main/java/com/google/devtools/build/lib/skyframe:configured_target_key",
+        "//src/test/java/com/google/devtools/build/lib/analysis/util",
+        "//third_party:guava",
+        "//third_party:junit4",
+        "//third_party:truth",
+    ],
+)
+
+java_test(
     name = "ProjectFunctionTest",
     srcs = ["ProjectFunctionTest.java"],
     deps = [

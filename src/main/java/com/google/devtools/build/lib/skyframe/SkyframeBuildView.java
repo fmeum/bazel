@@ -20,6 +20,8 @@ import static com.google.devtools.build.lib.buildeventstream.BuildEventIdUtil.co
 import static com.google.devtools.build.lib.skyframe.ConflictCheckingMode.NONE;
 import static com.google.devtools.build.lib.skyframe.ConflictCheckingMode.UPON_CONFIGURED_OBJECT_CREATION;
 import static com.google.devtools.build.lib.skyframe.ConflictCheckingMode.WITH_TRAVERSAL;
+import static java.util.stream.Collectors.toMap;
+
 
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Joiner;
@@ -29,6 +31,7 @@ import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Iterables;
+import com.google.common.collect.Maps;
 import com.google.common.collect.Sets;
 import com.google.common.collect.Streams;
 import com.google.common.eventbus.EventBus;
@@ -244,9 +247,10 @@ public final class SkyframeBuildView {
       return null;
     }
     if (nativeCacheInvalidatingDifferences.isEmpty()) {
-      SkygraftExecutor.execute(
-          (InMemoryMemoizingEvaluator) skyframeExecutor.getEvaluator(),
-          diff.getChangedStarlarkOptions());
+      // Build a map of changed starlark options to their new values
+      Map<Label, Object> newStarlarkOptionValues =
+          Maps.asMap(diff.getChangedStarlarkOptions(), newOptions.getStarlarkOptions()::get);
+      SkygraftExecutor.execute(skyframeExecutor.getEvaluator(), newStarlarkOptionValues);
       return null;
     }
 
