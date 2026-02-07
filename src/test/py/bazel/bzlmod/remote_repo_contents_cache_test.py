@@ -440,7 +440,7 @@ class RemoteRepoContentsCacheTest(test_base.TestBase):
             'repo = use_repo_rule("//:repo.bzl", "repo")',
             'repo(name = "my_repo")',
             'other_repo = use_repo_rule("//:other_repo.bzl", "other_repo")',
-            'other_repo(name = "other", build_file = "@my_repo//:BUILD")',
+            'other_repo(name = "other", build_file = "@my_repo//:BUILD", link_file = "@my_repo//:link.txt")',
         ],
     )
     self.ScratchFile('BUILD.bazel')
@@ -461,10 +461,11 @@ class RemoteRepoContentsCacheTest(test_base.TestBase):
         [
             'def _other_repo_impl(rctx):',
             '  rctx.file("BUILD", rctx.read(rctx.path(rctx.attr.build_file)))',
+            '  rctx.read(rctx.path(rctx.attr.link_file))',
             '  return rctx.repo_metadata()',
             (
                 'other_repo = repository_rule(_other_repo_impl,'
-                ' attrs={"build_file": attr.label()})'
+                ' attrs={"build_file": attr.label(), "link_file": attr.label()})'
             ),
         ],
     )
