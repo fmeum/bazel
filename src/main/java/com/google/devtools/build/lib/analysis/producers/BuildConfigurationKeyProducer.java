@@ -35,7 +35,6 @@ import com.google.devtools.build.skyframe.SkyValue;
 import com.google.devtools.build.skyframe.state.StateMachine;
 import com.google.devtools.build.skyframe.state.StateMachine.ValueOrExceptionSink;
 import com.google.devtools.common.options.OptionsParsingException;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -113,7 +112,11 @@ public final class BuildConfigurationKeyProducer<C>
   private BuildOptions baselineConfiguration;
 
   BuildConfigurationKeyProducer(
-      ResultSink<C> sink, StateMachine runAfter, C context, BuildConfigurationKeyValue.Key key, Label label) {
+      ResultSink<C> sink,
+      StateMachine runAfter,
+      C context,
+      BuildConfigurationKeyValue.Key key,
+      Label label) {
     this.sink = sink;
     this.runAfter = runAfter;
     this.context = context;
@@ -178,12 +181,8 @@ public final class BuildConfigurationKeyProducer<C>
       return this::possiblyApplyScopes;
     }
 
-    List<Label> flagsNeedingScopeLookup =
-        new ArrayList<>(postPlatformProcessedOptions.getStarlarkOptions().keySet());
-
     BuildOptionsScopeValue.Key buildOptionsScopeValueKey =
-        BuildOptionsScopeValue.Key.create(
-            this.postPlatformProcessedOptions, flagsNeedingScopeLookup);
+        BuildOptionsScopeValue.Key.create(this.postPlatformProcessedOptions);
     tasks.lookUp(buildOptionsScopeValueKey, (Consumer<SkyValue>) this);
     return this::possiblyApplyScopes;
   }
@@ -261,7 +260,7 @@ public final class BuildConfigurationKeyProducer<C>
     }
 
     boolean shouldApplyScopes =
-        buildOptionsScopeValue.getFullyResolvedScopes().values().stream()
+        buildOptionsScopeValue.scopes().values().stream()
             .anyMatch(scope -> scope.getScopeType().scopeType().equals(Scope.ScopeType.PROJECT));
 
     if (!shouldApplyScopes) {
@@ -316,7 +315,7 @@ public final class BuildConfigurationKeyProducer<C>
     Preconditions.checkNotNull(label);
 
     // If there are no scopes, short circuit.
-    if (buildOptionsScopeValue.getFullyResolvedScopes().isEmpty()) {
+    if (buildOptionsScopeValue.scopes().isEmpty()) {
       return transitionedOptions;
     }
 
@@ -324,10 +323,9 @@ public final class BuildConfigurationKeyProducer<C>
     boolean flagsRemoved = false;
     boolean flagsResetToBaseline = false;
     BuildOptions.Builder optionsBuilder = transitionedOptions.toBuilder();
-    for (Map.Entry<Label, Object> flagEntry :
-        transitionedOptions.getStarlarkOptions().entrySet()) {
+    for (Map.Entry<Label, Object> flagEntry : transitionedOptions.getStarlarkOptions().entrySet()) {
       Label flagLabel = flagEntry.getKey();
-      Scope scope = buildOptionsScopeValue.getFullyResolvedScopes().get(flagLabel);
+      Scope scope = buildOptionsScopeValue.scopes().get(flagLabel);
       if (scope != null && scope.getScopeType().scopeType().equals(Scope.ScopeType.PROJECT)) {
         Object flagValue = flagEntry.getValue();
         Object baselineValue = baselineConfiguration.getStarlarkOptions().get(flagLabel);

@@ -22,38 +22,20 @@ import com.google.devtools.build.skyframe.SkyFunctionName;
 import com.google.devtools.build.skyframe.SkyKey;
 import com.google.devtools.build.skyframe.SkyValue;
 import java.util.LinkedHashMap;
-import java.util.List;
-import java.util.Objects;
 
-/** SkyValue returned by {@link BuildOptionsScopeFunction}. */
-public final class BuildOptionsScopeValue implements SkyValue {
+/**
+ * SkyValue returned by {@link com.google.devtools.build.lib.skyframe.BuildOptionsScopeFunction}.
+ */
+public record BuildOptionsScopeValue(LinkedHashMap<Label, Scope> scopes) implements SkyValue {
 
-  private final LinkedHashMap<Label, Scope> fullyResolvedScopes;
-
-  /** Key for {@link BuildOptionsScopeValue}. */
+  /** Key for {@link com.google.devtools.build.lib.skyframe.BuildOptionsScopeValue}. */
   @ThreadSafety.Immutable
   @AutoCodec
-  public static final class Key implements SkyKey {
+  public record Key(BuildOptions buildOptions) implements SkyKey {
     private static final SkyKeyInterner<Key> interner = SkyKey.newInterner();
-    private final BuildOptions buildOptions;
-    private final List<Label> flagsNeedingScopeLookup;
 
-    public Key(BuildOptions buildOptions, List<Label> flagsNeedingScopeLookup) {
-      this.buildOptions = buildOptions;
-      this.flagsNeedingScopeLookup = flagsNeedingScopeLookup;
-    }
-
-    public static Key create(BuildOptions buildOptions, List<Label> flagsNeedingScopeLookup) {
-      return interner.intern(new Key(buildOptions, flagsNeedingScopeLookup));
-    }
-
-    public BuildOptions getBuildOptions() {
-      return buildOptions;
-    }
-
-    /** Returns the list of flags that need scope resolution via Skyframe. */
-    public List<Label> getFlagsWithIncompleteScopeInfo() {
-      return flagsNeedingScopeLookup;
+    public static Key create(BuildOptions buildOptions) {
+      return interner.intern(new Key(buildOptions));
     }
 
     @Override
@@ -65,42 +47,16 @@ public final class BuildOptionsScopeValue implements SkyValue {
     public SkyFunctionName functionName() {
       return SkyFunctions.BUILD_OPTIONS_SCOPE;
     }
-
-    @Override
-    public boolean equals(Object o) {
-      if (this == o) {
-        return true;
-      }
-      if (o == null || getClass() != o.getClass()) {
-        return false;
-      }
-      Key key = (Key) o;
-      return Objects.equals(buildOptions, key.buildOptions)
-          && Objects.equals(flagsNeedingScopeLookup, key.flagsNeedingScopeLookup);
-    }
-
-    @Override
-    public int hashCode() {
-      return Objects.hash(buildOptions, flagsNeedingScopeLookup);
-    }
-  }
-
-  public static BuildOptionsScopeValue create(
-      BuildOptions inputBuildOptions,
-      List<Label> scopedFlags,
-      LinkedHashMap<Label, Scope> fullyResolvedScopes) {
-    return new BuildOptionsScopeValue(fullyResolvedScopes);
-  }
-
-  public BuildOptionsScopeValue(LinkedHashMap<Label, Scope> fullyResolvedScopes) {
-    this.fullyResolvedScopes = fullyResolvedScopes;
   }
 
   /**
-   * Returns the map of {@link Label} of scoped flags to their {@link Scope} including both {@link
-   * Scope.ScopeType} and {@link Scope.ScopeDefinition}.
+   * Returns the map of {@link com.google.devtools.build.lib.cmdline.Label} of scoped flags to their
+   * {@link com.google.devtools.build.lib.analysis.config.Scope} including both {@link
+   * com.google.devtools.build.lib.analysis.config.Scope.ScopeType} and {@link
+   * com.google.devtools.build.lib.analysis.config.Scope.ScopeDefinition}.
    */
-  public LinkedHashMap<Label, Scope> getFullyResolvedScopes() {
-    return fullyResolvedScopes;
+  @Override
+  public LinkedHashMap<Label, Scope> scopes() {
+    return scopes;
   }
 }

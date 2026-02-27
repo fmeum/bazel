@@ -16,8 +16,8 @@ package com.google.devtools.build.lib.skyframe;
 import static com.google.devtools.build.lib.server.FailureDetails.TargetPatterns.Code.DEPENDENCY_NOT_FOUND;
 
 import com.google.common.collect.ImmutableMultimap;
-import com.google.common.collect.Lists;
 import com.google.devtools.build.lib.analysis.ProjectResolutionException;
+import com.google.devtools.build.lib.analysis.config.BuildOptions;
 import com.google.devtools.build.lib.analysis.config.Scope;
 import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.cmdline.Label.PackageContext;
@@ -60,7 +60,7 @@ public final class BuildOptionsScopeFunction implements SkyFunction {
       throws BuildOptionsScopeFunctionException, InterruptedException {
     BuildOptionsScopeValue.Key key = (BuildOptionsScopeValue.Key) skyKey.argument();
     LinkedHashMap<Label, Scope> scopes = new LinkedHashMap<>();
-    for (Label scopedFlag : key.getFlagsWithIncompleteScopeInfo()) {
+    for (Label scopedFlag : key.buildOptions().getStarlarkOptions().keySet()) {
       Target target = getTarget(env, scopedFlag, scopedFlag.getPackageIdentifier());
       if (target == null) {
         return null;
@@ -123,10 +123,7 @@ public final class BuildOptionsScopeFunction implements SkyFunction {
                   : new Scope.ScopeDefinition(projectValue.getDefaultProjectDirectories())));
     }
 
-    return BuildOptionsScopeValue.create(
-        key.getBuildOptions(),
-        Lists.newArrayList(projectValueSkyKeysMap.keySet()),
-        scopes);
+    return new BuildOptionsScopeValue(scopes);
   }
 
   /** TODO: b/384057043 - deduplicate this method in several places in a follow up CL. */

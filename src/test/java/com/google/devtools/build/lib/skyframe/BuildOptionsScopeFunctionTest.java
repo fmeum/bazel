@@ -161,7 +161,7 @@ public final class BuildOptionsScopeFunctionTest extends BuildViewTestCase {
     var unused =
         assertThat(
             buildOptionsScopeValue
-                .getFullyResolvedScopes()
+                .scopes()
                 .equals(
                     ImmutableMap.of(
                         Label.parseCanonical("//test_flags:foo"),
@@ -206,7 +206,7 @@ public final class BuildOptionsScopeFunctionTest extends BuildViewTestCase {
     var unused =
         assertThat(
             buildOptionsScopeValue
-                .getFullyResolvedScopes()
+                .scopes()
                 .equals(
                     ImmutableMap.of(
                         Label.parseCanonical("//test_flags:foo"),
