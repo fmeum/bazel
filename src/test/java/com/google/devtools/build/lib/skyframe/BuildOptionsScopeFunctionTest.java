@@ -147,13 +147,8 @@ public final class BuildOptionsScopeFunctionTest extends BuildViewTestCase {
     BuildOptions buildOptions =
         createBuildOptions("--//test_flags:foo=True", "--//test_flags:bar=True");
 
-    // All starlark flags need scope lookup since scope is no longer stored in BuildOptions.
-    ImmutableList<Label> scopedFlags =
-        ImmutableList.of(
-            Label.parseCanonical("//test_flags:foo"),
-            Label.parseCanonical("//test_flags:bar"));
     BuildOptionsScopeValue.Key key =
-        BuildOptionsScopeValue.Key.create(buildOptions, scopedFlags);
+        BuildOptionsScopeValue.Key.create(buildOptions.getStarlarkOptions().keySet());
 
     BuildOptionsScopeValue buildOptionsScopeValue = executeFunction(key);
 
@@ -198,9 +193,8 @@ public final class BuildOptionsScopeFunctionTest extends BuildViewTestCase {
 
     setBuildLanguageOptions("--experimental_enable_scl_dialect=true");
     BuildOptions buildOptionsWithoutScopes = createBuildOptions("--//test_flags:foo=True");
-    ImmutableList<Label> scopedFlags = ImmutableList.of(Label.parseCanonical("//test_flags:foo"));
     BuildOptionsScopeValue.Key key =
-        BuildOptionsScopeValue.Key.create(buildOptionsWithoutScopes, scopedFlags);
+        BuildOptionsScopeValue.Key.create(buildOptionsWithoutScopes.getStarlarkOptions().keySet());
 
     BuildOptionsScopeValue buildOptionsScopeValue = executeFunction(key);
     var unused =

@@ -13,7 +13,7 @@
 // limitations under the License.
 package com.google.devtools.build.lib.skyframe;
 
-import com.google.devtools.build.lib.analysis.config.BuildOptions;
+import com.google.common.collect.ImmutableSet;
 import com.google.devtools.build.lib.analysis.config.Scope;
 import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.concurrent.ThreadSafety;
@@ -31,11 +31,11 @@ public record BuildOptionsScopeValue(LinkedHashMap<Label, Scope> scopes) impleme
   /** Key for {@link com.google.devtools.build.lib.skyframe.BuildOptionsScopeValue}. */
   @ThreadSafety.Immutable
   @AutoCodec
-  public record Key(BuildOptions buildOptions) implements SkyKey {
+  public record Key(ImmutableSet<Label> starlarkOptions) implements SkyKey {
     private static final SkyKeyInterner<Key> interner = SkyKey.newInterner();
 
-    public static Key create(BuildOptions buildOptions) {
-      return interner.intern(new Key(buildOptions));
+    public static Key create(ImmutableSet<Label> starlarkOptions) {
+      return interner.intern(new Key(starlarkOptions));
     }
 
     @Override
@@ -46,6 +46,11 @@ public record BuildOptionsScopeValue(LinkedHashMap<Label, Scope> scopes) impleme
     @Override
     public SkyFunctionName functionName() {
       return SkyFunctions.BUILD_OPTIONS_SCOPE;
+    }
+
+    @Override
+    public int hashCode() {
+      return System.identityHashCode(this);
     }
   }
 

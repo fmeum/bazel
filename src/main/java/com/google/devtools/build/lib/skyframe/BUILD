@@ -259,7 +259,6 @@ java_library(
         "//src/main/java/com/google/devtools/build/lib/analysis:resolved_toolchain_context",
         "//src/main/java/com/google/devtools/build/lib/analysis:starlark/starlark_build_settings_details_value",
         "//src/main/java/com/google/devtools/build/lib/analysis:starlark/starlark_transition",
-        "//src/main/java/com/google/devtools/build/lib/analysis/config:scope",
         "//src/main/java/com/google/devtools/build/lib/analysis:target_and_configuration",
         "//src/main/java/com/google/devtools/build/lib/analysis:target_configured_event",
         "//src/main/java/com/google/devtools/build/lib/analysis:template_expansion_exception",
@@ -282,6 +281,7 @@ java_library(
         "//src/main/java/com/google/devtools/build/lib/analysis/config:invalid_configuration_exception",
         "//src/main/java/com/google/devtools/build/lib/analysis/config:options_diff",
         "//src/main/java/com/google/devtools/build/lib/analysis/config:run_under",
+        "//src/main/java/com/google/devtools/build/lib/analysis/config:scope",
         "//src/main/java/com/google/devtools/build/lib/analysis/config:starlark_exec_transition_loader",
         "//src/main/java/com/google/devtools/build/lib/analysis/config:starlark_transition_cache",
         "//src/main/java/com/google/devtools/build/lib/analysis/config/transitions:configuration_transition",
@@ -1280,6 +1280,7 @@ java_library(
         "//src/main/java/com/google/devtools/build/lib/concurrent:thread_safety",
         "//src/main/java/com/google/devtools/build/lib/skyframe/serialization/autocodec",
         "//src/main/java/com/google/devtools/build/skyframe:skyframe-objects",
+        "//third_party:guava",
     ],
 )
 

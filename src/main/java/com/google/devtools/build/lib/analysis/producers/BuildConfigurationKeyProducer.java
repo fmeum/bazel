@@ -182,7 +182,8 @@ public final class BuildConfigurationKeyProducer<C>
     }
 
     BuildOptionsScopeValue.Key buildOptionsScopeValueKey =
-        BuildOptionsScopeValue.Key.create(this.postPlatformProcessedOptions);
+        BuildOptionsScopeValue.Key.create(
+            this.postPlatformProcessedOptions.getStarlarkOptions().keySet());
     tasks.lookUp(buildOptionsScopeValueKey, (Consumer<SkyValue>) this);
     return this::possiblyApplyScopes;
   }

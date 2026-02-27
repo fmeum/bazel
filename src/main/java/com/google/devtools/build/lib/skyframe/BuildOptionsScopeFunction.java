@@ -60,7 +60,7 @@ public final class BuildOptionsScopeFunction implements SkyFunction {
       throws BuildOptionsScopeFunctionException, InterruptedException {
     BuildOptionsScopeValue.Key key = (BuildOptionsScopeValue.Key) skyKey.argument();
     LinkedHashMap<Label, Scope> scopes = new LinkedHashMap<>();
-    for (Label scopedFlag : key.buildOptions().getStarlarkOptions().keySet()) {
+    for (Label scopedFlag : key.starlarkOptions()) {
       Target target = getTarget(env, scopedFlag, scopedFlag.getPackageIdentifier());
       if (target == null) {
         return null;
