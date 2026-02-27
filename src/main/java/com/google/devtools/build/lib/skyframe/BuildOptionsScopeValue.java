@@ -47,11 +47,6 @@ public record BuildOptionsScopeValue(LinkedHashMap<Label, Scope> scopes) impleme
     public SkyFunctionName functionName() {
       return SkyFunctions.BUILD_OPTIONS_SCOPE;
     }
-
-    @Override
-    public int hashCode() {
-      return System.identityHashCode(this);
-    }
   }
 
   /**
