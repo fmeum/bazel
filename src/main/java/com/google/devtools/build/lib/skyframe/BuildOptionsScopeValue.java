@@ -31,11 +31,18 @@ public record BuildOptionsScopeValue(LinkedHashMap<Label, Scope> scopes) impleme
   /** Key for {@link com.google.devtools.build.lib.skyframe.BuildOptionsScopeValue}. */
   @ThreadSafety.Immutable
   @AutoCodec
-  public record Key(ImmutableSet<Label> starlarkOptions) implements SkyKey {
+  public static final class Key implements SkyKey {
     private static final SkyKeyInterner<Key> interner = SkyKey.newInterner();
+    private final ImmutableSet<Label> starlarkOptionLabels;
+    private final int hashCode;
 
-    public static Key create(ImmutableSet<Label> starlarkOptions) {
-      return interner.intern(new Key(starlarkOptions));
+    public Key(ImmutableSet<Label> starlarkOptionLabels) {
+      this.starlarkOptionLabels = starlarkOptionLabels;
+      this.hashCode = starlarkOptionLabels.hashCode();
+    }
+
+    public static Key create(ImmutableSet<Label> starlarkOptionLabels) {
+      return interner.intern(new Key(starlarkOptionLabels));
     }
 
     @Override
@@ -46,6 +53,28 @@ public record BuildOptionsScopeValue(LinkedHashMap<Label, Scope> scopes) impleme
     @Override
     public SkyFunctionName functionName() {
       return SkyFunctions.BUILD_OPTIONS_SCOPE;
+    }
+
+    public ImmutableSet<Label> starlarkOptionLabels() {
+      return starlarkOptionLabels;
+    }
+
+    @Override
+    public boolean equals(Object obj) {
+      if (obj == this) {
+        return true;
+      }
+      return obj instanceof Key other && starlarkOptionLabels.equals(other.starlarkOptionLabels);
+    }
+
+    @Override
+    public int hashCode() {
+      return hashCode;
+    }
+
+    @Override
+    public String toString() {
+      return "Key[starlarkOptionLabels=%s]".formatted(starlarkOptionLabels);
     }
   }
 
