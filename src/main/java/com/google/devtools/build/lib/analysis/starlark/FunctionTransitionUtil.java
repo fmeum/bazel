@@ -252,7 +252,8 @@ public final class FunctionTransitionUtil {
     for (Scope.ScopeType scope : scopeTypeMap.values()) {
       if (scope.scopeType().startsWith(Scope.CUSTOM_EXEC_SCOPE_PREFIX)) {
         customExecReferencedFlags.add(
-            Label.parseCanonicalUnchecked(scope.scopeType().substring(7)));
+            Label.parseCanonicalUnchecked(
+                scope.scopeType().substring(Scope.CUSTOM_EXEC_SCOPE_PREFIX.length())));
       }
     }
 
@@ -317,7 +318,9 @@ public final class FunctionTransitionUtil {
                               0, pattern.lastIndexOf(CustomFlagConverter.SUBPACKAGES_SUFFIX))))) {
         ans.put(entry);
       } else if (scopeType.startsWith(Scope.CUSTOM_EXEC_SCOPE_PREFIX)) {
-        Label anotherFlag = Label.parseCanonicalUnchecked(scopeType.substring(7));
+        Label anotherFlag =
+            Label.parseCanonicalUnchecked(
+                scopeType.substring(Scope.CUSTOM_EXEC_SCOPE_PREFIX.length()));
         if (starlarkOptions.containsKey(anotherFlag)) {
           ans.put(entry.getKey(), starlarkOptions.get(anotherFlag));
         } else {

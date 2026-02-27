@@ -521,9 +521,7 @@ public final class BuildConfigurationValueTest extends ConfigurationTestCase {
                 "//test:flag_in_exec_config_set_to_another_value",
                 "target_value",
                 "//test:flag_in_exec_config_reference_another_flag_value",
-                "target_value",
-                "//test:another_flag",
-                "default"),
+                "target_value"),
             "--experimental_exclude_starlark_flags_from_exec_config="
                 + (propagateByDefault ? "false" : "true"));
 
