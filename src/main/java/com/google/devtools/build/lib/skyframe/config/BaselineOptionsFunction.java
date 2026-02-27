@@ -110,8 +110,7 @@ public final class BaselineOptionsFunction implements SkyFunction {
   @Nullable
   private static BuildOptions mapBuildOptions(Environment env, BuildOptions rawBaselineOptions)
       throws InterruptedException, BaselineOptionsFunctionException {
-    var bckvk =
-        BuildConfigurationKeyValue.Key.create(rawBaselineOptions);
+    var bckvk = BuildConfigurationKeyValue.Key.createForBaseline(rawBaselineOptions);
     try {
       var buildConfigurationKeyValue =
           (BuildConfigurationKeyValue)

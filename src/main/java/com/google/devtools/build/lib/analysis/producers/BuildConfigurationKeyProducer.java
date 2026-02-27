@@ -26,6 +26,7 @@ import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.skyframe.BuildOptionsScopeFunction.BuildOptionsScopeFunctionException;
 import com.google.devtools.build.lib.skyframe.BuildOptionsScopeValue;
 import com.google.devtools.build.lib.skyframe.config.BuildConfigurationKey;
+import com.google.devtools.build.lib.skyframe.config.BuildConfigurationKeyValue;
 import com.google.devtools.build.lib.skyframe.config.ParsedFlagsValue;
 import com.google.devtools.build.lib.skyframe.config.PlatformMappingException;
 import com.google.devtools.build.lib.skyframe.config.PlatformMappingValue;
@@ -101,6 +102,7 @@ public final class BuildConfigurationKeyProducer<C>
   private final StateMachine runAfter;
   private final C context;
   private final BuildOptions options;
+  private final boolean forBaseline;
   private final Label label;
 
   // -------------------- Internal State --------------------
@@ -111,11 +113,12 @@ public final class BuildConfigurationKeyProducer<C>
   private BuildOptions baselineConfiguration;
 
   BuildConfigurationKeyProducer(
-      ResultSink<C> sink, StateMachine runAfter, C context, BuildOptions options, Label label) {
+      ResultSink<C> sink, StateMachine runAfter, C context, BuildConfigurationKeyValue.Key key, Label label) {
     this.sink = sink;
     this.runAfter = runAfter;
     this.context = context;
-    this.options = options;
+    this.options = key.buildOptions();
+    this.forBaseline = key.forBaseline();
     this.label = label;
   }
 
@@ -171,11 +174,10 @@ public final class BuildConfigurationKeyProducer<C>
   private StateMachine findBuildOptionsScopes(Tasks tasks) {
     Preconditions.checkNotNull(this.postPlatformProcessedOptions);
     // including platform-based flags in skykey for scopes lookUp
-    if (postPlatformProcessedOptions.getStarlarkOptions().isEmpty()) {
+    if (postPlatformProcessedOptions.getStarlarkOptions().isEmpty() || forBaseline) {
       return this::possiblyApplyScopes;
     }
 
-    // All starlark flags need scope lookup since scope info is no longer stored in BuildOptions.
     List<Label> flagsNeedingScopeLookup =
         new ArrayList<>(postPlatformProcessedOptions.getStarlarkOptions().keySet());
 

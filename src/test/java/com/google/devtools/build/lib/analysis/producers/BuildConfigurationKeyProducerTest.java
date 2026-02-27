@@ -17,7 +17,6 @@ import static com.google.common.truth.Truth.assertThat;
 import static org.junit.Assert.assertThrows;
 
 import com.google.common.collect.ImmutableList;
-import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSortedSet;
 import com.google.devtools.build.lib.analysis.ConfiguredRuleClassProvider;
 import com.google.devtools.build.lib.analysis.config.BuildOptions;
@@ -32,6 +31,7 @@ import com.google.devtools.build.lib.skyframe.PrecomputedValue;
 import com.google.devtools.build.lib.skyframe.SequencedSkyframeExecutor;
 import com.google.devtools.build.lib.skyframe.config.BaselineOptionsFunction;
 import com.google.devtools.build.lib.skyframe.config.BuildConfigurationKey;
+import com.google.devtools.build.lib.skyframe.config.BuildConfigurationKeyValue;
 import com.google.devtools.build.lib.skyframe.config.PlatformMappingException;
 import com.google.devtools.build.lib.skyframe.toolchains.PlatformLookupUtil.InvalidPlatformException;
 import com.google.devtools.build.lib.testutil.TestRuleClassProvider;
@@ -546,7 +546,6 @@ public class BuildConfigurationKeyProducerTest extends ProducerTestCase {
                 .getStarlarkOptions()
                 .get(Label.parseCanonicalUnchecked("//out_of_scope_flag:baz")))
         .isNull();
-
   }
 
   @Test
@@ -571,7 +570,8 @@ public class BuildConfigurationKeyProducerTest extends ProducerTestCase {
         new ImmutableList.Builder<PrecomputedValue.Injected>()
             .add(
                 PrecomputedValue.injected(
-                    BaselineOptionsFunction.BASELINE_CONFIGURATION, defaultBuildOptionsBuilder.build()))
+                    BaselineOptionsFunction.BASELINE_CONFIGURATION,
+                    defaultBuildOptionsBuilder.build()))
             .addAll(analysisMock.getPrecomputedValues())
             .build());
 
@@ -644,7 +644,6 @@ public class BuildConfigurationKeyProducerTest extends ProducerTestCase {
                 .getStarlarkOptions()
                 .get(Label.parseCanonicalUnchecked("//out_of_scope_flag:baz")))
         .isEqualTo("baselineValue");
-
   }
 
   @Test
@@ -713,7 +712,12 @@ public class BuildConfigurationKeyProducerTest extends ProducerTestCase {
           BuildOptionsScopeFunctionException {
     Sink sink = new Sink();
     BuildConfigurationKeyProducer<String> producer =
-        new BuildConfigurationKeyProducer<>(sink, StateMachine.DONE, CONTEXT, options, label);
+        new BuildConfigurationKeyProducer<>(
+            sink,
+            StateMachine.DONE,
+            CONTEXT,
+            BuildConfigurationKeyValue.Key.create(options),
+            label);
     // Ignore the return value: sink will either return a result or re-throw whatever exception it
     // received from the producer.
     var unused = executeProducer(producer);
