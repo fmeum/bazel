@@ -13,6 +13,7 @@
 // limitations under the License.
 package com.google.devtools.build.lib.skyframe;
 
+import static com.google.devtools.build.lib.cmdline.LabelConstants.COMMAND_LINE_OPTION_PACKAGE_IDENTIFIER;
 import static com.google.devtools.build.lib.server.FailureDetails.TargetPatterns.Code.DEPENDENCY_NOT_FOUND;
 
 import com.google.common.collect.ImmutableMultimap;
@@ -74,9 +75,13 @@ public final class BuildOptionsScopeFunction implements SkyFunction {
         // have the --<another_flag_name> flag default value in the target config but also make sure
         // that it won't propagate to the exec config by setting the scope to "target".
         Label anotherFlag = Label.parseCanonicalUnchecked(scopeType.scopeType().substring(7));
-        Target anotherFlagTarget = getTarget(env, anotherFlag, scopedFlag.getPackageIdentifier());
-        if (anotherFlagTarget == null) {
-          return null;
+        // Native options (//command_line_option:*) are not build targets; their values are looked
+        // up directly from native options at transition time in FunctionTransitionUtil.
+        if (!anotherFlag.getPackageIdentifier().equals(COMMAND_LINE_OPTION_PACKAGE_IDENTIFIER)) {
+          Target anotherFlagTarget = getTarget(env, anotherFlag, scopedFlag.getPackageIdentifier());
+          if (anotherFlagTarget == null) {
+            return null;
+          }
         }
       }
     }
