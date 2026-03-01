@@ -13,12 +13,10 @@
 // limitations under the License.
 package com.google.devtools.build.lib.skyframe;
 
-import static com.google.devtools.build.lib.cmdline.LabelConstants.COMMAND_LINE_OPTION_PACKAGE_IDENTIFIER;
 import static com.google.devtools.build.lib.server.FailureDetails.TargetPatterns.Code.DEPENDENCY_NOT_FOUND;
 
 import com.google.common.collect.ImmutableMultimap;
 import com.google.devtools.build.lib.analysis.ProjectResolutionException;
-import com.google.devtools.build.lib.analysis.config.BuildOptions;
 import com.google.devtools.build.lib.analysis.config.Scope;
 import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.cmdline.Label.PackageContext;
@@ -43,8 +41,8 @@ import java.util.Map;
 import javax.annotation.Nullable;
 
 /**
- * SkyFunction that creates the {@link BuildOptionsScopeValue} for a given {@link BuildOptions}.
- * This SkyFunction is responsible for the following:
+ * SkyFunction that creates the {@link BuildOptionsScopeValue} for a given set of Starlark option
+ * labels. This SkyFunction is responsible for the following:
  *
  * <ul>
  *   <li>Resolving the {@link Scope.ScopeType} for each scoped flag if not already resolved.
@@ -68,22 +66,6 @@ public final class BuildOptionsScopeFunction implements SkyFunction {
       }
       Scope.ScopeType scopeType = getScopeType(target);
       scopes.put(scopedFlag, new Scope(scopeType, null));
-
-      if (scopeType.scopeType().startsWith(Scope.CUSTOM_EXEC_SCOPE_PREFIX)) {
-        // handling custom exec case with scope "exec:--<another_flag_name>".
-        // For example: --python_launcher=--host_python_launcher
-        // have the --<another_flag_name> flag default value in the target config but also make sure
-        // that it won't propagate to the exec config by setting the scope to "target".
-        Label anotherFlag = Label.parseCanonicalUnchecked(scopeType.scopeType().substring(7));
-        // Native options (//command_line_option:*) are not build targets; their values are looked
-        // up directly from native options at transition time in FunctionTransitionUtil.
-        if (!anotherFlag.getPackageIdentifier().equals(COMMAND_LINE_OPTION_PACKAGE_IDENTIFIER)) {
-          Target anotherFlagTarget = getTarget(env, anotherFlag, scopedFlag.getPackageIdentifier());
-          if (anotherFlagTarget == null) {
-            return null;
-          }
-        }
-      }
     }
 
     // get PROJECT.scl files for each scoped flag that is not universal
@@ -241,10 +223,6 @@ public final class BuildOptionsScopeFunction implements SkyFunction {
     }
 
     BuildOptionsScopeFunctionException(TargetParsingException cause) {
-      super(cause, Transience.PERSISTENT);
-    }
-
-    BuildOptionsScopeFunctionException(IllegalArgumentException cause) {
       super(cause, Transience.PERSISTENT);
     }
   }
