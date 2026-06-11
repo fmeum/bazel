@@ -35,6 +35,7 @@ import com.google.devtools.build.lib.cmdline.RepositoryName;
 import com.google.devtools.build.lib.events.Event;
 import com.google.devtools.build.lib.events.ExtendedEventHandler;
 import com.google.devtools.build.lib.events.Reporter;
+import com.google.devtools.build.lib.remote.RemoteActionFileSystem.RemoteInMemoryFileInfo;
 import com.google.devtools.build.lib.remote.common.BulkTransferException;
 import com.google.devtools.build.lib.remote.common.RemoteActionExecutionContext;
 import com.google.devtools.build.lib.remote.util.DigestUtil;
@@ -684,8 +685,10 @@ public final class RemoteExternalOverlayFileSystem extends FileSystem {
     private FileArtifactValue getMetadata(PathFragment path) throws IOException {
       var status = stat(path, /* followSymlinks= */ false);
       if (!status.isSymbolicLink()) {
-        return ((RemoteActionFileSystem.RemoteInMemoryFileInfo) status).getMetadata();
+        return ((RemoteInMemoryFileInfo) status).getMetadata();
       }
+      // Symlinks are planted verbatim during materialization, even if dangling, so their metadata
+      // intentionally doesn't resolve them.
       return FileArtifactValue.createForUnresolvedSymlink(externalFs.getPath(path));
     }
 
@@ -695,8 +698,7 @@ public final class RemoteExternalOverlayFileSystem extends FileSystem {
         return nativeFs.getInputStream(path);
       }
       var relativePath = path.relativeTo(externalDirectory);
-      var info =
-          (RemoteActionFileSystem.RemoteInMemoryFileInfo) stat(path, /* followSymlinks= */ true);
+      var info = (RemoteInMemoryFileInfo) stat(path, /* followSymlinks= */ true);
       reporter.post(
           new ExtendedEventHandler.FetchProgress() {
             @Override
@@ -764,8 +766,7 @@ public final class RemoteExternalOverlayFileSystem extends FileSystem {
 
     @Override
     public byte[] getDigest(PathFragment path) throws IOException {
-      var info =
-          (RemoteActionFileSystem.RemoteInMemoryFileInfo) stat(path, /* followSymlinks= */ true);
+      var info = (RemoteInMemoryFileInfo) stat(path, /* followSymlinks= */ true);
       return info.getMetadata().getDigest();
     }
 

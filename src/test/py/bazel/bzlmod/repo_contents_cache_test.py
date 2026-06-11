@@ -763,6 +763,79 @@ class RepoContentsCacheTest(test_base.TestBase):
     # by the replanting logic, so cross-repo symlinks prevent caching.
     self.doTestCachedRepoWithSymlinks(expect_cross_repo_cached=False)
 
+  def testRepoSymlinkIntoMainRepoResolvesViaExecroot(self):
+    # Regression test for https://github.com/bazelbuild/bazel/issues/29515:
+    # symlinks pointing into the main repo must not be replanted to relative
+    # paths going through external/_main. On Windows, where symlinks resolve
+    # using logical rather than physical paths, such a replanted symlink
+    # dangles when the repo is accessed through the execroot at
+    # <output_base>/execroot/_main/external/<repo>, as external/_main is not
+    # materialized there.
+    if self.IsWindows():
+      self.ScratchFile(
+          '.bazelrc',
+          ['startup --windows_enable_symlinks'],
+          mode='a',
+      )
+    self.ScratchFile(
+        'MODULE.bazel',
+        [
+            'repo = use_repo_rule("//:repo.bzl", "repo")',
+            'repo(name = "my_repo", marker = "//vendor/itoa:src/lib.rs")',
+        ],
+    )
+    self.ScratchFile('BUILD')
+    # Mirrors a Cargo path dependency vendored in the main workspace, which
+    # rules_rs symlinks into a generated crate repo.
+    self.ScratchFile('vendor/itoa/BUILD')
+    self.ScratchFile('vendor/itoa/src/lib.rs', ['fn itoa() {}'])
+    self.ScratchFile(
+        'repo.bzl',
+        [
+            'def _repo_impl(rctx):',
+            '  rctx.file("BUILD", "exports_files([\'src/lib.rs\'])")',
+            # Symlink a directory from the main repo into the repo.
+            '  rctx.symlink(rctx.path(rctx.attr.marker).dirname, "src")',
+            '  print("JUST FETCHED")',
+            '  return rctx.repo_metadata(reproducible=True)',
+            (
+                'repo = repository_rule(_repo_impl,'
+                ' attrs={"marker": attr.label()})'
+            ),
+        ],
+    )
+    self.ScratchFile(
+        'pkg/BUILD',
+        [
+            'genrule(',
+            '  name = "read_lib",',
+            '  srcs = ["@my_repo//:src/lib.rs"],',
+            '  outs = ["out.txt"],',
+            # The genrule reads the file through the execroot layout at
+            # execroot/_main/external/<repo>/src/lib.rs.
+            '  cmd = "cat $< > $@",',
+            ')',
+        ],
+    )
+
+    # The build reads the symlinked file through the execroot.
+    self.RunBazel(['build', '//pkg:read_lib'])
+    with open(self.Path('bazel-bin/pkg/out.txt')) as f:
+      self.assertEqual(f.read(), 'fn itoa() {}\n')
+
+    repo_dir = self.repoDir('my_repo')
+    src_link = os.path.join(repo_dir, 'src')
+    if not self.IsWindows():
+      # On Windows, the directory symlink is created as a junction, which
+      # os.path.islink doesn't report as a link.
+      self.assertTrue(os.path.islink(src_link))
+      # The symlink into the main repo keeps its absolute target instead of
+      # being replanted to a relative path through external/_main (POSIX only,
+      # as the representation is platform-dependent).
+      self.assertTrue(os.path.isabs(os.readlink(src_link)))
+    # The repo is not eligible for the repo contents cache.
+    self.assertRepoNotCached(repo_dir)
+
 
 if __name__ == '__main__':
   absltest.main()

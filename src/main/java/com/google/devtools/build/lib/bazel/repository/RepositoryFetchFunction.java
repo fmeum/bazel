@@ -316,16 +316,17 @@ public final class RepositoryFetchFunction implements SkyFunction {
       if (result.reproducible() == Reproducibility.YES && !repoDefinition.repoRule().local()) {
         // This repo is eligible for the local and remote repo contents cache.
         // Replant symlinks before caching to convert absolute symlinks pointing to the
-        // workspace or external root into relative paths, making the cached repo portable.
+        // external root into relative paths, making the cached repo portable.
         Path externalRepoRoot = RepositoryUtils.getExternalRepositoryDirectory(directories);
-        boolean safeForLocalCacheReuse;
+        RepositoryUtils.ReplantedSymlinks replantedSymlinks;
         try {
-          safeForLocalCacheReuse =
+          replantedSymlinks =
               RepositoryUtils.replantSymlinks(
                   repoRoot,
                   directories.getWorkspace(),
                   externalRepoRoot,
-                  PathFragment.EMPTY_FRAGMENT);
+                  PathFragment.EMPTY_FRAGMENT,
+                  /* replantSymlinksIntoMainRepo= */ false);
         } catch (IOException e) {
           throw new RepositoryFunctionException(
               new IOException(
@@ -334,7 +335,11 @@ public final class RepositoryFetchFunction implements SkyFunction {
                   e),
               Transience.TRANSIENT);
         }
-        if (remoteRepoContentsCache != null) {
+        // Repos with symlinks into the main repo are not cached remotely: when restored from the
+        // cache, such symlink chains would only exist in the in-memory overlay file system, which
+        // can't resolve symlinks that cross over into the native file system hosting the main
+        // repo.
+        if (remoteRepoContentsCache != null && !replantedSymlinks.hasSymlinkIntoMainRepo()) {
           remoteRepoContentsCache.addToCache(
               repositoryName,
               repoRoot,
@@ -342,7 +347,7 @@ public final class RepositoryFetchFunction implements SkyFunction {
               digestWriter.predeclaredInputHash,
               env.getListener());
         }
-        if (safeForLocalCacheReuse && repoContentsCache.isEnabled()) {
+        if (replantedSymlinks.safeForLocalCacheReuse() && repoContentsCache.isEnabled()) {
           CandidateRepo newCacheEntry;
           try {
             newCacheEntry =
