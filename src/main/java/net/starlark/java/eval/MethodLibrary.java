@@ -476,7 +476,8 @@ class MethodLibrary {
               + "<li>If <code>x</code> is a string, it must be a valid floating-point literal, or"
               + " be equal (ignoring case) to <code>NaN</code>, <code>Inf</code>, or"
               + " <code>Infinity</code>, optionally preceded by a <code>+</code> or <code>-</code>"
-              + " sign. " //
+              + " sign. As in a literal, a single <code>_</code> may appear between two digits to"
+              + " group them; it is ignored. " //
               + "</ul>" //
               + "Any other value causes an error. With no argument, <code>float()</code> returns"
               + " 0.0.",
@@ -522,7 +523,7 @@ class MethodLibrary {
         default:
           // finite
           try {
-            d = Double.parseDouble(s);
+            d = Double.parseDouble(stripUnderscores(s));
             if (!Double.isFinite(d)) {
               // parseDouble accepts signed "NaN" and "Infinity" (case sensitive)
               // but we already handled those cases, so this indicates
@@ -553,6 +554,27 @@ class MethodLibrary {
     }
   }
 
+  // Strips PEP 515 '_' separators from a float literal, throwing NumberFormatException unless
+  // each one is sandwiched between two digits.
+  private static String stripUnderscores(String s) {
+    if (s.indexOf('_') < 0) {
+      return s;
+    }
+    for (int i = s.indexOf('_'); i >= 0; i = s.indexOf('_', i + 1)) {
+      if (i == 0
+          || i == s.length() - 1
+          || !isAsciiDigit(s.charAt(i - 1))
+          || !isAsciiDigit(s.charAt(i + 1))) {
+        throw new NumberFormatException("invalid underscore placement");
+      }
+    }
+    return s.replace("_", "");
+  }
+
+  private static boolean isAsciiDigit(char c) {
+    return '0' <= c && c <= '9';
+  }
+
   @StarlarkMethod(
       name = "int",
       doc =
@@ -575,8 +597,10 @@ class MethodLibrary {
               + "    bases 2/8/10/16 is chosen depending on which prefix if any is used. If "
               + "    <code>base</code> is 0, no prefix is used, and there is more than one digit, "
               + "    the leading digit cannot be 0; this is to avoid confusion between octal and "
-              + "    decimal. The magnitude of the number represented by the string must be within "
-              + "    the allowed range for the int type." //
+              + "    decimal. As in an integer literal, a single <code>_</code> may appear between "
+              + "    two digits or after the prefix to group digits; it is ignored. The magnitude "
+              + "    of the number represented by the string must be within the allowed range for "
+              + "    the int type." //
               + "<li>If <code>x</code> is a float, <code>int</code> returns the integer value of"
               + "    the float, rounding towards zero. It is an error if x is non-finite (NaN or"
               + "    infinity)."
@@ -588,12 +612,12 @@ class MethodLibrary {
               + "Examples:<pre class=\"language-python\">int(\"123\") == 123\n"
               + "int(\"-123\") == -123\n"
               + "int(\"+123\") == 123\n"
+              + "int(\"1_000_000\") == 1000000\n"
               + "int(\"FF\", 16) == 255\n"
               + "int(\"0xFF\", 16) == 255\n"
               + "int(\"10\", 0) == 10\n"
               + "int(\"-0x10\", 0) == -16\n"
-              + "int(\"-0x10\", 0) == -16\n"
-              + "int(\"123.456\") == 123\n"
+              + "int(123.456) == 123\n"
               + "</pre>",
       parameters = {
         @Param(
@@ -621,7 +645,7 @@ class MethodLibrary {
     if (x instanceof String) {
       int base = baseO == Starlark.UNBOUND ? 10 : Starlark.toInt(baseO, "base");
       try {
-        return StarlarkInt.parse((String) x, base);
+        return StarlarkInt.parseWithUnderscores((String) x, base);
       } catch (NumberFormatException ex) {
         throw Starlark.errorf("%s", ex.getMessage());
       }

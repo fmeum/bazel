@@ -357,9 +357,12 @@ public class LexerTest {
     checkErrors("0b1_2", "INT(0) NEWLINE EOF", "^ invalid base-2 integer literal: 0b1_2");
     checkErrors("0o7_8", "INT(0) NEWLINE EOF", "^ invalid base-8 integer literal: 0o7_8");
 
-    // A misplaced underscore terminates the number, like any other non-digit.
+    // A misplaced underscore terminates the number, like any other non-digit. This includes an
+    // underscore splitting a base prefix.
     check("1__0", "INT(1) IDENTIFIER(__0) NEWLINE EOF");
     check("1_0_", "INT(10) IDENTIFIER(_) NEWLINE EOF");
+    check("0_x1", "INT(0) IDENTIFIER(_x1) NEWLINE EOF");
+    check("0_b1", "INT(0) IDENTIFIER(_b1) NEWLINE EOF");
     check("1_.5", "INT(1) IDENTIFIER(_) FLOAT(0.5) NEWLINE EOF");
     check("1._5", "FLOAT(1.0) IDENTIFIER(_5) NEWLINE EOF");
     checkErrors("1e_5", "FLOAT(0.0) IDENTIFIER(_5) NEWLINE EOF", "^ invalid float literal");

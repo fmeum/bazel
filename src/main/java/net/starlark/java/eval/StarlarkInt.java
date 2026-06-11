@@ -28,8 +28,10 @@ import net.starlark.java.syntax.Types;
         "The type of integers in Starlark. Starlark integers may be of any magnitude; arithmetic"
             + " is exact. Examples of integer expressions:<br>"
             + "<pre class=\"language-python\">153\n"
+            + "1_000_000  # '_' may be used to group digits\n"
             + "0x2A  # hexadecimal literal\n"
             + "0o54  # octal literal\n"
+            + "0b1010  # binary literal\n"
             + "23 * 2 + 5\n"
             + "100 / -7\n"
             + "100 % -7  # -5 (unlike in some other languages)\n"
@@ -97,13 +99,17 @@ public abstract class StarlarkInt implements StarlarkValue, Comparable<StarlarkI
 
   /**
    * Returns the int denoted by a literal string in the specified base, as if by the Starlark
-   * expression {@code int(s, base)}.
+   * expression {@code int(s, base)}, but not allowing PEP 515 '_' separators.
    *
    * @throws NumberFormatException if the input is invalid.
    */
   public static StarlarkInt parse(String s, int base) {
-    String stringForErrors = s;
+    return parse(s, base, s);
+  }
 
+  // Parses s, reporting stringForErrors (the original input of which s may be a normalized form)
+  // in error messages.
+  private static StarlarkInt parse(String s, int base, String stringForErrors) {
     if (s.isEmpty()) {
       throw new NumberFormatException("empty string");
     }
@@ -122,15 +128,7 @@ public abstract class StarlarkInt implements StarlarkValue, Comparable<StarlarkI
 
     // 0b 0o 0x prefix?
     if (s.length() > 1 && s.charAt(0) == '0') {
-      int prefixBase = 0;
-      c = s.charAt(1);
-      if (c == 'b' || c == 'B') {
-        prefixBase = 2;
-      } else if (c == 'o' || c == 'O') {
-        prefixBase = 8;
-      } else if (c == 'x' || c == 'X') {
-        prefixBase = 16;
-      }
+      int prefixBase = basePrefix(s.charAt(1));
       if (prefixBase != 0) {
         if (base == 0 || base == prefixBase) {
           base = prefixBase;
@@ -176,6 +174,73 @@ public abstract class StarlarkInt implements StarlarkValue, Comparable<StarlarkI
       }
     }
     return isNegative ? StarlarkInt.uminus(result) : result;
+  }
+
+  /**
+   * Returns the int denoted by a literal string in the specified base, as if by the Starlark
+   * expression {@code int(s, base)}: like {@link #parse}, but additionally allowing PEP 515 '_'
+   * separators between digits and directly after a base prefix.
+   *
+   * @throws NumberFormatException if the input is invalid.
+   */
+  public static StarlarkInt parseWithUnderscores(String s, int base) {
+    String stripped = s;
+    if (s.indexOf('_') >= 0) {
+      for (int i = s.indexOf('_'); i >= 0; i = s.indexOf('_', i + 1)) {
+        // A '_' may separate digits (which, depending on the base, include letters) and may also
+        // directly follow a base prefix such as "0x", so require alphanumeric neighbors. This in
+        // particular rejects a '_' at either end or adjacent to a sign or another '_'. Characters
+        // that are invalid regardless of '_' placement survive the stripping and are reported by
+        // parse below.
+        if (i == 0
+            || i == s.length() - 1
+            || !isAsciiAlnum(s.charAt(i - 1))
+            || !isAsciiAlnum(s.charAt(i + 1))) {
+          throw new NumberFormatException(
+              "invalid underscore placement in int literal: "
+                  + Starlark.repr(s, StarlarkSemantics.DEFAULT));
+        }
+      }
+      // A '_' may not split a base prefix, as in "0_x1", which after stripping would be
+      // indistinguishable from a genuinely prefixed "0x1". This does not apply if the would-be
+      // prefix letter is an ordinary digit in the given base (e.g. 'b' in base 16), in which case
+      // the '_' merely separates two digits.
+      int digitsStart = (s.charAt(0) == '+' || s.charAt(0) == '-') ? 1 : 0;
+      if (s.length() > digitsStart + 2
+          && s.charAt(digitsStart) == '0'
+          && s.charAt(digitsStart + 1) == '_') {
+        int prefixBase = basePrefix(s.charAt(digitsStart + 2));
+        if (prefixBase != 0 && (base == 0 || base == prefixBase)) {
+          throw new NumberFormatException(
+              "invalid underscore placement in int literal: "
+                  + Starlark.repr(s, StarlarkSemantics.DEFAULT));
+        }
+      }
+      stripped = s.replace("_", "");
+    }
+    return parse(stripped, base, s);
+  }
+
+  // Returns the base denoted by the letter of a "0b"/"0o"/"0x" base prefix, or 0 if c does not
+  // denote a base prefix.
+  private static int basePrefix(char c) {
+    switch (c) {
+      case 'b':
+      case 'B':
+        return 2;
+      case 'o':
+      case 'O':
+        return 8;
+      case 'x':
+      case 'X':
+        return 16;
+      default:
+        return 0;
+    }
+  }
+
+  private static boolean isAsciiAlnum(char c) {
+    return ('0' <= c && c <= '9') || ('a' <= c && c <= 'z') || ('A' <= c && c <= 'Z');
   }
 
   // Subclass for values exactly representable in a Java int.

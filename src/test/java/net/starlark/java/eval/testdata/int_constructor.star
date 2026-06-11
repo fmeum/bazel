@@ -3,6 +3,7 @@
 # from number
 assert_eq(int(0), 0)
 assert_eq(int(42), 42)
+assert_eq(int(123.456), 123)  # rounds toward zero
 assert_eq(int(-1), -1)
 assert_eq(int(2147483647), 2147483647)
 assert_eq(int(-2147483647 - 1), -2147483648)
@@ -99,6 +100,36 @@ assert_fails(lambda: int("-"), 'invalid base-10 literal: "-"')
 assert_fails(lambda: int("+"), 'invalid base-10 literal: "[+]"')
 assert_fails(lambda: int("0x"), 'invalid base-10 literal: "0x"')
 assert_fails(lambda: int("1.5"), 'invalid base-10 literal: "1.5"')
+assert_fails(lambda: int("123.456"), 'invalid base-10 literal: "123.456"')
 assert_fails(lambda: int("ab"), 'invalid base-10 literal: "ab"')
 assert_fails(lambda: int("--1"), 'invalid base-10 literal: "--1"')
 assert_fails(lambda: int("-0x-10", 16), 'invalid base-16 literal: "-0x-10"')
+
+# PEP 515: a single '_' may separate digits or follow a base prefix; it is ignored.
+assert_eq(int("1_000"), 1000)
+assert_eq(int("-1_000_000"), -1000000)
+assert_eq(int("+4_2"), 42)
+assert_eq(int("0x_FF", 16), 255)
+assert_eq(int("0xFF_FF", 0), 65535)
+assert_eq(int("F_F", 16), 255)
+assert_eq(int("7_7", 8), 63)
+assert_eq(int("1_0", 0), 10)
+assert_eq(int("1_2345_6789_0123_4567_8901_2345_6789_1234_5678_90"), 123456789012345678901234567891234567890)
+assert_fails(lambda: int("_"), 'invalid underscore placement in int literal: "_"')
+assert_fails(lambda: int("_1"), 'invalid underscore placement in int literal: "_1"')
+assert_fails(lambda: int("1_"), 'invalid underscore placement in int literal: "1_"')
+assert_fails(lambda: int("1__0"), 'invalid underscore placement in int literal: "1__0"')
+assert_fails(lambda: int("-_1"), 'invalid underscore placement in int literal: "-_1"')
+assert_fails(lambda: int("+_1"), 'invalid underscore placement in int literal: "[+]_1"')
+assert_fails(lambda: int("1_000.5"), 'invalid base-10 literal: "1_000.5"')
+assert_fails(lambda: int("0x_FF"), 'invalid base-10 literal: "0x_FF"')  # 'x' is not a base-10 digit
+
+# A '_' may not split a base prefix...
+assert_fails(lambda: int("0_x1", 0), 'invalid underscore placement in int literal: "0_x1"')
+assert_fails(lambda: int("0_x1", 16), 'invalid underscore placement in int literal: "0_x1"')
+assert_fails(lambda: int("0_b1", 0), 'invalid underscore placement in int literal: "0_b1"')
+assert_fails(lambda: int("-0_o7", 8), 'invalid underscore placement in int literal: "-0_o7"')
+
+# ... but the same '_' is fine if the would-be prefix letter is an ordinary digit in the base.
+assert_eq(int("0_b1", 16), 0xb1)
+assert_eq(int("0_x1", 36), 33 * 36 + 1)
