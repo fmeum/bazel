@@ -338,6 +338,12 @@ public final class RemoteWorker {
       return;
     }
 
+    if (remoteWorkerOptions.getLostBlobMaxLosses() < 1) {
+      logger.atSevere().log("--lost_blob_max_losses must be at least 1");
+      System.exit(1);
+      return;
+    }
+
     Path casPath = fs.getPath(remoteWorkerOptions.getCasPath());
     casPath.createDirectoryAndParents();
 

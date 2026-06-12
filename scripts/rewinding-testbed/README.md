@@ -48,6 +48,13 @@ Useful knobs (see `run.sh --help` for the full list):
 scripts/rewinding-testbed/run.sh --lost_blob_percentage=10 --lost_blob_seed=my-seed \
     -- --remote_retries=10
 
+# Lose each affected blob multiple times so that clients have to recover from
+# the loss of the same blob repeatedly (e.g. by rewinding the same action
+# several times). Bazel tolerates up to 20 repeated losses of the same input
+# per action (ActionRewindStrategy.MAX_REPEATED_LOST_INPUTS), so values well
+# below that are expected to converge.
+scripts/rewinding-testbed/run.sh --lost_blob_max_losses=3 -- --remote_retries=10
+
 # Use a smaller target for a quick check:
 scripts/rewinding-testbed/run.sh --target=//src/main/cpp:client
 
@@ -77,4 +84,5 @@ See the "Simulating lost CAS entries" section in the [example worker
 README](../../src/tools/remote/README.md). In short: whether a blob is lost is
 a deterministic function of its digest and the seed, the loss is an actual
 deletion from the on-disk CAS (so every RPC observes it consistently), and only
-the first upload of a blob is affected (so re-uploading revives it).
+a bounded number of uploads of a blob is affected (`--lost_blob_max_losses`,
+1 by default), so uploading it sufficiently often revives it.

@@ -144,26 +144,28 @@ class OnDiskBlobStoreCache extends CombinedCache {
   @Override
   public ListenableFuture<Void> uploadFile(
       RemoteActionExecutionContext context, Digest digest, Path file) {
-    return maybeLoseAfterFirstUpload(digest, super.uploadFile(context, digest, file));
+    return maybeLoseAfterUpload(digest, super.uploadFile(context, digest, file));
   }
 
   @Override
   public ListenableFuture<Void> uploadBlob(
       RemoteActionExecutionContext context, Digest digest, Blob blob) {
-    return maybeLoseAfterFirstUpload(digest, super.uploadBlob(context, digest, blob));
+    return maybeLoseAfterUpload(digest, super.uploadBlob(context, digest, blob));
   }
 
   /**
    * Simulates a remote cache that loses CAS entries by deleting the blob with the given digest
-   * from the CAS after its first successful upload (see {@code --lost_blob_percentage}).
+   * from the CAS after each of its first {@code --lost_blob_max_losses} successful uploads (see
+   * {@code --lost_blob_percentage}).
    *
    * <p>Since the loss takes the form of an actual deletion, all kinds of requests referencing the
    * blob consistently observe it: findMissingBlobs reports it as missing, reads fail with
    * NOT_FOUND, executions report a FAILED_PRECONDITION with a MISSING violation when staging it as
-   * an input, and action cache hits referencing it are treated as stale. Since only the first
-   * upload of a blob is affected, clients can always recover by re-uploading or regenerating it.
+   * an input, and action cache hits referencing it are treated as stale. Since only a bounded
+   * number of uploads of a blob is affected, clients can always recover by re-uploading or
+   * regenerating it sufficiently often.
    */
-  private ListenableFuture<Void> maybeLoseAfterFirstUpload(
+  private ListenableFuture<Void> maybeLoseAfterUpload(
       Digest digest, ListenableFuture<Void> upload) {
     if (!isLossCandidate(digest)) {
       return upload;
@@ -171,12 +173,14 @@ class OnDiskBlobStoreCache extends CombinedCache {
     return Futures.transform(
         upload,
         unused -> {
-          if (numberOfUploadsPerLossCandidate.merge(digest, 1, Integer::sum) == 1) {
+          int uploads = numberOfUploadsPerLossCandidate.merge(digest, 1, Integer::sum);
+          int maxLosses = remoteWorkerOptions.getLostBlobMaxLosses();
+          if (uploads <= maxLosses) {
             try {
               diskCacheClient.toPath(digest, Store.CAS).delete();
               logger.atInfo().log(
-                  "Simulated loss of CAS entry %s after its first upload",
-                  DigestUtil.toString(digest));
+                  "Simulated loss of CAS entry %s (loss %d of %d)",
+                  DigestUtil.toString(digest), uploads, maxLosses);
             } catch (IOException e) {
               logger.atWarning().withCause(e).log(
                   "Failed to simulate loss of CAS entry %s", DigestUtil.toString(digest));

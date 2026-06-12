@@ -43,8 +43,15 @@ fail with `NOT_FOUND`, executions fail with a `FAILED_PRECONDITION` that
 carries a `MISSING` violation when staging the blob as an input, and action
 cache hits referencing the blob are treated as stale. Whether a given blob is
 lost is a deterministic function of its digest and `--lost_blob_seed`, so a
-blob is only ever lost once and clients can always recover by re-uploading or
-regenerating it.
+blob is only ever lost once by default and clients can always recover by
+re-uploading or regenerating it.
+
+With `--lost_blob_max_losses=N`, an affected blob is instead lost after each of
+its first N uploads, so clients have to recover from the loss of the same blob
+multiple times in a row (e.g. by rewinding the same action repeatedly). Bazel
+tolerates losing the same input of the same action up to 20 times
+(`ActionRewindStrategy.MAX_REPEATED_LOST_INPUTS`), so builds are expected to
+converge for values well below that and to fail by design for values above it.
 
 This is particularly useful for testing Bazel's recovery from lost inputs via
 action rewinding (`--rewind_lost_inputs`). See `scripts/rewinding-testbed` for

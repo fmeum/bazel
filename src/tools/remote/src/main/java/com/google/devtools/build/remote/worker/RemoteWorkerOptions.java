@@ -260,6 +260,18 @@ public abstract class RemoteWorkerOptions extends OptionsBase {
               + " --lost_blob_percentage. Change it to lose a different sample of blobs.")
   public abstract String getLostBlobSeed();
 
+  @Option(
+      name = "lost_blob_max_losses",
+      defaultValue = "1",
+      documentationCategory = OptionDocumentationCategory.UNCATEGORIZED,
+      effectTags = {OptionEffectTag.UNKNOWN},
+      help =
+          "How many times a blob selected via --lost_blob_percentage is lost: it is deleted from"
+              + " the CAS right after each of its first N uploads and thus only stays available"
+              + " once it has been uploaded N+1 times. Values above 1 exercise repeated recovery"
+              + " from the loss of the same blob, e.g. repeated rewinding of the same action.")
+  public abstract int getLostBlobMaxLosses();
+
   private static final int MAX_JOBS = 16384;
 
   /**

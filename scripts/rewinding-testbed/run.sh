@@ -34,6 +34,9 @@ Options:
   --lost_blob_seed=<seed>     Seed selecting which blobs are lost. Vary it to
                               lose a different sample of blobs (default: the
                               current time, printed for reproducibility).
+  --lost_blob_max_losses=<n>  How many times each affected blob is lost, i.e.
+                              how often clients must recover from the loss of
+                              the same blob (default: 1).
   --port=<port>               Port for the worker (default: a random free port).
   --base_dir=<path>           Directory for worker state, output base, and logs
                               (default: a fresh temporary directory). Reusing a
@@ -50,6 +53,7 @@ TARGET="//src:bazel-dev"
 BAZEL=auto
 LOST_BLOB_PERCENTAGE=2
 LOST_BLOB_SEED="$(date +%s)"
+LOST_BLOB_MAX_LOSSES=1
 PORT=
 BASE_DIR=
 ALLOW_NO_REWINDS=0
@@ -62,6 +66,7 @@ while (($# > 0)); do
     --bazel=*) BAZEL="${1#*=}" ;;
     --lost_blob_percentage=*) LOST_BLOB_PERCENTAGE="${1#*=}" ;;
     --lost_blob_seed=*) LOST_BLOB_SEED="${1#*=}" ;;
+    --lost_blob_max_losses=*) LOST_BLOB_MAX_LOSSES="${1#*=}" ;;
     --port=*) PORT="${1#*=}" ;;
     --base_dir=*) BASE_DIR="${1#*=}" ;;
     --allow_no_rewinds) ALLOW_NO_REWINDS=1 ;;
@@ -97,7 +102,8 @@ PROFILE="$BASE_DIR/profile.gz"
 PID_FILE="$BASE_DIR/worker.pid"
 
 echo ">>> Base dir: $BASE_DIR"
-echo ">>> Lost blob percentage: $LOST_BLOB_PERCENTAGE, seed: $LOST_BLOB_SEED"
+echo ">>> Lost blob percentage: $LOST_BLOB_PERCENTAGE, seed: $LOST_BLOB_SEED," \
+  "max losses: $LOST_BLOB_MAX_LOSSES"
 
 WORKER_PID=
 cleanup() {
@@ -153,6 +159,7 @@ rm -f "$PID_FILE"
   --pid_file="$PID_FILE" \
   --lost_blob_percentage="$LOST_BLOB_PERCENTAGE" \
   --lost_blob_seed="$LOST_BLOB_SEED" \
+  --lost_blob_max_losses="$LOST_BLOB_MAX_LOSSES" \
   >"$WORKER_LOG" 2>&1 &
 WORKER_PID=$!
 
