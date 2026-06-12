@@ -370,6 +370,102 @@ function test_other_artifacts() {
   assert_contains ".directory_artifact" "bazel-bin/examples/hermetic/other_artifacts.result"
 }
 
+# Regression test for https://github.com/bazelbuild/bazel/issues/29832
+#
+# A repository rule co-produces a "varying" file (whose content changes between
+# refetches) and a "stable" file (whose content stays identical). A tool exposes
+# the stable file as a runfile via a resolved symlink (ctx.actions.symlink). The
+# SymlinkAction's output metadata is cached as a resolved-symlink value whose
+# delegate carries a contents proxy (inode/mtime) of the stable file.
+#
+# When the repository is refetched (because the varying file changed), the stable
+# file is recreated on disk with a new inode but identical content. With a disk
+# cache and a particular sequence of refetches, the cached resolved-symlink
+# metadata retains a stale contents proxy that no longer matches the on-disk inode.
+# Before the fix, the hermetic sandbox's concurrent-modification check compared
+# only the contents proxy and falsely reported the input as "modified during
+# execution" (exit code 36), even though the content (digest) was unchanged.
+function test_resolved_symlink_to_refetched_stable_file() {
+  mkdir -p cogen
+
+  cat > cogen/rules.bzl <<'EOF'
+def _tool_impl(ctx):
+    exe = ctx.actions.declare_file(ctx.label.name + "_exe")
+    ctx.actions.write(exe, "")
+    link = ctx.actions.declare_file(ctx.label.name + "_stalink")
+    ctx.actions.symlink(output = link, target_file = ctx.file.sta)
+    return DefaultInfo(
+        executable = exe,
+        runfiles = ctx.runfiles(
+            files = ctx.files.var + ctx.files.sta,
+            symlinks = {"sta": link},
+        ),
+    )
+
+tool = rule(
+    implementation = _tool_impl,
+    executable = True,
+    attrs = {
+        "var": attr.label(allow_single_file = True),
+        "sta": attr.label(allow_single_file = True),
+    },
+)
+
+def _repo_impl(rctx):
+    rctx.file("BUILD", """\
+genrule(
+    name = "extract",
+    outs = ["varying.txt", "stable.txt"],
+    cmd = "echo {v} >$(location varying.txt) && :>$(location stable.txt)",
+    visibility = ["//visibility:public"],
+)
+""".format(v = rctx.getenv("V")))
+
+repo = repository_rule(implementation = _repo_impl)
+EOF
+
+  cat > cogen/BUILD <<'EOF'
+load(":rules.bzl", "tool")
+
+tool(
+    name = "s",
+    var = "@ext//:varying.txt",
+    sta = "@ext//:stable.txt",
+)
+
+[
+    genrule(
+        name = "t{}".format(i),
+        outs = ["t{}.txt".format(i)],
+        tools = [":s"],
+        cmd = ":>$@",
+    )
+    for i in (0, 1)
+]
+EOF
+
+  cat >> MODULE.bazel <<'EOF'
+use_repo_rule("//cogen:rules.bzl", "repo")(name = "ext")
+EOF
+
+  local disk_cache="${TEST_TMPDIR}/issue29832_disk_cache"
+  rm -rf "$disk_cache"
+
+  # The specific sequence of refetches that, before the fix, leaves the cached
+  # resolved-symlink metadata with a stale contents proxy. The final build is the
+  # one that previously failed.
+  V=0 bazel build --disk_cache="$disk_cache" //cogen:t0 &> $TEST_log \
+    || fail "build (V=0, t0) failed unexpectedly"
+  V=1 bazel build --disk_cache="$disk_cache" //cogen:t0 &> $TEST_log \
+    || fail "build (V=1, t0) failed unexpectedly"
+  V=0 bazel build --disk_cache="$disk_cache" //cogen:t1 &> $TEST_log \
+    || fail "build (V=0, t1) failed unexpectedly"
+  V=1 bazel build --disk_cache="$disk_cache" //cogen:t1 &> $TEST_log \
+    || fail "build (V=1, t1) incorrectly reported a stable input as modified during execution"
+
+  expect_not_log "was modified during execution"
+}
+
 # The test shouldn't fail if the environment doesn't support running it.
 check_sandbox_allowed || exit 0
 is_linux || exit 0

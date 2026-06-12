@@ -50,6 +50,7 @@ import com.google.devtools.build.lib.sandbox.cgroups.VirtualCgroupFactory;
 import com.google.devtools.build.lib.shell.Command;
 import com.google.devtools.build.lib.shell.CommandException;
 import com.google.devtools.build.lib.util.OS;
+import com.google.devtools.build.lib.vfs.DigestUtils;
 import com.google.devtools.build.lib.vfs.FileStatus;
 import com.google.devtools.build.lib.vfs.FileSystem;
 import com.google.devtools.build.lib.vfs.Path;
@@ -59,6 +60,7 @@ import com.google.devtools.build.lib.vfs.Symlinks;
 import java.io.File;
 import java.io.IOException;
 import java.time.Duration;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Set;
@@ -506,19 +508,39 @@ final class LinuxSandboxedSpawnRunner extends AbstractSandboxSpawnRunner {
       }
 
       Path path = execRoot.getRelative(input.getExecPath());
-      if (wasModifiedSinceDigest(metadata.getContentsProxy(), path)) {
+      if (wasModifiedSinceDigest(metadata, path)) {
         throw new IOException("input dependency " + path + " was modified during execution.");
       }
     }
   }
 
-  private boolean wasModifiedSinceDigest(FileContentsProxy proxy, Path path) throws IOException {
+  private boolean wasModifiedSinceDigest(FileArtifactValue metadata, Path path) throws IOException {
+    FileContentsProxy proxy = metadata.getContentsProxy();
     if (proxy == null) {
       // Metadata is not available (likely because this is not a regular file).
       return false;
     }
     FileStatus stat = path.statIfFound(Symlinks.FOLLOW);
-    return stat == null || !stat.isFile() || proxy.isModified(FileContentsProxy.create(stat));
+    if (stat == null || !stat.isFile()) {
+      // The file no longer exists or changed type, so it certainly has changed.
+      return true;
+    }
+    if (!proxy.isModified(FileContentsProxy.create(stat))) {
+      // The cheap proxy check (inode and mtime) found no modification. This is the common case.
+      return false;
+    }
+    // The contents proxy indicates a possible modification, but this can be a false positive. The
+    // inode and/or mtime may differ even though the content is unchanged: for example, an input
+    // backed by cached resolved-symlink metadata can carry a stale contents proxy that points at an
+    // earlier incarnation of a repository output that was refetched with identical content (same
+    // digest, but a new inode). See https://github.com/bazelbuild/bazel/issues/29832. Confirm with
+    // an authoritative content digest comparison before failing the action.
+    byte[] expectedDigest = metadata.getDigest();
+    if (expectedDigest == null) {
+      // No digest to compare against, so fall back to trusting the contents proxy.
+      return true;
+    }
+    return !Arrays.equals(expectedDigest, DigestUtils.manuallyComputeDigest(path, stat));
   }
 
   @Override
