@@ -234,6 +234,32 @@ public abstract class RemoteWorkerOptions extends OptionsBase {
               + " invocation id. This is useful for testing only.")
   public abstract boolean getErrorOnDuplicateDownloads();
 
+  @Option(
+      name = "lost_blob_percentage",
+      defaultValue = "0",
+      documentationCategory = OptionDocumentationCategory.UNCATEGORIZED,
+      effectTags = {OptionEffectTag.UNKNOWN},
+      help =
+          "If set to a value between 1 and 100, the worker simulates a remote cache that loses"
+              + " CAS entries, e.g. due to evictions or outages: roughly this percentage of all"
+              + " blobs are deleted from the CAS right after their first upload, consistently"
+              + " affecting all kinds of requests referencing them. Whether a given blob is"
+              + " affected is a deterministic function of its digest and --lost_blob_seed. In"
+              + " particular, a blob is only ever lost once, so that clients can recover by"
+              + " re-uploading it. This is useful for testing only, in particular for testing"
+              + " --rewind_lost_inputs.")
+  public abstract int getLostBlobPercentage();
+
+  @Option(
+      name = "lost_blob_seed",
+      defaultValue = "",
+      documentationCategory = OptionDocumentationCategory.UNCATEGORIZED,
+      effectTags = {OptionEffectTag.UNKNOWN},
+      help =
+          "The seed used to deterministically select the CAS entries lost due to"
+              + " --lost_blob_percentage. Change it to lose a different sample of blobs.")
+  public abstract String getLostBlobSeed();
+
   private static final int MAX_JOBS = 16384;
 
   /**

@@ -24,6 +24,32 @@ The simplest setup is as follows:
 The above command will build generate_workspace with remote spawn strategy that
 uses the local worker as the distributed caching and execution backend.
 
+## Simulating lost CAS entries
+
+Real-world remote caches lose CAS entries, e.g. due to evictions or outages.
+The worker can simulate this in a deterministic and consistent fashion:
+
+        bazel-bin/src/tools/remote/worker \
+            --work_path=/tmp/worker/work \
+            --cas_path=/tmp/worker/cas \
+            --listen_port=8080 \
+            --lost_blob_percentage=2 \
+            --lost_blob_seed=some-seed
+
+With these flags, roughly 2% of all blobs are deleted from the CAS right after
+their first upload. Since the loss is an actual deletion, all kinds of requests
+observe it consistently: `FindMissingBlobs` reports the blob as missing, reads
+fail with `NOT_FOUND`, executions fail with a `FAILED_PRECONDITION` that
+carries a `MISSING` violation when staging the blob as an input, and action
+cache hits referencing the blob are treated as stale. Whether a given blob is
+lost is a deterministic function of its digest and `--lost_blob_seed`, so a
+blob is only ever lost once and clients can always recover by re-uploading or
+regenerating it.
+
+This is particularly useful for testing Bazel's recovery from lost inputs via
+action rewinding (`--rewind_lost_inputs`). See `scripts/rewinding-testbed` for
+a ready-to-use testbed built on top of this feature.
+
 ## Sandboxing
 
 If you run the worker on Linux, you can also enable sandboxing for increased

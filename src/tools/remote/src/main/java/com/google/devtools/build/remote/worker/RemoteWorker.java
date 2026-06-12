@@ -331,6 +331,13 @@ public final class RemoteWorker {
       return;
     }
 
+    if (remoteWorkerOptions.getLostBlobPercentage() < 0
+        || remoteWorkerOptions.getLostBlobPercentage() > 100) {
+      logger.atSevere().log("--lost_blob_percentage must be between 0 and 100");
+      System.exit(1);
+      return;
+    }
+
     Path casPath = fs.getPath(remoteWorkerOptions.getCasPath());
     casPath.createDirectoryAndParents();
 

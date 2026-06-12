@@ -25,11 +25,15 @@ import build.bazel.remote.execution.v2.DirectoryNode;
 import build.bazel.remote.execution.v2.FileNode;
 import build.bazel.remote.execution.v2.SymlinkAbsolutePathStrategy;
 import build.bazel.remote.execution.v2.SymlinkNode;
+import com.google.common.flogger.GoogleLogger;
+import com.google.common.hash.Hashing;
 import com.google.common.util.concurrent.Futures;
 import com.google.common.util.concurrent.ListenableFuture;
+import com.google.common.util.concurrent.MoreExecutors;
 import com.google.devtools.build.lib.remote.CombinedCache;
 import com.google.devtools.build.lib.remote.Store;
 import com.google.devtools.build.lib.remote.common.RemoteActionExecutionContext;
+import com.google.devtools.build.lib.remote.common.RemoteCacheClient.Blob;
 import com.google.devtools.build.lib.remote.disk.DiskCacheClient;
 import com.google.devtools.build.lib.remote.util.DigestUtil;
 import com.google.devtools.build.lib.vfs.Path;
@@ -41,11 +45,15 @@ import java.util.concurrent.ConcurrentHashMap;
 /** A {@link CombinedCache} backed by an {@link DiskCacheClient}. */
 class OnDiskBlobStoreCache extends CombinedCache {
 
+  private static final GoogleLogger logger = GoogleLogger.forEnclosingClass();
+
   private record DigestAndInvocation(Digest digest, String invocationId) {}
 
   private final RemoteWorkerOptions remoteWorkerOptions;
   private final ConcurrentHashMap<DigestAndInvocation, Integer>
       numberOfDownloadsPerDigestAndInvocation = new ConcurrentHashMap<>();
+  private final ConcurrentHashMap<Digest, Integer> numberOfUploadsPerLossCandidate =
+      new ConcurrentHashMap<>();
 
   public OnDiskBlobStoreCache(
       Path cacheDir, DigestUtil digestUtil, RemoteWorkerOptions remoteWorkerOptions)
@@ -131,6 +139,69 @@ class OnDiskBlobStoreCache extends CombinedCache {
     }
 
     return super.downloadBlob(context, digest);
+  }
+
+  @Override
+  public ListenableFuture<Void> uploadFile(
+      RemoteActionExecutionContext context, Digest digest, Path file) {
+    return maybeLoseAfterFirstUpload(digest, super.uploadFile(context, digest, file));
+  }
+
+  @Override
+  public ListenableFuture<Void> uploadBlob(
+      RemoteActionExecutionContext context, Digest digest, Blob blob) {
+    return maybeLoseAfterFirstUpload(digest, super.uploadBlob(context, digest, blob));
+  }
+
+  /**
+   * Simulates a remote cache that loses CAS entries by deleting the blob with the given digest
+   * from the CAS after its first successful upload (see {@code --lost_blob_percentage}).
+   *
+   * <p>Since the loss takes the form of an actual deletion, all kinds of requests referencing the
+   * blob consistently observe it: findMissingBlobs reports it as missing, reads fail with
+   * NOT_FOUND, executions report a FAILED_PRECONDITION with a MISSING violation when staging it as
+   * an input, and action cache hits referencing it are treated as stale. Since only the first
+   * upload of a blob is affected, clients can always recover by re-uploading or regenerating it.
+   */
+  private ListenableFuture<Void> maybeLoseAfterFirstUpload(
+      Digest digest, ListenableFuture<Void> upload) {
+    if (!isLossCandidate(digest)) {
+      return upload;
+    }
+    return Futures.transform(
+        upload,
+        unused -> {
+          if (numberOfUploadsPerLossCandidate.merge(digest, 1, Integer::sum) == 1) {
+            try {
+              diskCacheClient.toPath(digest, Store.CAS).delete();
+              logger.atInfo().log(
+                  "Simulated loss of CAS entry %s after its first upload",
+                  DigestUtil.toString(digest));
+            } catch (IOException e) {
+              logger.atWarning().withCause(e).log(
+                  "Failed to simulate loss of CAS entry %s", DigestUtil.toString(digest));
+            }
+          }
+          return unused;
+        },
+        MoreExecutors.directExecutor());
+  }
+
+  private boolean isLossCandidate(Digest digest) {
+    int lostBlobPercentage = remoteWorkerOptions.getLostBlobPercentage();
+    // The empty blob is special-cased by clients and servers (including DiskCacheClient) as always
+    // present, so it can't be lost.
+    if (lostBlobPercentage == 0 || digest.getSizeBytes() == 0) {
+      return false;
+    }
+    long hash =
+        Hashing.murmur3_128()
+            .newHasher()
+            .putUnencodedChars(remoteWorkerOptions.getLostBlobSeed())
+            .putUnencodedChars(digest.getHash())
+            .hash()
+            .asLong();
+    return Math.floorMod(hash, 100) < lostBlobPercentage;
   }
 
   public DigestUtil getDigestUtil() {
