@@ -2625,6 +2625,59 @@ public class RemoteExecutionServiceTest {
   }
 
   @Test
+  public void uploadInputsIfNotPresent_sharedInputAcrossActions_queriedOnce(
+      @TestParameter boolean discardMerkleTrees) throws Exception {
+    // --experimental_remote_discard_merkle_trees (the default) discards the in-memory Merkle tree,
+    // forcing it to be recomputed for every action in uploadInputsIfNotPresent. That recomputation
+    // is independent of the findMissingDigests dedup cache in RemoteExecutionCache, which is keyed
+    // by digest and persists across actions for the lifetime of the service. As a result, a blob
+    // that an earlier action already proved present remotely is not queried again on a later
+    // action's (non-forced) upload, regardless of this flag. Only forced uploads (i.e. retries
+    // after the remote reports a lost blob) bypass the cache.
+    remoteOptions.setRemoteDiscardMerkleTrees(discardMerkleTrees);
+    ActionInput input = ActionInputHelper.fromPath("inputs/foo");
+    Digest inputDigest = fakeFileCache.createScratchInput(input, "input-foo");
+    NestedSet<ActionInput> inputs = NestedSetBuilder.create(Order.STABLE_ORDER, input);
+    RemoteExecutionService service = newRemoteExecutionService();
+
+    // Two distinct actions (different arguments => different action and command digests) that share
+    // the same input.
+    Spawn spawn1 =
+        new SimpleSpawn(
+            new FakeOwner("foo", "bar", "//dummy:label"),
+            /* arguments= */ ImmutableList.of("action1"),
+            /* environment= */ ImmutableMap.of(),
+            /* executionInfo= */ ImmutableMap.of(),
+            /* inputs= */ inputs,
+            /* outputs= */ ImmutableSet.of(),
+            ResourceSet.ZERO);
+    Spawn spawn2 =
+        new SimpleSpawn(
+            new FakeOwner("foo", "bar", "//dummy:label"),
+            /* arguments= */ ImmutableList.of("action2"),
+            /* environment= */ ImmutableMap.of(),
+            /* executionInfo= */ ImmutableMap.of(),
+            /* inputs= */ inputs,
+            /* outputs= */ ImmutableSet.of(),
+            ResourceSet.ZERO);
+    RemoteAction action1 = service.buildRemoteAction(spawn1, newSpawnExecutionContext(spawn1));
+    RemoteAction action2 = service.buildRemoteAction(spawn2, newSpawnExecutionContext(spawn2));
+    // The two actions are distinct but share the input.
+    assertThat(action1.getActionKey().digest()).isNotEqualTo(action2.getActionKey().digest());
+
+    service.uploadInputsIfNotPresent(action1, /* force= */ false);
+    service.uploadInputsIfNotPresent(action2, /* force= */ false);
+
+    // Both actions issued a findMissingDigests round (their distinct action digests are each queried
+    // once), but the shared input is queried only once: the second action reuses the cached result.
+    assertThat(cache.getNumFindMissingDigests())
+        .containsEntry(action1.getActionKey().digest(), 1);
+    assertThat(cache.getNumFindMissingDigests())
+        .containsEntry(action2.getActionKey().digest(), 1);
+    assertThat(cache.getNumFindMissingDigests()).containsEntry(inputDigest, 1);
+  }
+
+  @Test
   public void uploadInputsIfNotPresent_sameInputs_interruptOne_keepOthers() throws Exception {
     int taskCount = 100;
     ExecutorService executorService = Executors.newFixedThreadPool(taskCount);
