@@ -238,6 +238,9 @@ java_binary(
         ":main",
         "//src/main/java/com/google/devtools/build/lib/util:simple_log_handler",  # See startup_options.cc
         "//src/main/java/com/google/devtools/build/lib/util:single_line_formatter",  # See startup_options.cc
+        # Makes --experimental_starlark_engine=truffle resolvable at runtime; the engine registers
+        # itself when StarlarkEngine.forName lazily loads it. Brings in the Truffle runtime jars.
+        "//src/main/java/net/starlark/java/eval:truffle_engine",
     ],
 )
 

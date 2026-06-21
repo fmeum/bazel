@@ -103,6 +103,20 @@ public abstract class BuildLanguageOptions extends OptionsBase {
   public abstract String getExperimentalBuiltinsBzlPath();
 
   @Option(
+      name = "experimental_starlark_engine",
+      defaultValue = "",
+      documentationCategory = OptionDocumentationCategory.UNDOCUMENTED,
+      effectTags = {OptionEffectTag.LOSES_INCREMENTAL_STATE, OptionEffectTag.BUILD_FILE_SEMANTICS},
+      metadataTags = {OptionMetadataTag.EXPERIMENTAL},
+      help =
+          "Selects the engine used to execute Starlark function bodies. The empty string (the "
+              + "default) uses the built-in tree-walking evaluator. \"truffle\" selects the "
+              + "experimental Truffle-based engine, which falls back to the tree-walker for "
+              + "constructs it does not yet support and only outperforms it on a Graal/Truffle-"
+              + "capable JVM. For Bazel developers only.")
+  public abstract String getExperimentalStarlarkEngine();
+
+  @Option(
       name = "experimental_builtins_dummy",
       defaultValue = "false",
       documentationCategory = OptionDocumentationCategory.UNDOCUMENTED,
@@ -859,6 +873,7 @@ public abstract class BuildLanguageOptions extends OptionsBase {
                 getIncompatibleStopExportingLanguageModules())
             .setBool(INCOMPATIBLE_ALLOW_TAGS_PROPAGATION, getExperimentalAllowTagsPropagation())
             .set(EXPERIMENTAL_BUILTINS_BZL_PATH, getExperimentalBuiltinsBzlPath())
+            .set(StarlarkSemantics.EXPERIMENTAL_STARLARK_ENGINE, getExperimentalStarlarkEngine())
             .setBool(EXPERIMENTAL_BUILTINS_DUMMY, getExperimentalBuiltinsDummy())
             .set(
                 EXPERIMENTAL_BUILTINS_INJECTION_OVERRIDE,

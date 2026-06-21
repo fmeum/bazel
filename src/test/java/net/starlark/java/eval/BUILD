@@ -54,6 +54,19 @@ java_test(
     ],
 )
 
+# Differential test for the StarlarkEngine seam (default tree-walker vs. an installed engine).
+java_test(
+    name = "StarlarkEngineConsistencyTest",
+    srcs = ["StarlarkEngineConsistencyTest.java"],
+    deps = [
+        "//src/main/java/net/starlark/java/eval",
+        "//src/main/java/net/starlark/java/eval:truffle_engine",
+        "//src/main/java/net/starlark/java/syntax",
+        "//third_party:junit4",
+        "//third_party:truth",
+    ],
+)
+
 # Script-based tests of the Starlark interpreter.
 java_library(
     name = "ScriptTest_lib",

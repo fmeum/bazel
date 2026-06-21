@@ -255,6 +255,12 @@ public final class StarlarkThread {
 
   private UncheckedExceptionContext uncheckedExceptionContext = () -> "";
 
+  /**
+   * The engine used to execute Starlark function bodies on this thread. Defaults to the tree-walking
+   * evaluator; see {@link StarlarkEngine}.
+   */
+  private StarlarkEngine engine = StarlarkEngine.TREE_WALKING;
+
   /** Stack of active function calls. */
   private final ArrayList<Frame> callstack = new ArrayList<>();
 
@@ -490,6 +496,7 @@ public final class StarlarkThread {
       SymbolGenerator<?> symbolGenerator) {
     this.mutability = Preconditions.checkNotNull(mu);
     this.semantics = semantics;
+    this.engine = StarlarkEngine.forName(semantics.get(StarlarkSemantics.EXPERIMENTAL_STARLARK_ENGINE));
     this.allowRecursion = semantics.getBool(StarlarkSemantics.ALLOW_RECURSION);
     if (!contextDescription.isEmpty()) {
       setUncheckedExceptionContext(() -> contextDescription);
@@ -517,6 +524,19 @@ public final class StarlarkThread {
 
   public StarlarkSemantics getSemantics() {
     return semantics;
+  }
+
+  /** Returns the engine used to execute Starlark function bodies on this thread. */
+  StarlarkEngine engine() {
+    return engine;
+  }
+
+  /**
+   * Sets the engine used to execute Starlark function bodies on this thread. The engine must
+   * preserve the observable behavior of the default {@link StarlarkEngine#TREE_WALKING} engine.
+   */
+  void setEngine(StarlarkEngine engine) {
+    this.engine = engine;
   }
 
   /** Reports whether this thread is allowed to make recursive calls. */

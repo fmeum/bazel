@@ -597,7 +597,9 @@ public final class StarlarkFunction implements StarlarkCallable {
 
       Frame fr = thread.frame(0);
       fr.locals = locals;
-      Object returnValue = Eval.execFunctionBody(fr, rfn.getBody());
+      // The seam between a function call and the execution engine. The default engine delegates
+      // straight to Eval.execFunctionBody (the tree-walker); see StarlarkEngine.
+      Object returnValue = thread.engine().execFunctionBody(fr, rfn.getBody());
 
       // Return value dynamic type check, if enabled.
       if (functionType != null) {

@@ -127,6 +127,7 @@ public class ConsistencyTest {
         "--experimental_disable_external_package=" + rand.nextBoolean(),
         "--experimental_sibling_repository_layout=" + rand.nextBoolean(),
         "--experimental_builtins_bzl_path=" + rand.nextDouble(),
+        "--experimental_starlark_engine=" + rand.nextDouble(),
         "--experimental_builtins_dummy=" + rand.nextBoolean(),
         "--experimental_bzl_visibility=" + rand.nextBoolean(),
         "--experimental_enable_android_migration_apis=" + rand.nextBoolean(),
@@ -171,6 +172,7 @@ public class ConsistencyTest {
         .setBool(BuildLanguageOptions.EXPERIMENTAL_DISABLE_EXTERNAL_PACKAGE, rand.nextBoolean())
         .setBool(BuildLanguageOptions.EXPERIMENTAL_SIBLING_REPOSITORY_LAYOUT, rand.nextBoolean())
         .set(BuildLanguageOptions.EXPERIMENTAL_BUILTINS_BZL_PATH, String.valueOf(rand.nextDouble()))
+        .set(StarlarkSemantics.EXPERIMENTAL_STARLARK_ENGINE, String.valueOf(rand.nextDouble()))
         .setBool(BuildLanguageOptions.EXPERIMENTAL_BUILTINS_DUMMY, rand.nextBoolean())
         .setBool(BuildLanguageOptions.EXPERIMENTAL_BZL_VISIBILITY, rand.nextBoolean())
         .setBool(

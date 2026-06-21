@@ -48,6 +48,7 @@ java_library(
         "SingletonTuple.java",
         "Starlark.java",
         "StarlarkCallable.java",
+        "StarlarkEngine.java",
         "StarlarkFloat.java",
         "StarlarkFunction.java",
         "StarlarkIndexable.java",
@@ -78,6 +79,25 @@ java_library(
         "//third_party:guava",
         "//third_party:jsr305",
         ":cpu_profiler_native_support",
+    ],
+)
+
+# Experimental Truffle-based execution engine for --experimental_starlark_engine=truffle.
+# Kept separate from :eval so the core interpreter stays free of the Truffle dependency; it lives in
+# the same Java package to reuse package-private internals (Frame, EvalUtils.binaryOp, ...).
+java_library(
+    name = "truffle_engine",
+    srcs = ["TruffleStarlarkEngine.java"],
+    visibility = ["//src/main/java/net/starlark/java:clients"],
+    deps = [
+        ":eval",
+        "//src/main/java/net/starlark/java/syntax",
+        "@maven//:org_graalvm_truffle_truffle_api",
+    ],
+    runtime_deps = [
+        # Provides the optimizing runtime; only JIT-compiles guest code on a Graal/Truffle-capable
+        # JVM, otherwise runs interpreted (which is fine for correctness).
+        "@maven//:org_graalvm_truffle_truffle_runtime",
     ],
 )
 

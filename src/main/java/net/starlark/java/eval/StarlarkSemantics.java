@@ -282,4 +282,12 @@ public class StarlarkSemantics {
 
   /** Globally Override fail(stack_trace=) to true. Flag default is false. */
   public static final String FORCE_STARLARK_STACK_TRACE = "-force_starlark_stack_trace";
+
+  /**
+   * Selects the engine used to execute Starlark function bodies. The empty string (the default)
+   * means the built-in tree-walking evaluator; other values name an alternative engine registered
+   * with {@link StarlarkEngine} (e.g. {@code "truffle"}). See {@link StarlarkEngine}.
+   */
+  public static final Key<String> EXPERIMENTAL_STARLARK_ENGINE =
+      new Key<>("experimental_starlark_engine", "");
 }
