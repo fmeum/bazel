@@ -15,6 +15,7 @@
 package net.starlark.java.eval;
 
 import com.oracle.truffle.api.RootCallTarget;
+import com.oracle.truffle.api.Truffle;
 import com.oracle.truffle.api.frame.VirtualFrame;
 import com.oracle.truffle.api.nodes.Node;
 import com.oracle.truffle.api.nodes.RootNode;
@@ -86,6 +87,11 @@ final class TruffleStarlarkEngine implements StarlarkEngine {
   /** Instrumentation: number of function bodies executed natively (read by tests). */
   static final AtomicLong NATIVE_CALLS = new AtomicLong();
 
+  /** With -Dstarlark.truffle.debug=true, log the active Truffle runtime once (is JVMCI/Graal on?). */
+  private static final boolean DEBUG = Boolean.getBoolean("starlark.truffle.debug");
+
+  private static volatile boolean diagnosed = false;
+
   /** Compiled bodies, keyed by the resolved function (shared across closure instances). */
   private final ConcurrentHashMap<Resolver.Function, Object> compiled = new ConcurrentHashMap<>();
 
@@ -93,6 +99,15 @@ final class TruffleStarlarkEngine implements StarlarkEngine {
   public Object execFunctionBody(StarlarkThread.Frame fr, List<Statement> statements)
       throws EvalException, InterruptedException {
     fr.thread.checkInterrupt();
+    if (DEBUG && !diagnosed) {
+      diagnosed = true;
+      System.err.println(
+          "[starlark-truffle] Truffle runtime: "
+              + Truffle.getRuntime().getName()
+              + " ["
+              + Truffle.getRuntime().getClass().getName()
+              + "]");
+    }
     StarlarkFunction fn = (StarlarkFunction) fr.fn;
     // Top-level file bodies have export side effects handled by the tree-walker; never compile them.
     if (fn.isToplevel()) {
@@ -433,6 +448,15 @@ final class TruffleStarlarkEngine implements StarlarkEngine {
         default:
           Object y = right.exec(fr);
           try {
+            // Specialized fast path for int-op-int (the common case in loops), identical to the
+            // StarlarkInt cases inside EvalUtils.binaryOp but a clean, partial-evaluation-friendly
+            // call the Graal compiler can inline. Everything else defers to EvalUtils.binaryOp.
+            if (x instanceof StarlarkInt xi && y instanceof StarlarkInt yi) {
+              StarlarkInt fast = fastIntArith(op, xi, yi);
+              if (fast != null) {
+                return fast;
+              }
+            }
             return EvalUtils.binaryOp(op, x, y, fr.thread);
           } catch (EvalException ex) {
             fr.setErrorLocation(opLoc);
@@ -440,6 +464,25 @@ final class TruffleStarlarkEngine implements StarlarkEngine {
           }
       }
     }
+  }
+
+  /**
+   * Fast path for {@code int <op> int}, returning the same result as the corresponding StarlarkInt
+   * case in {@link EvalUtils#binaryOp}, or null for operators handled only by the general path
+   * (true/floor division, shifts, comparisons).
+   */
+  private static StarlarkInt fastIntArith(TokenKind op, StarlarkInt x, StarlarkInt y)
+      throws EvalException {
+    return switch (op) {
+      case PLUS -> StarlarkInt.add(x, y);
+      case MINUS -> StarlarkInt.subtract(x, y);
+      case STAR -> StarlarkInt.multiply(x, y);
+      case PERCENT -> StarlarkInt.mod(x, y);
+      case AMPERSAND -> StarlarkInt.and(x, y);
+      case PIPE -> StarlarkInt.or(x, y);
+      case CARET -> StarlarkInt.xor(x, y);
+      default -> null;
+    };
   }
 
   /** Mirrors {@link Eval}'s {@code evalUnaryOperator}. */
