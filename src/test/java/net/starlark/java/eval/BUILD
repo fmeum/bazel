@@ -54,6 +54,18 @@ java_test(
     ],
 )
 
+# Microbenchmark: tree-walking vs Truffle engine on one hot function (reuses the compiled CallTarget).
+java_binary(
+    name = "TruffleStarlarkBenchmark",
+    srcs = ["TruffleStarlarkBenchmark.java"],
+    main_class = "net.starlark.java.eval.TruffleStarlarkBenchmark",
+    deps = [
+        "//src/main/java/net/starlark/java/eval",
+        "//src/main/java/net/starlark/java/eval:truffle_engine",
+        "//src/main/java/net/starlark/java/syntax",
+    ],
+)
+
 # Differential test for the StarlarkEngine seam (default tree-walker vs. an installed engine).
 java_test(
     name = "StarlarkEngineConsistencyTest",
