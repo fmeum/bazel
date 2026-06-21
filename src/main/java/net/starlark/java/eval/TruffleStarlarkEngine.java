@@ -20,12 +20,14 @@ import com.oracle.truffle.api.Truffle;
 import com.oracle.truffle.api.frame.FrameDescriptor;
 import com.oracle.truffle.api.frame.FrameSlotKind;
 import com.oracle.truffle.api.frame.VirtualFrame;
+import com.oracle.truffle.api.nodes.BlockNode;
 import com.oracle.truffle.api.nodes.ControlFlowException;
 import com.oracle.truffle.api.nodes.ExplodeLoop;
 import com.oracle.truffle.api.nodes.LoopNode;
 import com.oracle.truffle.api.nodes.Node;
 import com.oracle.truffle.api.nodes.RepeatingNode;
 import com.oracle.truffle.api.nodes.RootNode;
+import com.oracle.truffle.api.nodes.UnexpectedResultException;
 import java.math.BigInteger;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
@@ -139,9 +141,11 @@ final class TruffleStarlarkEngine implements StarlarkEngine {
       }
       // Slots: one per declared local, then one hidden iterator slot per for-loop (allocated below).
       int[] nextSlot = {rfn.getLocals().size()};
-      SlotStmt[] body = compileBlock(rfn.getBody(), nextSlot);
+      SlotStmt body = compileBlock(rfn.getBody(), nextSlot);
       FrameDescriptor.Builder fd = FrameDescriptor.newBuilder();
-      fd.addSlots(nextSlot[0], FrameSlotKind.Object);
+      // Illegal = dynamically typed: a slot may hold an unboxed long (the integer fast path) or an
+      // Object (StarlarkInt/anything else), tracked by the frame's per-slot tag.
+      fd.addSlots(nextSlot[0], FrameSlotKind.Illegal);
       return new BodyRootNode(fd.build(), rfn.getLocals().size(), body).getCallTarget();
     } catch (RuntimeException | StackOverflowError e) {
       return FALLBACK;
@@ -162,12 +166,47 @@ final class TruffleStarlarkEngine implements StarlarkEngine {
     }
   }
 
-  private static SlotStmt[] compileBlock(List<Statement> stmts, int[] nextSlot) {
+  private static SlotStmt compileBlock(List<Statement> stmts, int[] nextSlot) {
     SlotStmt[] out = new SlotStmt[stmts.size()];
     for (int i = 0; i < stmts.size(); i++) {
       out[i] = compileStmt(stmts.get(i), nextSlot);
     }
-    return out;
+    // A single statement needs no block wrapper. This also keeps the shared BlockNode executor off
+    // the recursive path through loops: a function-body block containing a for-loop whose body is
+    // itself a block would otherwise make the executor inline into itself, and PE bails with
+    // "recursive inlining". Multi-statement blocks use Truffle's BlockNode.
+    return out.length == 1 ? out[0] : new BlockStmtNode(out);
+  }
+
+  /** Runs one statement; wraps its checked exceptions so they cross the BlockNode boundary. */
+  private static final BlockNode.ElementExecutor<SlotStmt> BLOCK_EXECUTOR =
+      new BlockNode.ElementExecutor<SlotStmt>() {
+        @Override
+        public void executeVoid(VirtualFrame frame, SlotStmt node, int index, int argument) {
+          try {
+            node.executeVoid(frame);
+          } catch (EvalException | InterruptedException e) {
+            throw new HostException(e);
+          }
+        }
+      };
+
+  /** A multi-statement block, backed by a Truffle {@link BlockNode}. */
+  private static final class BlockStmtNode extends SlotStmt {
+    @Child private BlockNode<SlotStmt> block;
+
+    BlockStmtNode(SlotStmt[] stmts) {
+      this.block = BlockNode.create(stmts, BLOCK_EXECUTOR);
+    }
+
+    @Override
+    void executeVoid(VirtualFrame vf) throws EvalException, InterruptedException {
+      try {
+        block.executeVoid(vf, BlockNode.NO_ARGUMENT);
+      } catch (HostException e) {
+        throw e.rethrow();
+      }
+    }
   }
 
   private static SlotStmt compileStmt(Statement s, int[] nextSlot) {
@@ -313,25 +352,16 @@ final class TruffleStarlarkEngine implements StarlarkEngine {
     throw new Unsupported("expression: " + e.kind());
   }
 
-  /** Executes a straight-line block; {@code return} unwinds past it via {@link SlotReturnException}. */
-  @ExplodeLoop
-  private static TokenKind execBlock(SlotStmt[] body, VirtualFrame vf)
-      throws EvalException, InterruptedException {
-    for (SlotStmt s : body) {
-      TokenKind flow = s.exec(vf);
-      if (flow != TokenKind.PASS) {
-        return flow; // BREAK or CONTINUE
-      }
-    }
-    return TokenKind.PASS;
-  }
-
   /** Reads an identifier; mirrors {@link Eval}'s {@code evalIdentifier} but locals come from slots. */
   private static Object readName(VirtualFrame vf, Resolver.Binding bind, String name, Location loc)
       throws EvalException {
     Object result;
     switch (bind.getScope()) {
-      case LOCAL -> result = vf.getObject(bind.getIndex());
+      case LOCAL ->
+          result =
+              vf.isLong(bind.getIndex())
+                  ? StarlarkInt.of(vf.getLong(bind.getIndex()))
+                  : vf.getObject(bind.getIndex());
       case FREE -> result = ((StarlarkFunction) frameOf(vf).fn).getFreeVar(bind.getIndex()).x;
       case GLOBAL -> result = ((StarlarkFunction) frameOf(vf).fn).getGlobal(bind.getIndex());
       case PREDECLARED -> result = ((StarlarkFunction) frameOf(vf).fn).getModule().getPredeclared(name);
@@ -339,11 +369,17 @@ final class TruffleStarlarkEngine implements StarlarkEngine {
       default -> throw new Unsupported("read of " + bind.getScope() + " variable");
     }
     if (result == null) {
-      frameOf(vf).setErrorLocation(loc);
-      throw Starlark.errorf(
-          "%s variable '%s' is referenced before assignment.", bind.getScope(), name);
+      throw referencedBeforeAssignment(frameOf(vf), bind, name, loc);
     }
     return result;
+  }
+
+  @TruffleBoundary
+  private static EvalException referencedBeforeAssignment(
+      StarlarkThread.Frame fr, Resolver.Binding bind, String name, Location loc) {
+    fr.setErrorLocation(loc);
+    return Starlark.errorf(
+        "%s variable '%s' is referenced before assignment.", bind.getScope(), name);
   }
 
   /** Assigns an identifier; mirrors {@link Eval}'s {@code assignIdentifier} but locals are slots. */
@@ -437,12 +473,6 @@ final class TruffleStarlarkEngine implements StarlarkEngine {
   }
 
   @TruffleBoundary
-  private static Object binaryOpBoundary(TokenKind op, Object x, Object y, StarlarkThread thread)
-      throws EvalException {
-    return EvalUtils.binaryOp(op, x, y, thread);
-  }
-
-  @TruffleBoundary
   private static Object unaryOpBoundary(TokenKind op, Object x) throws EvalException {
     return EvalUtils.unaryOp(op, x);
   }
@@ -510,23 +540,65 @@ final class TruffleStarlarkEngine implements StarlarkEngine {
 
   private abstract static class SlotExpr extends Node {
     abstract Object exec(VirtualFrame vf) throws EvalException, InterruptedException;
+
+    /**
+     * Returns this expression's value as an unboxed {@code long}, or throws {@link
+     * UnexpectedResultException} (carrying the boxed value) if it isn't a long-representable int.
+     * This is the "integer tower" fast path: arithmetic chains evaluate end-to-end in {@code long}
+     * with no StarlarkInt allocation; the {@link UnexpectedResultException} (a cheap stackless
+     * SlowPathException) deopts to the boxed path on overflow or a non-int value.
+     */
+    long executeLong(VirtualFrame vf)
+        throws UnexpectedResultException, EvalException, InterruptedException {
+      Object o = exec(vf);
+      if (o instanceof StarlarkInt si) {
+        try {
+          return si.toLongFast();
+        } catch (StarlarkInt.Overflow ignored) {
+          // doesn't fit in a long; fall through
+        }
+      }
+      throw new UnexpectedResultException(o);
+    }
   }
 
   private abstract static class SlotStmt extends Node {
-    /** Returns PASS, BREAK, or CONTINUE; {@code return} unwinds via {@link SlotReturnException}. */
-    abstract TokenKind exec(VirtualFrame vf) throws EvalException, InterruptedException;
+    /** Executes for effect; {@code return}/{@code break}/{@code continue} unwind via exceptions. */
+    abstract void executeVoid(VirtualFrame vf) throws EvalException, InterruptedException;
   }
 
   private static final class ConstNode extends SlotExpr {
     private final Object value;
+    private final boolean isLong;
+    private final long longValue;
 
     ConstNode(Object value) {
       this.value = value;
+      long l = 0;
+      boolean fits = false;
+      if (value instanceof StarlarkInt si) {
+        try {
+          l = si.toLongFast();
+          fits = true;
+        } catch (StarlarkInt.Overflow ignored) {
+          // not long-representable
+        }
+      }
+      this.isLong = fits;
+      this.longValue = l;
     }
 
     @Override
     Object exec(VirtualFrame vf) {
       return value;
+    }
+
+    @Override
+    long executeLong(VirtualFrame vf) throws UnexpectedResultException {
+      if (isLong) {
+        return longValue;
+      }
+      throw new UnexpectedResultException(value);
     }
   }
 
@@ -545,6 +617,16 @@ final class TruffleStarlarkEngine implements StarlarkEngine {
     Object exec(VirtualFrame vf) throws EvalException {
       return readName(vf, bind, name, loc);
     }
+
+    @Override
+    long executeLong(VirtualFrame vf)
+        throws UnexpectedResultException, EvalException, InterruptedException {
+      // Fast path: a local already stored as an unboxed long.
+      if (bind.getScope() == Resolver.Scope.LOCAL && vf.isLong(bind.getIndex())) {
+        return vf.getLong(bind.getIndex());
+      }
+      return super.executeLong(vf);
+    }
   }
 
   private static final class BinaryNode extends SlotExpr {
@@ -562,28 +644,97 @@ final class TruffleStarlarkEngine implements StarlarkEngine {
 
     @Override
     Object exec(VirtualFrame vf) throws EvalException, InterruptedException {
-      Object x = left.exec(vf);
       switch (op) {
-        case AND:
+        case AND: {
+          Object x = left.exec(vf);
           return Starlark.truth(x) ? right.exec(vf) : x;
-        case OR:
+        }
+        case OR: {
+          Object x = left.exec(vf);
           return Starlark.truth(x) ? x : right.exec(vf);
-        default:
-          Object y = right.exec(vf);
+        }
+        case PLUS:
+        case MINUS:
+        case STAR:
+          // Unboxed-long fast path; box the result. A non-int/overflow deopts via the exception.
           try {
-            if (x instanceof StarlarkInt xi && y instanceof StarlarkInt yi) {
-              StarlarkInt fast = fastIntArith(op, xi, yi);
-              if (fast != null) {
-                return fast;
-              }
-            }
-            return binaryOpBoundary(op, x, y, frameOf(vf).thread);
-          } catch (EvalException ex) {
-            frameOf(vf).setErrorLocation(opLoc);
-            throw ex;
+            return StarlarkInt.of(executeLong(vf));
+          } catch (UnexpectedResultException e) {
+            return e.getResult();
           }
+        default: {
+          Object x = left.exec(vf);
+          Object y = right.exec(vf);
+          return genericArithWithLoc(x, y, vf);
+        }
       }
     }
+
+    @Override
+    long executeLong(VirtualFrame vf)
+        throws UnexpectedResultException, EvalException, InterruptedException {
+      if (op != TokenKind.PLUS && op != TokenKind.MINUS && op != TokenKind.STAR) {
+        return super.executeLong(vf); // comparisons, %, bitwise, etc.: no long fast path
+      }
+      long l;
+      try {
+        l = left.executeLong(vf);
+      } catch (UnexpectedResultException e) {
+        // Left isn't a long; finish generically (right is evaluated exactly once, after left).
+        throw new UnexpectedResultException(genericArithWithLoc(e.getResult(), right.exec(vf), vf));
+      }
+      long r;
+      try {
+        r = right.executeLong(vf);
+      } catch (UnexpectedResultException e) {
+        throw new UnexpectedResultException(genericArithWithLoc(StarlarkInt.of(l), e.getResult(), vf));
+      }
+      try {
+        return switch (op) {
+          case PLUS -> Math.addExact(l, r);
+          case MINUS -> Math.subtractExact(l, r);
+          case STAR -> Math.multiplyExact(l, r);
+          default -> throw new IllegalStateException();
+        };
+      } catch (ArithmeticException overflow) {
+        throw new UnexpectedResultException(bigArith(op, l, r));
+      }
+    }
+
+    /** Generic (boxed) binary op with this node's error location. */
+    private Object genericArithWithLoc(Object x, Object y, VirtualFrame vf) throws EvalException {
+      try {
+        return genericBinaryOp(op, x, y, frameOf(vf).thread);
+      } catch (EvalException ex) {
+        frameOf(vf).setErrorLocation(opLoc);
+        throw ex;
+      }
+    }
+  }
+
+  @TruffleBoundary
+  private static Object genericBinaryOp(TokenKind op, Object x, Object y, StarlarkThread thread)
+      throws EvalException {
+    if (x instanceof StarlarkInt xi && y instanceof StarlarkInt yi) {
+      StarlarkInt fast = fastIntArith(op, xi, yi);
+      if (fast != null) {
+        return fast;
+      }
+    }
+    return EvalUtils.binaryOp(op, x, y, thread);
+  }
+
+  /** The big-integer result of an int op that overflowed the long fast path. */
+  @TruffleBoundary
+  private static StarlarkInt bigArith(TokenKind op, long l, long r) {
+    StarlarkInt x = StarlarkInt.of(l);
+    StarlarkInt y = StarlarkInt.of(r);
+    return switch (op) {
+      case PLUS -> StarlarkInt.add(x, y);
+      case MINUS -> StarlarkInt.subtract(x, y);
+      case STAR -> StarlarkInt.multiply(x, y);
+      default -> throw new IllegalStateException();
+    };
   }
 
   private static final class UnaryNode extends SlotExpr {
@@ -760,7 +911,7 @@ final class TruffleStarlarkEngine implements StarlarkEngine {
     }
 
     @Override
-    TokenKind exec(VirtualFrame vf) throws EvalException, InterruptedException {
+    void executeVoid(VirtualFrame vf) throws EvalException, InterruptedException {
       throw new SlotReturnException(result == null ? Starlark.NONE : result.exec(vf));
     }
   }
@@ -773,9 +924,8 @@ final class TruffleStarlarkEngine implements StarlarkEngine {
     }
 
     @Override
-    TokenKind exec(VirtualFrame vf) throws EvalException, InterruptedException {
+    void executeVoid(VirtualFrame vf) throws EvalException, InterruptedException {
       expr.exec(vf);
-      return TokenKind.PASS;
     }
   }
 
@@ -787,30 +937,35 @@ final class TruffleStarlarkEngine implements StarlarkEngine {
     }
 
     @Override
-    TokenKind exec(VirtualFrame vf) {
-      return kind;
+    void executeVoid(VirtualFrame vf) {
+      if (kind == TokenKind.BREAK) {
+        throw SlotBreakException.INSTANCE;
+      }
+      if (kind == TokenKind.CONTINUE) {
+        throw SlotContinueException.INSTANCE;
+      }
+      // PASS: do nothing.
     }
   }
 
   private static final class IfNode extends SlotStmt {
     @Child private SlotExpr cond;
-    @Children private final SlotStmt[] thenBlock;
-    @Children private final SlotStmt[] elseBlock; // may be null
+    @Child private SlotStmt thenBlock;
+    @Child private SlotStmt elseBlock; // may be null
 
-    IfNode(SlotExpr cond, SlotStmt[] thenBlock, SlotStmt[] elseBlock) {
+    IfNode(SlotExpr cond, SlotStmt thenBlock, SlotStmt elseBlock) {
       this.cond = cond;
       this.thenBlock = thenBlock;
       this.elseBlock = elseBlock;
     }
 
     @Override
-    TokenKind exec(VirtualFrame vf) throws EvalException, InterruptedException {
+    void executeVoid(VirtualFrame vf) throws EvalException, InterruptedException {
       if (Starlark.truth(cond.exec(vf))) {
-        return execBlock(thenBlock, vf);
+        thenBlock.executeVoid(vf);
       } else if (elseBlock != null) {
-        return execBlock(elseBlock, vf);
+        elseBlock.executeVoid(vf);
       }
-      return TokenKind.PASS;
     }
   }
 
@@ -827,40 +982,35 @@ final class TruffleStarlarkEngine implements StarlarkEngine {
         SlotExpr collection,
         Location collectionLoc,
         Location forLoc,
-        SlotStmt[] body) {
+        SlotStmt body) {
       this.iterSlot = iterSlot;
       this.collection = collection;
       this.collectionLoc = collectionLoc;
-      this.loop =
-          Truffle.getRuntime().createLoopNode(new ForRepeatingNode(loopVarSlot, iterSlot, forLoc, body));
+      this.loop = Truffle.getRuntime().createLoopNode(new ForRepeatingNode(loopVarSlot, iterSlot, body));
     }
 
     @Override
-    TokenKind exec(VirtualFrame vf) throws EvalException, InterruptedException {
+    void executeVoid(VirtualFrame vf) throws EvalException, InterruptedException {
       StarlarkThread.Frame fr = frameOf(vf);
       Iterable<?> seq = toIterableBoundary(collection.exec(vf), fr, collectionLoc);
       vf.setObject(iterSlot, beginIteration(seq));
       try {
+        // SlotReturnException / HostException propagate out to the RootNode / engine.
         loop.execute(vf);
-      } catch (HostException e) {
-        throw e.rethrow();
       } finally {
         endIteration(seq);
       }
-      return TokenKind.PASS;
     }
   }
 
   private static final class ForRepeatingNode extends Node implements RepeatingNode {
     private final int loopVarSlot;
     private final int iterSlot;
-    private final Location forLoc;
-    @Children private final SlotStmt[] body;
+    @Child private SlotStmt body;
 
-    ForRepeatingNode(int loopVarSlot, int iterSlot, Location forLoc, SlotStmt[] body) {
+    ForRepeatingNode(int loopVarSlot, int iterSlot, SlotStmt body) {
       this.loopVarSlot = loopVarSlot;
       this.iterSlot = iterSlot;
-      this.forLoc = forLoc;
       this.body = body;
     }
 
@@ -872,18 +1022,20 @@ final class TruffleStarlarkEngine implements StarlarkEngine {
       }
       vf.setObject(loopVarSlot, iterNext(it));
       try {
-        // SlotReturnException (a ControlFlowException) propagates straight out to the RootNode.
-        if (execBlock(body, vf) == TokenKind.BREAK) {
-          return false;
-        }
-        frameOf(vf).thread.checkInterrupt();
-        return true;
-      } catch (EvalException e) {
-        frameOf(vf).setErrorLocation(forLoc);
+        body.executeVoid(vf);
+      } catch (SlotBreakException b) {
+        return false;
+      } catch (SlotContinueException c) {
+        // fall through and continue with the next element
+      } catch (EvalException | InterruptedException e) {
         throw new HostException(e);
+      }
+      try {
+        frameOf(vf).thread.checkInterrupt();
       } catch (InterruptedException e) {
         throw new HostException(e);
       }
+      return true;
     }
   }
 
@@ -899,14 +1051,28 @@ final class TruffleStarlarkEngine implements StarlarkEngine {
     }
 
     @Override
-    TokenKind exec(VirtualFrame vf) throws EvalException, InterruptedException {
+    void executeVoid(VirtualFrame vf) throws EvalException, InterruptedException {
       try {
-        assignName(vf, bind, rhs.exec(vf));
+        if (bind.getScope() == Resolver.Scope.LOCAL) {
+          // Store as an unboxed long when the value is a long-representable int (the fast path).
+          try {
+            vf.setLong(bind.getIndex(), rhs.executeLong(vf));
+          } catch (UnexpectedResultException e) {
+            vf.setObject(bind.getIndex(), e.getResult());
+          }
+        } else {
+          Object v;
+          try {
+            v = StarlarkInt.of(rhs.executeLong(vf));
+          } catch (UnexpectedResultException e) {
+            v = e.getResult();
+          }
+          assignName(vf, bind, v);
+        }
       } catch (EvalException ex) {
         frameOf(vf).setErrorLocation(opLoc);
         throw ex;
       }
-      return TokenKind.PASS;
     }
   }
 
@@ -924,7 +1090,7 @@ final class TruffleStarlarkEngine implements StarlarkEngine {
     }
 
     @Override
-    TokenKind exec(VirtualFrame vf) throws EvalException, InterruptedException {
+    void executeVoid(VirtualFrame vf) throws EvalException, InterruptedException {
       try {
         Object value = rhs.exec(vf);
         setIndexBoundary(object.exec(vf), key.exec(vf), value);
@@ -932,7 +1098,6 @@ final class TruffleStarlarkEngine implements StarlarkEngine {
         frameOf(vf).setErrorLocation(opLoc);
         throw ex;
       }
-      return TokenKind.PASS;
     }
   }
 
@@ -952,7 +1117,7 @@ final class TruffleStarlarkEngine implements StarlarkEngine {
     }
 
     @Override
-    TokenKind exec(VirtualFrame vf) throws EvalException, InterruptedException {
+    void executeVoid(VirtualFrame vf) throws EvalException, InterruptedException {
       StarlarkThread.Frame fr = frameOf(vf);
       try {
         Object value = rhs.exec(vf);
@@ -967,7 +1132,6 @@ final class TruffleStarlarkEngine implements StarlarkEngine {
         fr.setErrorLocation(opLoc);
         throw ex;
       }
-      return TokenKind.PASS;
     }
   }
 
@@ -988,7 +1152,7 @@ final class TruffleStarlarkEngine implements StarlarkEngine {
     }
 
     @Override
-    TokenKind exec(VirtualFrame vf) throws EvalException, InterruptedException {
+    void executeVoid(VirtualFrame vf) throws EvalException, InterruptedException {
       Object x = read.exec(vf);
       Object y = rhs.exec(vf);
       Object z;
@@ -999,7 +1163,6 @@ final class TruffleStarlarkEngine implements StarlarkEngine {
         throw ex;
       }
       assignName(vf, bind, z);
-      return TokenKind.PASS;
     }
   }
 
@@ -1019,7 +1182,7 @@ final class TruffleStarlarkEngine implements StarlarkEngine {
     }
 
     @Override
-    TokenKind exec(VirtualFrame vf) throws EvalException, InterruptedException {
+    void executeVoid(VirtualFrame vf) throws EvalException, InterruptedException {
       StarlarkThread.Frame fr = frameOf(vf);
       Object o = object.exec(vf);
       Object k = key.exec(vf);
@@ -1038,7 +1201,6 @@ final class TruffleStarlarkEngine implements StarlarkEngine {
         fr.setErrorLocation(opLoc);
         throw ex;
       }
-      return TokenKind.PASS;
     }
   }
 
@@ -1061,7 +1223,7 @@ final class TruffleStarlarkEngine implements StarlarkEngine {
     }
 
     @Override
-    TokenKind exec(VirtualFrame vf) throws EvalException, InterruptedException {
+    void executeVoid(VirtualFrame vf) throws EvalException, InterruptedException {
       StarlarkThread.Frame fr = frameOf(vf);
       Object o = object.exec(vf);
       try {
@@ -1079,15 +1241,14 @@ final class TruffleStarlarkEngine implements StarlarkEngine {
         fr.setErrorLocation(dotLoc);
         throw ex;
       }
-      return TokenKind.PASS;
     }
   }
 
   private static final class BodyRootNode extends RootNode {
     private final int nLocals;
-    @Children private final SlotStmt[] body;
+    @Child private SlotStmt body;
 
-    BodyRootNode(FrameDescriptor frameDescriptor, int nLocals, SlotStmt[] body) {
+    BodyRootNode(FrameDescriptor frameDescriptor, int nLocals, SlotStmt body) {
       super(null, frameDescriptor);
       this.nLocals = nLocals;
       this.body = body;
@@ -1104,12 +1265,12 @@ final class TruffleStarlarkEngine implements StarlarkEngine {
         frame.setObject(i, incoming[i]);
       }
       try {
-        execBlock(body, frame);
+        body.executeVoid(frame);
         return Starlark.NONE; // reached the end with no return statement
       } catch (SlotReturnException r) {
         return r.value;
       } catch (EvalException | InterruptedException e) {
-        throw new HostException(e);
+        throw new HostException(e); // unwrapped by execFunctionBody
       }
     }
   }
@@ -1121,6 +1282,16 @@ final class TruffleStarlarkEngine implements StarlarkEngine {
     SlotReturnException(Object value) {
       this.value = value;
     }
+  }
+
+  /** Non-local exit for {@code break}; a reusable singleton (ControlFlowException has no stack). */
+  private static final class SlotBreakException extends ControlFlowException {
+    static final SlotBreakException INSTANCE = new SlotBreakException();
+  }
+
+  /** Non-local exit for {@code continue}; a reusable singleton. */
+  private static final class SlotContinueException extends ControlFlowException {
+    static final SlotContinueException INSTANCE = new SlotContinueException();
   }
 
   /** Carries a checked Starlark exception across a Truffle boundary that can't declare it. */

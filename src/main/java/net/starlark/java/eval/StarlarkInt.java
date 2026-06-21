@@ -357,7 +357,8 @@ public abstract class StarlarkInt implements StarlarkValue, Comparable<StarlarkI
   // A preallocated exception used to indicate overflow errors without the cost of allocation.
   private static final Overflow OVERFLOW = new Overflow();
 
-  private static final class Overflow extends Exception {}
+  // Package-private (not private) so the Truffle engine can catch it around toLongFast().
+  static final class Overflow extends Exception {}
 
   /**
    * Similar to {@link #toLong(String)}, but faster: exception is not allocated and stack trace is
