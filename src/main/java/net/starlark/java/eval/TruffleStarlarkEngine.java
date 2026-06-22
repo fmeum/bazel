@@ -14,6 +14,8 @@
 
 package net.starlark.java.eval;
 
+import com.oracle.truffle.api.CompilerDirectives;
+import com.oracle.truffle.api.CompilerDirectives.CompilationFinal;
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
 import com.oracle.truffle.api.RootCallTarget;
 import com.oracle.truffle.api.Truffle;
@@ -130,6 +132,11 @@ final class TruffleStarlarkEngine implements StarlarkEngine {
     } catch (HostException e) {
       throw e.rethrow();
     }
+  }
+
+  /** For benchmarks/tests: whether {@code fn}'s body is compiled natively (vs. falls back to Eval). */
+  boolean isNativelyCompiled(StarlarkFunction fn) {
+    return compiled.get(fn.rfn) instanceof RootCallTarget;
   }
 
   /** Compiles a function body to a CallTarget, or returns {@link #FALLBACK} if it can't. */
@@ -686,12 +693,20 @@ final class TruffleStarlarkEngine implements StarlarkEngine {
     private final Location opLoc;
     @Child private SlotExpr left;
     @Child private SlotExpr right;
+    // Speculation for +,-,*: try the unboxed-long fast path until a non-int operand is seen, then
+    // switch permanently to the generic path. Avoids an UnexpectedResultException per op for
+    // string/list/etc. arithmetic (which would otherwise be much slower than the tree-walker).
+    @CompilationFinal private boolean intArith = true;
 
     BinaryNode(TokenKind op, Location opLoc, SlotExpr left, SlotExpr right) {
       this.op = op;
       this.opLoc = opLoc;
       this.left = left;
       this.right = right;
+    }
+
+    private boolean isArith() {
+      return op == TokenKind.PLUS || op == TokenKind.MINUS || op == TokenKind.STAR;
     }
 
     @Override
@@ -708,12 +723,16 @@ final class TruffleStarlarkEngine implements StarlarkEngine {
         case PLUS:
         case MINUS:
         case STAR:
-          // Unboxed-long fast path; box the result. A non-int/overflow deopts via the exception.
-          try {
-            return StarlarkInt.of(executeLong(vf));
-          } catch (UnexpectedResultException e) {
-            return e.getResult();
+          if (intArith) {
+            try {
+              return StarlarkInt.of(executeLong(vf));
+            } catch (UnexpectedResultException e) {
+              CompilerDirectives.transferToInterpreterAndInvalidate();
+              intArith = false; // a non-int operand: stop trying the long path
+              return e.getResult();
+            }
           }
+          // fall through to the generic path
         default: {
           Object x = left.exec(vf);
           Object y = right.exec(vf);
@@ -725,8 +744,11 @@ final class TruffleStarlarkEngine implements StarlarkEngine {
     @Override
     long executeLong(VirtualFrame vf)
         throws UnexpectedResultException, EvalException, InterruptedException {
-      if (op != TokenKind.PLUS && op != TokenKind.MINUS && op != TokenKind.STAR) {
+      if (!isArith()) {
         return super.executeLong(vf); // comparisons, %, bitwise, etc.: no long fast path
+      }
+      if (!intArith) {
+        throw new UnexpectedResultException(exec(vf)); // known non-int: skip the long attempt
       }
       long l;
       try {
@@ -1189,6 +1211,9 @@ final class TruffleStarlarkEngine implements StarlarkEngine {
     private final Resolver.Binding bind;
     @Child private SlotExpr rhs;
     private final Location opLoc;
+    // For LOCAL targets: try storing an unboxed long until a non-int value is seen, then switch to
+    // an Object slot store. Avoids an UnexpectedResultException per non-int assignment.
+    @CompilationFinal private boolean intStore = true;
 
     AssignIdentNode(Resolver.Binding bind, SlotExpr rhs, Location opLoc) {
       this.bind = bind;
@@ -1199,21 +1224,16 @@ final class TruffleStarlarkEngine implements StarlarkEngine {
     @Override
     void executeVoid(VirtualFrame vf) throws EvalException, InterruptedException {
       try {
-        if (bind.getScope() == Resolver.Scope.LOCAL) {
-          // Store as an unboxed long when the value is a long-representable int (the fast path).
+        if (bind.getScope() == Resolver.Scope.LOCAL && intStore) {
           try {
             vf.setLong(bind.getIndex(), rhs.executeLong(vf));
           } catch (UnexpectedResultException e) {
+            CompilerDirectives.transferToInterpreterAndInvalidate();
+            intStore = false; // a non-int value: store Objects from now on
             vf.setObject(bind.getIndex(), e.getResult());
           }
         } else {
-          Object v;
-          try {
-            v = StarlarkInt.of(rhs.executeLong(vf));
-          } catch (UnexpectedResultException e) {
-            v = e.getResult();
-          }
-          assignName(vf, bind, v);
+          assignName(vf, bind, rhs.exec(vf));
         }
       } catch (EvalException ex) {
         frameOf(vf).setErrorLocation(opLoc);
