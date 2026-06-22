@@ -223,14 +223,33 @@ final class TruffleStarlarkEngine implements StarlarkEngine {
           || var.getBinding().getScope() != Resolver.Scope.LOCAL) {
         throw new Unsupported("for target");
       }
+      int loopVarSlot = var.getBinding().getIndex();
       int iterSlot = nextSlot[0]++;
-      return new ForNode(
-          var.getBinding().getIndex(),
-          iterSlot,
-          compileExpr(fors.getCollection()),
-          fors.getCollection().getStartLocation(),
-          fors.getStartLocation(),
-          compileBlock(fors.getBody(), nextSlot));
+      ForNode generic =
+          new ForNode(
+              loopVarSlot,
+              iterSlot,
+              compileExpr(fors.getCollection()),
+              fors.getCollection().getStartLocation(),
+              fors.getStartLocation(),
+              compileBlock(fors.getBody(), nextSlot));
+      // Specialize `for i in range(...)`: a counted loop with an unboxed-long induction variable,
+      // no Iterator and no per-element @TruffleBoundary, so the whole loop partially-evaluates.
+      SlotExpr[] rangeArgs = rangeCallArgs(fors.getCollection());
+      if (rangeArgs != null) {
+        int counterSlot = nextSlot[0]++;
+        int stopSlot = nextSlot[0]++;
+        int stepSlot = nextSlot[0]++;
+        return new RangeForNode(
+            loopVarSlot,
+            counterSlot,
+            stopSlot,
+            stepSlot,
+            rangeArgs,
+            compileBlock(fors.getBody(), nextSlot),
+            generic);
+      }
+      return generic;
     } else if (s instanceof FlowStatement flow) {
       return new FlowNode(flow.getFlowKind());
     } else if (s instanceof AssignmentStatement assign) {
@@ -283,6 +302,33 @@ final class TruffleStarlarkEngine implements StarlarkEngine {
       default:
         throw new Unsupported("assignment to " + bind.getScope() + " variable");
     }
+  }
+
+  /**
+   * If {@code collection} is a call to the built-in {@code range} with 1-3 positional args, returns
+   * the compiled argument expressions (for the counted-loop specialization); otherwise null. Only
+   * the UNIVERSAL {@code range} binding is matched, so a user-defined {@code range} is never mistaken
+   * for the builtin.
+   */
+  private static SlotExpr[] rangeCallArgs(Expression collection) {
+    if (!(collection instanceof CallExpression call)
+        || !(call.getFunction() instanceof Identifier id)
+        || id.getBinding().getScope() != Resolver.Scope.UNIVERSAL
+        || !id.getName().equals("range")) {
+      return null;
+    }
+    List<Argument> args = call.getArguments();
+    if (args.isEmpty() || args.size() > 3) {
+      return null;
+    }
+    SlotExpr[] out = new SlotExpr[args.size()];
+    for (int i = 0; i < args.size(); i++) {
+      if (!(args.get(i) instanceof Argument.Positional)) {
+        return null;
+      }
+      out[i] = compileExpr(args.get(i).getValue());
+    }
+    return out;
   }
 
   private static SlotExpr compileExpr(Expression e) {
@@ -503,6 +549,12 @@ final class TruffleStarlarkEngine implements StarlarkEngine {
   @TruffleBoundary
   private static void endIteration(Iterable<?> seq) {
     EvalUtils.removeIterator(seq);
+  }
+
+  /** Constructs the (rare) interrupt exception off the compiled hot path. */
+  @TruffleBoundary
+  private static HostException interrupted() {
+    return new HostException(new InterruptedException());
   }
 
   @TruffleBoundary
@@ -1030,10 +1082,104 @@ final class TruffleStarlarkEngine implements StarlarkEngine {
       } catch (EvalException | InterruptedException e) {
         throw new HostException(e);
       }
+      if (frameOf(vf).thread.isInterrupted()) {
+        throw interrupted();
+      }
+      return true;
+    }
+  }
+
+  /** Specialized {@code for i in range(...)}: a counted loop with an unboxed-long induction var. */
+  private static final class RangeForNode extends SlotStmt {
+    private final int loopVarSlot;
+    private final int counterSlot;
+    private final int stopSlot;
+    private final int stepSlot;
+    @Children private final SlotExpr[] args;
+    @Child private LoopNode loop;
+    @Child private ForNode generic; // fallback when a bound isn't long-representable or step == 0
+
+    RangeForNode(
+        int loopVarSlot,
+        int counterSlot,
+        int stopSlot,
+        int stepSlot,
+        SlotExpr[] args,
+        SlotStmt body,
+        ForNode generic) {
+      this.loopVarSlot = loopVarSlot;
+      this.counterSlot = counterSlot;
+      this.stopSlot = stopSlot;
+      this.stepSlot = stepSlot;
+      this.args = args;
+      this.loop =
+          Truffle.getRuntime()
+              .createLoopNode(new RangeRepeatingNode(loopVarSlot, counterSlot, stopSlot, stepSlot, body));
+      this.generic = generic;
+    }
+
+    @Override
+    @ExplodeLoop
+    void executeVoid(VirtualFrame vf) throws EvalException, InterruptedException {
+      long start;
+      long stop;
+      long step;
       try {
-        frameOf(vf).thread.checkInterrupt();
-      } catch (InterruptedException e) {
+        start = args.length == 1 ? 0 : args[0].executeLong(vf);
+        stop = args[args.length == 1 ? 0 : 1].executeLong(vf);
+        step = args.length == 3 ? args[2].executeLong(vf) : 1;
+      } catch (UnexpectedResultException notLong) {
+        // A bound is a non-int or a bignum: fall back to the general range()/iterator path.
+        generic.executeVoid(vf);
+        return;
+      }
+      if (step == 0) {
+        generic.executeVoid(vf); // range() raises the canonical "step cannot be 0" error
+        return;
+      }
+      vf.setLong(counterSlot, start);
+      vf.setLong(stopSlot, stop);
+      vf.setLong(stepSlot, step);
+      loop.execute(vf);
+    }
+  }
+
+  private static final class RangeRepeatingNode extends Node implements RepeatingNode {
+    private final int loopVarSlot;
+    private final int counterSlot;
+    private final int stopSlot;
+    private final int stepSlot;
+    @Child private SlotStmt body;
+
+    RangeRepeatingNode(int loopVarSlot, int counterSlot, int stopSlot, int stepSlot, SlotStmt body) {
+      this.loopVarSlot = loopVarSlot;
+      this.counterSlot = counterSlot;
+      this.stopSlot = stopSlot;
+      this.stepSlot = stepSlot;
+      this.body = body;
+    }
+
+    @Override
+    public boolean executeRepeating(VirtualFrame vf) {
+      long i = vf.getLong(counterSlot);
+      long step = vf.getLong(stepSlot);
+      long stop = vf.getLong(stopSlot);
+      if (step > 0 ? i >= stop : i <= stop) {
+        return false;
+      }
+      vf.setLong(loopVarSlot, i); // induction variable stays an unboxed long
+      try {
+        body.executeVoid(vf);
+      } catch (SlotBreakException b) {
+        return false;
+      } catch (SlotContinueException c) {
+        // fall through and continue
+      } catch (EvalException | InterruptedException e) {
         throw new HostException(e);
+      }
+      vf.setLong(counterSlot, i + step);
+      if (frameOf(vf).thread.isInterrupted()) {
+        throw interrupted();
       }
       return true;
     }

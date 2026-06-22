@@ -38,23 +38,25 @@ public final class TruffleStarlarkBenchmark {
           + "    return s\n";
 
   public static void main(String[] args) throws Exception {
-    StarlarkInt arg = StarlarkInt.of(2000); // inner loop length per call
+    // One engine per JVM process (pass "" for tree-walking or "truffle"), so the two never
+    // cross-contaminate one JVM's JIT state. Varying arguments (~2000-2255 inner iterations) defeat
+    // constant-folding of the pure function; both engines do the same work, so the ratio is fair.
+    String engine = args.length > 0 ? args[0] : "";
+    StarlarkInt[] inputs = new StarlarkInt[256];
+    for (int k = 0; k < inputs.length; k++) {
+      inputs[k] = StarlarkInt.of(2000 + k);
+    }
+    double usPerCall = benchEngine(engine, inputs) / 1000.0;
     System.out.printf(
-        "JVM: %s %s%n",
-        System.getProperty("java.vm.name"), System.getProperty("java.vm.version"));
-
-    double treeWalk = benchEngine("", arg);
-    double truffle = benchEngine("truffle", arg);
-
-    System.out.printf(Locale.ROOT, "%n%-14s %12s%n", "engine", "ns/call");
-    System.out.println("-".repeat(28));
-    System.out.printf(Locale.ROOT, "%-14s %12.0f%n", "tree-walking", treeWalk);
-    System.out.printf(Locale.ROOT, "%-14s %12.0f%n", "truffle", truffle);
-    System.out.printf(Locale.ROOT, "%nspeedup (treewalk/truffle): %.2fx%n", treeWalk / truffle);
+        Locale.ROOT,
+        "%-12s %8.2f us/call   (JVM %s)%n",
+        engine.isEmpty() ? "tree-walking" : engine,
+        usPerCall,
+        System.getProperty("java.vm.version"));
   }
 
-  /** Returns steady-state ns per hot() call for the given engine. */
-  private static double benchEngine(String engine, StarlarkInt arg) throws Exception {
+  /** Returns steady-state ns per hot() call for the given engine (average over a fixed call count). */
+  private static double benchEngine(String engine, StarlarkInt[] inputs) throws Exception {
     StarlarkSemantics semantics =
         StarlarkSemantics.builder()
             .set(StarlarkSemantics.EXPERIMENTAL_STARLARK_ENGINE, engine)
@@ -68,28 +70,26 @@ public final class TruffleStarlarkBenchmark {
       StarlarkCallable hot = (StarlarkCallable) module.getGlobal("hot");
 
       long sink = 0;
-      sink += callLoop(thread, hot, arg, 30_000); // warmup: compile the CallTarget
-      long ops = 0;
-      long start = System.nanoTime();
-      long end = start + 5_000_000_000L;
-      long now;
-      do {
-        sink += callLoop(thread, hot, arg, 2_000);
-        ops += 2_000;
-        now = System.nanoTime();
-      } while (now < end);
+      sink += callLoop(thread, hot, inputs, 100_000); // warmup: compile the CallTarget
+      // Average over a fixed, large call count (each call runs a ~2000-iteration loop, so this is
+      // hundreds of millions of iterations - GC/scheduling noise averages out).
+      int measured = 300_000;
+      long t0 = System.nanoTime();
+      sink += callLoop(thread, hot, inputs, measured);
+      long dt = System.nanoTime() - t0;
       if (sink == Long.MIN_VALUE) {
         System.out.print(""); // defeat dead-code elimination
       }
-      return (double) (now - start) / ops;
+      return (double) dt / measured;
     }
   }
 
-  private static long callLoop(StarlarkThread thread, StarlarkCallable hot, StarlarkInt arg, int n)
+  private static long callLoop(StarlarkThread thread, StarlarkCallable hot, StarlarkInt[] inputs, int n)
       throws Exception {
     long sink = 0;
+    int mask = inputs.length - 1;
     for (int i = 0; i < n; i++) {
-      sink += Starlark.positionalOnlyCall(thread, hot, arg).hashCode();
+      sink += Starlark.positionalOnlyCall(thread, hot, inputs[i & mask]).hashCode();
     }
     return sink;
   }

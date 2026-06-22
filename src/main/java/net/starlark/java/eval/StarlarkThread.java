@@ -127,6 +127,15 @@ public final class StarlarkThread {
   }
 
   /**
+   * Fast interrupt poll for the Truffle engine's compiled loops: returns true (clearing the flag) if
+   * the thread was interrupted and interrupts are enabled. Lets the hot loop inline the poll and keep
+   * the (rare) InterruptedException construction behind a {@code @TruffleBoundary}.
+   */
+  boolean isInterrupted() {
+    return interruptible && Thread.interrupted();
+  }
+
+  /**
    * setThreadLocal saves {@code value} as a thread-local variable of this Starlark thread, keyed by
    * {@code key}, so that it can later be retrieved by {@code getThreadLocal(key)}.
    */
