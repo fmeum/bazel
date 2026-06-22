@@ -108,6 +108,20 @@ public final class StarlarkEngineConsistencyTest {
         + "    return xs\n"
         + "built = build(6)\n"
         + "first = build(6)[0]\n",
+    // function using string/list method calls (obj.method(args), compiled natively)
+    "def methods(s):\n"
+        + "    parts = s.split(',')\n"
+        + "    joined = '-'.join(parts)\n"
+        + "    return joined.upper() + ' #' + str(len(parts))\n"
+        + "m = methods('a,b,c,d')\n",
+    // function using dict method calls (.get/.keys) inside a loop
+    "def dmethods(n):\n"
+        + "    d = {}\n"
+        + "    for i in range(n):\n"
+        + "        k = i % 5\n"
+        + "        d[k] = d.get(k, 0) + 1\n"
+        + "    return sorted(d.keys()), len(d)\n"
+        + "dm = dmethods(23)\n",
     // function with a dict literal, indexing and membership-style access
     "def freq():\n"
         + "    d = {}\n"

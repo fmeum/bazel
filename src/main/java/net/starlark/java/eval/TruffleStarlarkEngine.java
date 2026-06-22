@@ -388,9 +388,9 @@ final class TruffleStarlarkEngine implements StarlarkEngine {
       }
       return new DictNode(keys, values, colons);
     } else if (e instanceof CallExpression call) {
-      if (!(call.getFunction() instanceof Identifier)) {
-        throw new Unsupported("call to non-identifier");
-      }
+      // Any callee that evaluates to a callable: a plain function (Identifier) or, for
+      // `obj.method(args)`, a DotExpression whose getattr yields a bound method - exactly as
+      // Eval.evalCall does (it has no special case for dotted callees).
       List<Argument> args = call.getArguments();
       SlotExpr[] argNodes = new SlotExpr[args.size()];
       for (int i = 0; i < args.size(); i++) {
