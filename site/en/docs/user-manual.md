@@ -1678,6 +1678,14 @@ If the first word is a fully-qualified label (starts with
 corresponding executable location that is prepended to the command
 that will be executed along with the other words.
 
+When the first word is a label, the environment declared by that target's
+`RunEnvironmentInfo` provider (for example, via the `env` and `env_inherit`
+attributes) is applied to the executed process in addition to the environment of
+the test or binary being run, since both share a single process environment. If
+the two targets set the same environment variable to conflicting values (two
+different fixed values, or one fixed value and one value inherited from the
+client environment), Bazel reports an error.
+
 Some caveats apply:
 
 *   The PATH used for running tests may be different than the PATH in your environment,

@@ -15,9 +15,11 @@
 package com.google.devtools.build.lib.actions;
 
 import static com.google.common.truth.Truth.assertThat;
+import static org.junit.Assert.assertThrows;
 
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
+import com.google.devtools.build.lib.actions.ActionEnvironment.EnvVarConflictException;
 import java.util.HashMap;
 import java.util.Map;
 import org.junit.Test;
@@ -74,5 +76,77 @@ public final class ActionEnvironmentTest {
     ActionEnvironment base =
         ActionEnvironment.create(ImmutableMap.of("FOO", "foo1"), ImmutableSet.of("baz"));
     assertThat(base.withAdditionalFixedVariables(ImmutableMap.of())).isSameInstanceAs(base);
+  }
+
+  @Test
+  public void mergeWith_emptyOther_returnsSameInstance() throws Exception {
+    ActionEnvironment env =
+        ActionEnvironment.create(ImmutableMap.of("FOO", "foo"), ImmutableSet.of("BAR"));
+    assertThat(env.mergeWith(ActionEnvironment.EMPTY, "a", "b")).isSameInstanceAs(env);
+  }
+
+  @Test
+  public void mergeWith_emptyThis_returnsOther() throws Exception {
+    ActionEnvironment other =
+        ActionEnvironment.create(ImmutableMap.of("FOO", "foo"), ImmutableSet.of("BAR"));
+    assertThat(ActionEnvironment.EMPTY.mergeWith(other, "a", "b")).isSameInstanceAs(other);
+  }
+
+  @Test
+  public void mergeWith_disjointVariables_takesUnion() throws Exception {
+    ActionEnvironment env1 =
+        ActionEnvironment.create(ImmutableMap.of("FOO", "foo"), ImmutableSet.of("INHERITED1"));
+    ActionEnvironment env2 =
+        ActionEnvironment.create(ImmutableMap.of("BAR", "bar"), ImmutableSet.of("INHERITED2"));
+
+    ActionEnvironment merged = env1.mergeWith(env2, "env1", "env2");
+
+    assertThat(merged.getFixedEnv()).containsExactly("FOO", "foo", "BAR", "bar");
+    assertThat(merged.getInheritedEnv()).containsExactly("INHERITED1", "INHERITED2");
+  }
+
+  @Test
+  public void mergeWith_agreeingVariables_succeeds() throws Exception {
+    ActionEnvironment env1 =
+        ActionEnvironment.create(ImmutableMap.of("FOO", "foo"), ImmutableSet.of("BAR"));
+    ActionEnvironment env2 =
+        ActionEnvironment.create(ImmutableMap.of("FOO", "foo"), ImmutableSet.of("BAR"));
+
+    ActionEnvironment merged = env1.mergeWith(env2, "env1", "env2");
+
+    assertThat(merged.getFixedEnv()).containsExactly("FOO", "foo");
+    assertThat(merged.getInheritedEnv()).containsExactly("BAR");
+  }
+
+  @Test
+  public void mergeWith_conflictingFixedValues_throws() {
+    ActionEnvironment env1 = ActionEnvironment.create(ImmutableMap.of("FOO", "one"));
+    ActionEnvironment env2 = ActionEnvironment.create(ImmutableMap.of("FOO", "two"));
+
+    EnvVarConflictException e =
+        assertThrows(
+            EnvVarConflictException.class,
+            () -> env1.mergeWith(env2, "the target", "the --run_under target"));
+    assertThat(e)
+        .hasMessageThat()
+        .isEqualTo(
+            "the target sets the environment variable 'FOO' to 'one', but the --run_under target"
+                + " sets it to 'two'");
+  }
+
+  @Test
+  public void mergeWith_fixedVersusInherited_throws() {
+    ActionEnvironment env1 = ActionEnvironment.create(ImmutableMap.of("FOO", "one"));
+    ActionEnvironment env2 = ActionEnvironment.create(ImmutableMap.of(), ImmutableSet.of("FOO"));
+
+    EnvVarConflictException e =
+        assertThrows(
+            EnvVarConflictException.class,
+            () -> env1.mergeWith(env2, "the target", "the --run_under target"));
+    assertThat(e)
+        .hasMessageThat()
+        .isEqualTo(
+            "the target sets the environment variable 'FOO' to the fixed value 'one', but the"
+                + " --run_under target inherits it from the client environment");
   }
 }

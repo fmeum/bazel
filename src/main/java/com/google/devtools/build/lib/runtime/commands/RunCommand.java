@@ -705,6 +705,21 @@ public class RunCommand implements BlazeCommand {
     if (builtTargets.targetToRunRunfilesSupport != null) {
       actionEnvironment = builtTargets.targetToRunRunfilesSupport.getActionEnvironment();
     }
+    // The run_under target shares its environment with the target it wraps, so honor its
+    // RunEnvironmentInfo too, erroring out if the two disagree on any variable.
+    if (builtTargets.runUnderTarget != null) {
+      try {
+        actionEnvironment =
+            actionEnvironment.mergeWith(
+                RunfilesSupport.getRunUnderActionEnvironment(builtTargets.runUnderTarget),
+                "the target " + builtTargets.targetToRun.getLabel(),
+                "the --run_under target " + builtTargets.runUnderTarget.getLabel());
+      } catch (ActionEnvironment.EnvVarConflictException e) {
+        throw new RunCommandException(
+            reportAndCreateFailureResult(env, e.getMessage(), Code.RUN_UNDER_ENVIRONMENT_CONFLICT),
+            builtTargets.stopTime);
+      }
+    }
     // The final run environment is a combination of the environment constructed here and the
     // unrestricted client environment. This means that there is a difference between a variable
     // that isn't included in runEnvironment (which will have its value inherited from the

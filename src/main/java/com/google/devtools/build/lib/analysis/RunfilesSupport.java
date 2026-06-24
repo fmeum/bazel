@@ -299,6 +299,17 @@ public final class RunfilesSupport {
               .merge(getRunfiles(runUnderTarget, ruleContext.getWorkspaceName()))
               .merge(runfiles)
               .build();
+      // The run_under target shares its environment with the test it wraps, so honor its
+      // RunEnvironmentInfo too, erroring out if the two disagree on any variable.
+      try {
+        actionEnvironment =
+            actionEnvironment.mergeWith(
+                getRunUnderActionEnvironment(runUnderTarget),
+                "the test target " + ruleContext.getLabel(),
+                "the --run_under target " + runUnderTarget.getLabel());
+      } catch (ActionEnvironment.EnvVarConflictException e) {
+        ruleContext.ruleError(e.getMessage());
+      }
     }
     checkState(!runfiles.isEmpty(), "Empty runfiles");
 
@@ -388,6 +399,19 @@ public final class RunfilesSupport {
           .addTransitiveArtifacts(target.getProvider(FileProvider.class).getFilesToBuild())
           .build();
     }
+  }
+
+  /**
+   * Returns the {@link ActionEnvironment} (derived from {@link RunEnvironmentInfo} or the {@code
+   * env}/{@code env_inherit} attributes) of a {@code --run_under} target, or {@link
+   * ActionEnvironment#EMPTY} if it does not declare one.
+   */
+  public static ActionEnvironment getRunUnderActionEnvironment(TransitiveInfoCollection target) {
+    FilesToRunProvider filesToRun = target.getProvider(FilesToRunProvider.class);
+    RunfilesSupport runfilesSupport = filesToRun == null ? null : filesToRun.getRunfilesSupport();
+    return runfilesSupport == null
+        ? ActionEnvironment.EMPTY
+        : runfilesSupport.getActionEnvironment();
   }
 
   /**

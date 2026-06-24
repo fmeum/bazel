@@ -23,6 +23,7 @@ import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.Iterables;
 import com.google.common.eventbus.EventBus;
 import com.google.devtools.build.lib.actions.Action;
+import com.google.devtools.build.lib.actions.ActionEnvironment;
 import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.actions.RunfilesTree;
 import com.google.devtools.build.lib.actions.RunfilesTreeAction;
@@ -1115,6 +1116,128 @@ public class TestActionBuilderTest extends BuildViewTestCase {
                 .get(PlatformOptions.class)
                 .getPlatforms())
         .containsExactly(Label.parseCanonicalUnchecked("//:linux"));
+  }
+
+  @Test
+  public void runUnderTarget_mergesRunEnvironmentInfo() throws Exception {
+    scratch.file(
+        "defs.bzl",
+        """
+        def _env_exe_impl(ctx):
+            out = ctx.actions.declare_file(ctx.label.name)
+            ctx.actions.write(out, "", is_executable = True)
+            return [
+                DefaultInfo(executable = out),
+                RunEnvironmentInfo(
+                    environment = ctx.attr.env,
+                    inherited_environment = ctx.attr.env_inherit,
+                ),
+            ]
+
+        env_exe = rule(
+            implementation = _env_exe_impl,
+            executable = True,
+            attrs = {
+                "env": attr.string_dict(),
+                "env_inherit": attr.string_list(),
+            },
+        )
+
+        def _env_test_impl(ctx):
+            out = ctx.actions.declare_file(ctx.label.name)
+            ctx.actions.write(out, "", is_executable = True)
+            return [
+                DefaultInfo(executable = out),
+                RunEnvironmentInfo(environment = ctx.attr.env),
+            ]
+
+        env_test = rule(
+            implementation = _env_test_impl,
+            test = True,
+            attrs = {"env": attr.string_dict()},
+        )
+        """);
+    scratch.file(
+        "BUILD",
+        """
+        load(":defs.bzl", "env_exe", "env_test")
+
+        env_exe(
+            name = "wrapper",
+            env = {"FROM_WRAPPER": "wrapper"},
+            env_inherit = ["INHERITED_BY_WRAPPER"],
+        )
+
+        env_test(
+            name = "my_test",
+            env = {"FROM_TEST": "test"},
+        )
+        """);
+    useConfiguration("--run_under=//:wrapper");
+
+    TestRunnerAction testAction =
+        (TestRunnerAction) getGeneratingAction(getTestStatusArtifacts("//:my_test").get(0));
+
+    ActionEnvironment extraTestEnv = testAction.getExtraTestEnv();
+    assertThat(extraTestEnv.getFixedEnv())
+        .containsAtLeast("FROM_TEST", "test", "FROM_WRAPPER", "wrapper");
+    assertThat(extraTestEnv.getInheritedEnv()).contains("INHERITED_BY_WRAPPER");
+  }
+
+  @Test
+  public void runUnderTarget_conflictingRunEnvironmentInfo_fails() throws Exception {
+    scratch.file(
+        "defs.bzl",
+        """
+        def _env_exe_impl(ctx):
+            out = ctx.actions.declare_file(ctx.label.name)
+            ctx.actions.write(out, "", is_executable = True)
+            return [
+                DefaultInfo(executable = out),
+                RunEnvironmentInfo(environment = ctx.attr.env),
+            ]
+
+        env_exe = rule(
+            implementation = _env_exe_impl,
+            executable = True,
+            attrs = {"env": attr.string_dict()},
+        )
+
+        def _env_test_impl(ctx):
+            out = ctx.actions.declare_file(ctx.label.name)
+            ctx.actions.write(out, "", is_executable = True)
+            return [
+                DefaultInfo(executable = out),
+                RunEnvironmentInfo(environment = ctx.attr.env),
+            ]
+
+        env_test = rule(
+            implementation = _env_test_impl,
+            test = True,
+            attrs = {"env": attr.string_dict()},
+        )
+        """);
+    scratch.file(
+        "BUILD",
+        """
+        load(":defs.bzl", "env_exe", "env_test")
+
+        env_exe(
+            name = "wrapper",
+            env = {"SHARED": "from_wrapper"},
+        )
+
+        env_test(
+            name = "my_test",
+            env = {"SHARED": "from_test"},
+        )
+        """);
+    useConfiguration("--run_under=//:wrapper");
+    reporter.removeHandler(failFastHandler);
+
+    getConfiguredTarget("//:my_test");
+
+    assertContainsEvent("the environment variable 'SHARED'");
   }
 
   @Test

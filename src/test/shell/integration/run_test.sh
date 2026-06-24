@@ -721,6 +721,98 @@ EOF
   fi
 }
 
+function test_run_under_label_honors_run_environment() {
+  if is_windows; then
+    echo "This test requires a POSIX shell for the run_under wrapper."
+    return
+  fi
+  local -r pkg="pkg${LINENO}"
+  mkdir -p "${pkg}"
+  cat > "$pkg/defs.bzl" <<'EOF'
+def _env_binary_impl(ctx):
+    out = ctx.actions.declare_file(ctx.label.name + ".sh")
+    ctx.actions.write(out, ctx.attr.script, is_executable = True)
+    return [
+        DefaultInfo(executable = out),
+        RunEnvironmentInfo(environment = ctx.attr.env),
+    ]
+
+env_binary = rule(
+    implementation = _env_binary_impl,
+    executable = True,
+    attrs = {
+        "script": attr.string(),
+        "env": attr.string_dict(),
+    },
+)
+EOF
+  cat > "$pkg/BUILD" <<'EOF'
+load(":defs.bzl", "env_binary")
+
+env_binary(
+    name = "wrapper",
+    script = "#!/bin/sh\necho \"wrapper_var=$WRAPPER_VAR\"\nexec \"$@\"\n",
+    env = {"WRAPPER_VAR": "from_wrapper"},
+)
+
+env_binary(
+    name = "app",
+    script = "#!/bin/sh\necho \"app_var=$APP_VAR\"\necho \"app_sees_wrapper=$WRAPPER_VAR\"\n",
+    env = {"APP_VAR": "from_app"},
+)
+EOF
+
+  bazel run --run_under=//$pkg:wrapper "//$pkg:app" >&$TEST_log \
+      || fail "expected run to pass"
+  # The wrapper sees its own RunEnvironmentInfo.
+  expect_log "wrapper_var=from_wrapper"
+  # The wrapped binary sees its own RunEnvironmentInfo.
+  expect_log "app_var=from_app"
+  # The two environments are merged, so the wrapped binary also sees the wrapper's variables.
+  expect_log "app_sees_wrapper=from_wrapper"
+}
+
+function test_run_under_label_conflicting_environment_fails() {
+  if is_windows; then
+    echo "This test requires a POSIX shell for the run_under wrapper."
+    return
+  fi
+  local -r pkg="pkg${LINENO}"
+  mkdir -p "${pkg}"
+  cat > "$pkg/defs.bzl" <<'EOF'
+def _env_binary_impl(ctx):
+    out = ctx.actions.declare_file(ctx.label.name + ".sh")
+    ctx.actions.write(out, "#!/bin/sh\nexec \"$@\"\n", is_executable = True)
+    return [
+        DefaultInfo(executable = out),
+        RunEnvironmentInfo(environment = ctx.attr.env),
+    ]
+
+env_binary = rule(
+    implementation = _env_binary_impl,
+    executable = True,
+    attrs = {"env": attr.string_dict()},
+)
+EOF
+  cat > "$pkg/BUILD" <<'EOF'
+load(":defs.bzl", "env_binary")
+
+env_binary(
+    name = "wrapper",
+    env = {"SHARED": "from_wrapper"},
+)
+
+env_binary(
+    name = "app",
+    env = {"SHARED": "from_app"},
+)
+EOF
+
+  bazel run --run_under=//$pkg:wrapper "//$pkg:app" >&$TEST_log \
+      && fail "expected run to fail due to conflicting environments"
+  expect_log "environment variable 'SHARED'"
+}
+
 function test_run_under_command_change_preserves_cache() {
   if is_windows; then
     echo "This test requires --run_under to be able to run echo."

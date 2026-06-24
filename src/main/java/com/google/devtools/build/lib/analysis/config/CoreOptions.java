@@ -588,6 +588,10 @@ public abstract class CoreOptions extends FragmentOptions implements Cloneable {
           - `valgrind --quiet --num-callers=20`
           - `//package:target`
           - `//package:target --options`
+          When the value is a label, the environment declared via the target's `RunEnvironmentInfo`
+          (e.g. its `env`/`env_inherit` attributes) is applied to the executed process in addition
+          to that of the test or binary being run. It is an error for the two targets to set the same
+          environment variable to conflicting values.
           """)
   public abstract RunUnder getRunUnder();
 

@@ -18,6 +18,7 @@ import static com.google.common.base.Preconditions.checkNotNull;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Interner;
+import com.google.common.collect.Sets;
 import com.google.devtools.build.lib.concurrent.BlazeInterners;
 import com.google.devtools.build.lib.util.Fingerprint;
 import java.util.Map;
@@ -150,6 +151,92 @@ public abstract class ActionEnvironment {
     }
     return actionEnvironmentInterner.intern(
         new CompoundActionEnvironment(this, ImmutableMap.copyOf(fixedVars)));
+  }
+
+  /**
+   * Returns the union of this environment and {@code other}, requiring that the two environments
+   * assign a consistent value to every variable they have in common.
+   *
+   * <p>Two environments are consistent for a given variable if they either both inherit it from the
+   * client environment or both set it to the same fixed value. Setting a variable to differing
+   * fixed values, or setting it to a fixed value in one environment while inheriting it in the
+   * other, is a conflict that results in an {@link EnvVarConflictException}: such variables would
+   * otherwise silently resolve to a single value even though the two environments disagree on what
+   * it should be.
+   *
+   * @param thisDescription a human-readable description of the origin of this environment, used in
+   *     the conflict message (e.g. {@code "the target //foo:bar"})
+   * @param otherDescription a human-readable description of the origin of {@code other}
+   */
+  public final ActionEnvironment mergeWith(
+      ActionEnvironment other, String thisDescription, String otherDescription)
+      throws EnvVarConflictException {
+    if (other.estimatedSize() == 0) {
+      return this;
+    }
+    if (estimatedSize() == 0) {
+      return other;
+    }
+
+    ImmutableMap<String, String> thisFixed = getFixedEnv();
+    ImmutableSet<String> thisInherited = getInheritedEnv();
+    ImmutableMap<String, String> otherFixed = other.getFixedEnv();
+    ImmutableSet<String> otherInherited = other.getInheritedEnv();
+
+    for (String name : Sets.union(thisFixed.keySet(), thisInherited)) {
+      if (!otherFixed.containsKey(name) && !otherInherited.contains(name)) {
+        continue;
+      }
+      // A variable that appears in the inherited set is treated as inherited even if it also has a
+      // fixed value, since the inherited value takes precedence in resolve().
+      boolean thisIsInherited = thisInherited.contains(name);
+      boolean otherIsInherited = otherInherited.contains(name);
+      if (thisIsInherited && otherIsInherited) {
+        // Both inherit the same value from the client environment.
+        continue;
+      }
+      if (!thisIsInherited && !otherIsInherited) {
+        if (thisFixed.get(name).equals(otherFixed.get(name))) {
+          // Both set the same fixed value.
+          continue;
+        }
+        throw new EnvVarConflictException(
+            String.format(
+                "%s sets the environment variable '%s' to '%s', but %s sets it to '%s'",
+                thisDescription,
+                name,
+                thisFixed.get(name),
+                otherDescription,
+                otherFixed.get(name)));
+      }
+      String fixedDescription = thisIsInherited ? otherDescription : thisDescription;
+      String fixedValue = thisIsInherited ? otherFixed.get(name) : thisFixed.get(name);
+      String inheritedDescription = thisIsInherited ? thisDescription : otherDescription;
+      throw new EnvVarConflictException(
+          String.format(
+              "%s sets the environment variable '%s' to the fixed value '%s', but %s inherits it"
+                  + " from the client environment",
+              fixedDescription, name, fixedValue, inheritedDescription));
+    }
+
+    ImmutableMap<String, String> mergedFixed =
+        ImmutableMap.<String, String>builder()
+            .putAll(thisFixed)
+            .putAll(otherFixed)
+            .buildKeepingLast();
+    ImmutableSet<String> mergedInherited =
+        ImmutableSet.<String>builder().addAll(thisInherited).addAll(otherInherited).build();
+    return create(mergedFixed, mergedInherited);
+  }
+
+  /**
+   * Thrown by {@link #mergeWith} when two environments assign conflicting values to the same
+   * environment variable.
+   */
+  public static final class EnvVarConflictException extends Exception {
+    EnvVarConflictException(String message) {
+      super(message);
+    }
   }
 
   private static final class EmptyActionEnvironment extends ActionEnvironment {

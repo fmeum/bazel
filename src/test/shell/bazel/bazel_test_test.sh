@@ -390,6 +390,54 @@ EOF
   expect_log '1 test passes.$'
 }
 
+function test_run_under_label_honors_run_environment() {
+  add_rules_shell "MODULE.bazel"
+  mkdir -p testing run || fail "mkdir testing run failed"
+  cat <<'EOF' > run/defs.bzl
+def _env_under_impl(ctx):
+    out = ctx.actions.declare_file(ctx.label.name + ".sh")
+    ctx.actions.write(out, "#!/bin/sh\nexec \"$@\"\n", is_executable = True)
+    return [
+        DefaultInfo(executable = out),
+        RunEnvironmentInfo(environment = {"FROM_RUN_UNDER": "run_under_value"}),
+    ]
+
+env_under = rule(
+    implementation = _env_under_impl,
+    executable = True,
+)
+EOF
+  cat <<'EOF' > run/BUILD
+load(":defs.bzl", "env_under")
+
+env_under(
+    name = "under",
+    visibility = ["//visibility:public"],
+)
+EOF
+
+  cat <<'EOF' > testing/check_env_test.sh
+#!/bin/sh
+echo "FROM_RUN_UNDER=$FROM_RUN_UNDER"
+test "$FROM_RUN_UNDER" = "run_under_value"
+EOF
+  chmod u+x testing/check_env_test.sh
+
+  cat <<'EOF' > testing/BUILD
+load("@rules_shell//shell:sh_test.bzl", "sh_test")
+
+sh_test(
+    name = "check_env_test",
+    srcs = ["check_env_test.sh"],
+)
+EOF
+
+  bazel test //testing:check_env_test --run_under=//run:under \
+    --test_output=all >& $TEST_log || fail "Expected success"
+  expect_log 'FROM_RUN_UNDER=run_under_value'
+  expect_log 'check_env_test *PASSED'
+}
+
 # This test uses "--ignore_all_rc_files" since outside .bazelrc files can pollute
 # this environment. Just "--bazelrc=/dev/null" is not sufficient to fix.
 function test_run_under_path() {
