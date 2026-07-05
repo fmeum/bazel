@@ -1349,12 +1349,65 @@ public class RemoteExecutionService {
       }
     }
 
+    // If the spawn redirects its standard output into one of its outputs, the action result stores
+    // the captured stdout as the stdout digest (or inline raw bytes) rather than as a regular
+    // output file. Reconstruct the output from it, honoring build-without-the-bytes just like a
+    // regular output, instead of eagerly downloading it as part of the action's stdout below.
+    ActionInput stdoutOutput = action.getSpawn().getStdout();
+    if (stdoutOutput != null) {
+      PathFragment stdoutExecPath = stdoutOutput.getExecPath();
+      Path stdoutPath = execRoot.getRelative(stdoutExecPath);
+      if (result.actionResult.hasStdoutDigest()) {
+        Digest digest = result.actionResult.getStdoutDigest();
+        FileMetadata stdoutFile =
+            new FileMetadata(stdoutPath, digest, /* isExecutable= */ false, ByteString.EMPTY);
+        if (shouldDownload(result, stdoutExecPath, /* treeRootExecPath= */ null)) {
+          Path tmpPath = tempPathGenerator.generateTempPath();
+          realToTmpPath.put(stdoutPath, tmpPath);
+          downloadsBuilder.add(
+              downloadFile(
+                  context,
+                  progressStatusListener,
+                  stdoutFile,
+                  tmpPath,
+                  action.getRemotePathResolver()));
+        } else if (hasBazelOutputService) {
+          downloadsBuilder.add(immediateFuture(stdoutFile));
+        } else {
+          checkNotNull(remoteActionFileSystem)
+              .injectRemoteFile(
+                  stdoutPath.asFragment(),
+                  DigestUtil.toBinaryDigest(digest),
+                  digest.getSizeBytes(),
+                  expirationTime);
+        }
+      } else {
+        // The stdout was returned inline (or is empty). Since inline content is not necessarily
+        // present in the CAS, materialize it directly rather than deferring via injected metadata.
+        // It still goes through the temporary-path machinery so it is moved into place under the
+        // output lock and cleaned up on a failed download.
+        byte[] content = result.actionResult.getStdoutRaw().toByteArray();
+        Digest digest = digestUtil.compute(content);
+        Path tmpPath = tempPathGenerator.generateTempPath();
+        FileSystemUtils.writeContent(tmpPath, content);
+        realToTmpPath.put(stdoutPath, tmpPath);
+        downloadsBuilder.add(
+            immediateFuture(
+                new FileMetadata(stdoutPath, digest, /* isExecutable= */ false, ByteString.EMPTY)));
+      }
+    }
+
     FileOutErr outErr = action.getSpawnExecutionContext().getFileOutErr();
 
-    // Always download the action stdout/stderr.
+    // Always download the action stdout/stderr, except for stdout that was redirected into an
+    // output above (in which case it must not be reported as regular action stdout).
     FileOutErr tmpOutErr = outErr.childOutErr();
     List<ListenableFuture<Void>> outErrDownloads =
-        combinedCache.downloadOutErr(context, result.actionResult, tmpOutErr);
+        combinedCache.downloadOutErr(
+            context,
+            result.actionResult,
+            tmpOutErr,
+            /* downloadStdout= */ stdoutOutput == null);
     for (ListenableFuture<Void> future : outErrDownloads) {
       downloadsBuilder.add(transform(future, (v) -> null, directExecutor()));
     }
@@ -1728,6 +1781,12 @@ public class RemoteExecutionService {
         outputFiles.add(localPath);
       }
 
+      // If the spawn redirected its stdout into an output, upload that file as the action's stdout
+      // digest rather than as a regular output file (it is excluded from getOutputFiles() above).
+      ActionInput stdoutOutput = action.getSpawn().getStdout();
+      Path stdoutPath =
+          stdoutOutput != null ? execRoot.getRelative(stdoutOutput.getExecPath()) : null;
+
       return UploadManifest.create(
           combinedCache.getRemoteCacheCapabilities(),
           digestUtil,
@@ -1737,6 +1796,7 @@ public class RemoteExecutionService {
           action.getCommand(),
           outputFiles.build(),
           action.getSpawnExecutionContext().getFileOutErr(),
+          stdoutPath,
           spawnResult.exitCode(),
           spawnResult.getStartTime(),
           spawnResult.getWallTimeInMs(),

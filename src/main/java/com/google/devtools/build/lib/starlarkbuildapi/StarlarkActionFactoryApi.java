@@ -611,6 +611,24 @@ This function must be top-level, i.e. lambdas and nested functions are not allow
                     + " `toolchain` and `exec_group` parameters are both set, `exec_group` will be"
                     + " used. An error is raised in case the `exec_group` doesn't specify the same"
                     + " toolchain.</p>"),
+        @Param(
+            name = "stdout",
+            allowedTypes = {
+              @ParamType(type = FileApi.class),
+              @ParamType(type = NoneType.class),
+            },
+            defaultValue = "None",
+            named = true,
+            positional = false,
+            doc =
+                "If set to a <code>File</code>, the standard output of the action is redirected to"
+                    + " that file, which becomes an additional output of the action. The file must"
+                    + " not also be listed in <code>outputs</code>.<p>Unlike the action's regular"
+                    + " standard output, the captured stream is not printed to the terminal or"
+                    + " included in the build event stream. Under builds without the bytes, the"
+                    + " file is treated like any other output and is only downloaded on demand"
+                    + " rather than eagerly.<p>This makes it possible to capture a tool's standard"
+                    + " output without wrapping the invocation in a shell."),
       })
   void run(
       Sequence<?> outputs,
@@ -628,7 +646,8 @@ This function must be top-level, i.e. lambdas and nested functions are not allow
       Object execGroupUnchecked,
       Object shadowedAction,
       Object resourceSetUnchecked,
-      Object toolchainUnchecked)
+      Object toolchainUnchecked,
+      Object stdout)
       throws EvalException, InterruptedException;
 
   @StarlarkMethod(

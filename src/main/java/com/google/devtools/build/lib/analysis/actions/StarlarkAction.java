@@ -149,6 +149,7 @@ public class StarlarkAction extends SpawnAction {
 
     private Optional<Artifact> unusedInputsList = Optional.empty();
     private Optional<Action> shadowedAction = Optional.empty();
+    @Nullable private Artifact stdoutOutput = null;
 
     @CanIgnoreReturnValue
     public Builder setUnusedInputsList(Optional<Artifact> unusedInputsList) {
@@ -159,6 +160,16 @@ public class StarlarkAction extends SpawnAction {
     @CanIgnoreReturnValue
     public Builder setShadowedAction(Optional<Action> shadowedAction) {
       this.shadowedAction = shadowedAction;
+      return this;
+    }
+
+    /**
+     * Redirects the spawn's standard output into the given output artifact instead of reporting it
+     * as regular action output. The artifact must also be registered as an output of the action.
+     */
+    @CanIgnoreReturnValue
+    public Builder setStdoutOutput(Artifact stdoutOutput) {
+      this.stdoutOutput = stdoutOutput;
       return this;
     }
 
@@ -184,6 +195,16 @@ public class StarlarkAction extends SpawnAction {
                 .put(
                     ExecutionRequirements.REMOTE_EXECUTION_INLINE_OUTPUTS,
                     unusedInputsList.get().getExecPathString())
+                .buildOrThrow();
+      }
+      if (stdoutOutput != null) {
+        // Record which of the action's outputs captures the spawn's standard output. This is
+        // consumed during execution to redirect stdout into the output file and to keep it from
+        // being reported as regular action output.
+        executionInfo =
+            ImmutableMap.<String, String>builderWithExpectedSize(executionInfo.size() + 1)
+                .putAll(executionInfo)
+                .put(ExecutionRequirements.STDOUT_OUTPUT, stdoutOutput.getExecPathString())
                 .buildOrThrow();
       }
       OutputPathsMode outputPathsMode = PathMappers.getOutputPathsMode(configuration);

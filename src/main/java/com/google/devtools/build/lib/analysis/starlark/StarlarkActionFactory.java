@@ -418,7 +418,8 @@ public class StarlarkActionFactory implements StarlarkActionFactoryApi {
       Object execGroupUnchecked,
       Object shadowedActionUnchecked,
       Object resourceSetUnchecked,
-      Object toolchainUnchecked)
+      Object toolchainUnchecked,
+      Object stdoutUnchecked)
       throws EvalException, InterruptedException {
     context.checkMutable("actions.run");
     execGroupUnchecked = context.maybeOverrideExecGroup(execGroupUnchecked);
@@ -469,6 +470,7 @@ public class StarlarkActionFactory implements StarlarkActionFactoryApi {
         shadowedActionUnchecked,
         resourceSetUnchecked,
         toolchainUnchecked,
+        stdoutUnchecked,
         builder);
   }
 
@@ -682,6 +684,7 @@ public class StarlarkActionFactory implements StarlarkActionFactoryApi {
         shadowedActionUnchecked,
         resourceSetUnchecked,
         toolchainUnchecked,
+        /* stdoutUnchecked= */ Starlark.NONE,
         builder);
   }
 
@@ -734,6 +737,7 @@ public class StarlarkActionFactory implements StarlarkActionFactoryApi {
       Object shadowedActionUnchecked,
       Object resourceSetUnchecked,
       Object toolchainUnchecked,
+      Object stdoutUnchecked,
       StarlarkAction.Builder builder)
       throws EvalException {
     if (inputs instanceof Sequence) {
@@ -743,10 +747,33 @@ public class StarlarkActionFactory implements StarlarkActionFactoryApi {
     }
 
     List<Artifact> outputArtifacts = Sequence.cast(outputs, Artifact.class, "outputs");
-    if (outputArtifacts.isEmpty()) {
+
+    Artifact stdoutOutput = null;
+    if (stdoutUnchecked != Starlark.NONE) {
+      if (!(stdoutUnchecked instanceof Artifact artifact)) {
+        throw Starlark.errorf(
+            "expected value of type 'File' for parameter 'stdout' but got %s instead",
+            Starlark.type(stdoutUnchecked));
+      }
+      if (artifact.isTreeArtifact()) {
+        throw Starlark.errorf("param 'stdout' may not be a directory");
+      }
+      if (outputArtifacts.contains(artifact)) {
+        throw Starlark.errorf(
+            "file '%s' passed to 'stdout' may not also be listed in 'outputs'",
+            artifact.getExecPathString());
+      }
+      stdoutOutput = artifact;
+    }
+
+    if (outputArtifacts.isEmpty() && stdoutOutput == null) {
       throw Starlark.errorf("param 'outputs' may not be empty");
     }
     builder.addOutputs(outputArtifacts);
+    if (stdoutOutput != null) {
+      builder.addOutput(stdoutOutput);
+      builder.setStdoutOutput(stdoutOutput);
+    }
 
     if (unusedInputsList != Starlark.NONE) {
       if (unusedInputsList instanceof Artifact artifact) {

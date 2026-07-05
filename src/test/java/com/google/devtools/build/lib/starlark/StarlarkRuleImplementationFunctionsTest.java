@@ -31,15 +31,18 @@ import com.google.common.collect.Iterables;
 import com.google.common.collect.Lists;
 import com.google.devtools.build.lib.actions.Action;
 import com.google.devtools.build.lib.actions.ActionAnalysisMetadata;
+import com.google.devtools.build.lib.actions.ActionInput;
 import com.google.devtools.build.lib.actions.ActionLookupData;
 import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.actions.Artifact.SpecialArtifact;
 import com.google.devtools.build.lib.actions.Artifact.TreeFileArtifact;
 import com.google.devtools.build.lib.actions.CommandLine;
 import com.google.devtools.build.lib.actions.CommandLineExpansionException;
+import com.google.devtools.build.lib.actions.ExecutionRequirements;
 import com.google.devtools.build.lib.actions.FileArtifactValue;
 import com.google.devtools.build.lib.actions.InputMetadataProvider;
 import com.google.devtools.build.lib.actions.PathMapper;
+import com.google.devtools.build.lib.actions.Spawn;
 import com.google.devtools.build.lib.actions.util.ActionsTestUtil;
 import com.google.devtools.build.lib.analysis.CommandHelper;
 import com.google.devtools.build.lib.analysis.ConfiguredTarget;
@@ -361,6 +364,85 @@ public final class StarlarkRuleImplementationFunctionsTest extends BuildViewTest
     assertArtifactFilenames(action.getInputs().toList(), "a.txt", "b.img", "t.exe");
     assertArtifactFilenames(action.getOutputs(), "a.txt", "b.img");
     MoreAsserts.assertContainsSublist(action.getArguments(), "foo/t.exe", "--a", "--b");
+  }
+
+  @Test
+  public void testCreateSpawnActionWithStdout() throws Exception {
+    StarlarkRuleContext ruleContext = createRuleContext("//foo:foo");
+    setRuleContext(ruleContext);
+    ev.exec(
+        "out = ruleContext.actions.declare_file('stdout.txt')",
+        "ruleContext.actions.run(",
+        "  inputs = ruleContext.files.srcs,",
+        "  outputs = ruleContext.files.srcs,",
+        "  executable = ruleContext.files.tools[0],",
+        "  toolchain = None,",
+        "  stdout = out)");
+    SpawnAction action =
+        (SpawnAction)
+            Iterables.getOnlyElement(
+                ruleContext.getRuleContext().getAnalysisEnvironment().getRegisteredActions());
+
+    // The stdout file is a regular output of the action ...
+    assertArtifactFilenames(action.getOutputs(), "a.txt", "b.img", "stdout.txt");
+    Artifact stdoutOutput = action.getStdoutOutput();
+    assertThat(stdoutOutput).isNotNull();
+    assertThat(stdoutOutput.getFilename()).isEqualTo("stdout.txt");
+    assertThat(action.getExecutionInfo())
+        .containsEntry(ExecutionRequirements.STDOUT_OUTPUT, stdoutOutput.getExecPathString());
+
+    // ... but it is not reported as a regular spawn output file; instead it is exposed via
+    // Spawn#getStdout so that execution can redirect the spawn's stdout into it.
+    Spawn spawn = action.getSpawnForTesting();
+    assertThat(spawn.getStdout()).isEqualTo(stdoutOutput);
+    assertThat(spawn.getOutputFiles()).doesNotContain(stdoutOutput);
+    assertThat(spawn.getOutputFiles().stream().map(ActionInput::getExecPathString).toList())
+        .containsExactly("foo/a.txt", "foo/b.img");
+  }
+
+  @Test
+  public void testCreateSpawnActionWithStdoutOnlyOutput() throws Exception {
+    StarlarkRuleContext ruleContext = createRuleContext("//foo:foo");
+    setRuleContext(ruleContext);
+    // An empty 'outputs' is allowed as long as 'stdout' provides an output.
+    ev.exec(
+        "out = ruleContext.actions.declare_file('stdout.txt')",
+        "ruleContext.actions.run(",
+        "  outputs = [],",
+        "  executable = ruleContext.files.tools[0],",
+        "  toolchain = None,",
+        "  stdout = out)");
+    SpawnAction action =
+        (SpawnAction)
+            Iterables.getOnlyElement(
+                ruleContext.getRuleContext().getAnalysisEnvironment().getRegisteredActions());
+    assertArtifactFilenames(action.getOutputs(), "stdout.txt");
+    assertThat(action.getStdoutOutput()).isEqualTo(action.getPrimaryOutput());
+  }
+
+  @Test
+  public void testCreateSpawnActionStdoutAlsoInOutputsFails() throws Exception {
+    setRuleContext(createRuleContext("//foo:foo"));
+    ev.checkEvalErrorContains(
+        "may not also be listed in 'outputs'",
+        "out = ruleContext.actions.declare_file('stdout.txt')",
+        "ruleContext.actions.run(",
+        "  outputs = [out],",
+        "  executable = ruleContext.files.tools[0],",
+        "  toolchain = None,",
+        "  stdout = out)");
+  }
+
+  @Test
+  public void testCreateSpawnActionStdoutWrongType() throws Exception {
+    setRuleContext(createRuleContext("//foo:foo"));
+    ev.checkEvalErrorContains(
+        "expected value of type 'File' for parameter 'stdout' but got string instead",
+        "ruleContext.actions.run(",
+        "  outputs = ruleContext.files.srcs,",
+        "  executable = ruleContext.files.tools[0],",
+        "  toolchain = None,",
+        "  stdout = 'not_a_file')");
   }
 
   @Test

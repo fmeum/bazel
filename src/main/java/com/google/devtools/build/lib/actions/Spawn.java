@@ -130,6 +130,22 @@ public interface Spawn extends DescribableExecutionUnit {
   Collection<? extends ActionInput> getOutputFiles();
 
   /**
+   * Returns the output that captures this spawn's standard output stream, or {@code null} if the
+   * standard output is reported as regular spawn output.
+   *
+   * <p>When non-null, the returned output is <em>not</em> included in {@link #getOutputFiles} and
+   * must not be requested from a remote execution service as a regular output. Instead, the
+   * captured standard output is written to this output: locally by redirecting the process's
+   * standard output stream, and for remote execution by mapping the action result's stdout digest
+   * to this output. The captured standard output is not printed to the terminal and, when building
+   * without the bytes, is only downloaded on demand like any other output.
+   */
+  @Nullable
+  default ActionInput getStdout() {
+    return null;
+  }
+
+  /**
    * Returns the output files that should be considered to be "generated" by this spawn for purposes
    * of reconstructing the execution graph in {@link
    * com.google.devtools.build.lib.runtime.ExecutionGraphModule}.

@@ -22,6 +22,7 @@ import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.devtools.build.lib.actions.ActionExecutionMetadata;
+import com.google.devtools.build.lib.actions.ActionInput;
 import com.google.devtools.build.lib.actions.EnvironmentalExecException;
 import com.google.devtools.build.lib.actions.ExecException;
 import com.google.devtools.build.lib.actions.ResourceManager;
@@ -214,7 +215,16 @@ abstract class AbstractSandboxSpawnRunner implements SpawnRunner {
 
     SubprocessBuilder subprocessBuilder = new SubprocessBuilder(clientEnv);
     subprocessBuilder.setWorkingDirectory(sandbox.getSandboxExecRoot().getPathFile());
-    subprocessBuilder.setStdout(outErr.getOutputPath().getPathFile());
+    // If the spawn redirects its standard output into one of its outputs, write directly to that
+    // file (outside the sandbox, via a parent-opened file descriptor, just like the regular stdout
+    // buffer) instead of the regular stdout capture buffer. This keeps the captured output out of
+    // the terminal and the build event stream and turns it into a regular output file.
+    ActionInput stdoutOutput = originalSpawn.getStdout();
+    Path stdoutPath =
+        stdoutOutput != null
+            ? execRoot.getRelative(originalSpawn.getPathMapper().map(stdoutOutput.getExecPath()))
+            : outErr.getOutputPath();
+    subprocessBuilder.setStdout(stdoutPath.getPathFile());
     subprocessBuilder.setStderr(outErr.getErrorPath().getPathFile());
     subprocessBuilder.setEnv(sandbox.getEnvironment());
     subprocessBuilder.setArgv(ImmutableList.copyOf(sandbox.getArguments()));

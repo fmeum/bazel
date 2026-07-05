@@ -817,6 +817,14 @@ sh_test(
 )
 
 sh_test(
+    name = "action_stdout_test",
+    srcs = ["action_stdout_test.sh"],
+    data = [":test-deps"],
+    tags = ["no_windows"],
+    deps = ["@bazel_tools//tools/bash/runfiles"],
+)
+
+sh_test(
     name = "target_pattern_file_test",
     srcs = ["target_pattern_file_test.sh"],
     data = [

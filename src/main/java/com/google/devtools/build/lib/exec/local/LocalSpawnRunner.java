@@ -372,7 +372,15 @@ public class LocalSpawnRunner implements SpawnRunner {
 
         SubprocessBuilder subprocessBuilder = new SubprocessBuilder(context.getClientEnv());
         subprocessBuilder.setWorkingDirectory(execRoot.getPathFile());
-        subprocessBuilder.setStdout(outErr.getOutputPath().getPathFile());
+        // If the spawn redirects its standard output into one of its outputs, write directly to
+        // that file instead of the regular stdout capture buffer. This keeps the captured output
+        // out of the terminal and the build event stream and turns it into a regular output file.
+        ActionInput stdoutOutput = spawn.getStdout();
+        Path stdoutPath =
+            stdoutOutput != null
+                ? execRoot.getRelative(spawn.getPathMapper().map(stdoutOutput.getExecPath()))
+                : outErr.getOutputPath();
+        subprocessBuilder.setStdout(stdoutPath.getPathFile());
         subprocessBuilder.setStderr(outErr.getErrorPath().getPathFile());
         subprocessBuilder.setEnv(environment);
         ImmutableList<String> args;
