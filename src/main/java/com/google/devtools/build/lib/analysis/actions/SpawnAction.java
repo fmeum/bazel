@@ -50,7 +50,6 @@ import com.google.devtools.build.lib.actions.CommandLines;
 import com.google.devtools.build.lib.actions.CommandLines.CommandLineAndParamFileInfo;
 import com.google.devtools.build.lib.actions.CommandLines.ExpandedCommandLines;
 import com.google.devtools.build.lib.actions.ExecException;
-import com.google.devtools.build.lib.actions.ExecutionRequirements;
 import com.google.devtools.build.lib.actions.InputMetadataProvider;
 import com.google.devtools.build.lib.actions.ParamFileInfo;
 import com.google.devtools.build.lib.actions.PathMapper;
@@ -411,6 +410,13 @@ public class SpawnAction extends AbstractAction implements CommandAction {
     fp.addString(mnemonic);
     env.addTo(fp);
     fp.addStringMap(getExecutionInfo());
+    // The identity of the stdout output distinguishes an action that redirects its standard output
+    // into an output from an otherwise identical action that produces the same file directly.
+    Artifact stdoutOutput = getStdoutOutput();
+    if (stdoutOutput != null) {
+      fp.addString("stdout:");
+      fp.addPath(stdoutOutput.getExecPath());
+    }
     PathMappers.addToFingerprint(
         getMnemonic(),
         getExecutionInfo(),
@@ -527,24 +533,17 @@ public class SpawnAction extends AbstractAction implements CommandAction {
   }
 
   /**
-   * Returns the output that captures the spawn's standard output stream, or {@code null} if the
-   * spawn's standard output is reported as regular action output.
+   * Returns the output into which the spawn's standard output stream is redirected, or {@code null}
+   * if the spawn's standard output is reported as regular action output (i.e. printed to the
+   * terminal).
    *
-   * <p>The identity of the stdout output is encoded in the {@link
-   * ExecutionRequirements#STDOUT_OUTPUT} execution info entry so that it is part of the action key
-   * and survives serialization without a dedicated field.
+   * <p>The returned artifact, when non-null, is a regular output of the action (it is included in
+   * {@link #getOutputs} and in the spawn's output files). The only difference from a plain output
+   * is that execution captures the spawn's standard output into it and, consequently, does not also
+   * emit that output as the action's standard output.
    */
   @Nullable
   public Artifact getStdoutOutput() {
-    String execPath = getExecutionInfo().get(ExecutionRequirements.STDOUT_OUTPUT);
-    if (execPath == null) {
-      return null;
-    }
-    for (Artifact output : getOutputs()) {
-      if (output.getExecPathString().equals(execPath)) {
-        return output;
-      }
-    }
     return null;
   }
 
@@ -554,12 +553,10 @@ public class SpawnAction extends AbstractAction implements CommandAction {
     private final ImmutableMap<String, String> effectiveEnvironment;
     private final boolean reportOutputs;
     private final PathMapper pathMapper;
-    // The output that captures the spawn's standard output, or null if stdout is reported as
-    // regular action output. Excluded from getOutputFiles() because it is not produced as a
-    // regular file output: locally it is populated by redirecting the process's stdout, and
-    // remotely it is reconstructed from the action result's stdout digest.
+    // The output into which the spawn's standard output is captured, or null if stdout is reported
+    // as regular action output. This is a regular output file (included in getOutputFiles()); the
+    // reference is retained so that execution can identify which output to redirect stdout into.
     @Nullable private final Artifact stdoutOutput;
-    private final ImmutableList<? extends ActionInput> outputFiles;
 
     /**
      * Creates an ActionSpawn with the given environment variables.
@@ -596,17 +593,6 @@ public class SpawnAction extends AbstractAction implements CommandAction {
       }
       this.reportOutputs = reportOutputs;
       this.stdoutOutput = parent.getStdoutOutput();
-      if (stdoutOutput == null) {
-        this.outputFiles = ImmutableList.copyOf(parent.getOutputs());
-      } else {
-        ImmutableList.Builder<ActionInput> builder = ImmutableList.builder();
-        for (Artifact output : parent.getOutputs()) {
-          if (!output.equals(stdoutOutput)) {
-            builder.add(output);
-          }
-        }
-        this.outputFiles = builder.build();
-      }
     }
 
     @Override
@@ -626,22 +612,13 @@ public class SpawnAction extends AbstractAction implements CommandAction {
 
     @Override
     public Collection<? extends ActionInput> getOutputFiles() {
-      return reportOutputs ? outputFiles : ImmutableSet.of();
+      return reportOutputs ? super.getOutputFiles() : ImmutableSet.of();
     }
 
     @Nullable
     @Override
     public ActionInput getStdout() {
       return stdoutOutput;
-    }
-
-    @Override
-    public Iterable<? extends ActionInput> getOutputEdgesForExecutionGraph() {
-      // The stdout output is a genuine output of the action even though it is not reported as a
-      // regular spawn output file, so include it in the execution graph.
-      return reportOutputs && stdoutOutput != null
-          ? Iterables.concat(outputFiles, ImmutableList.of(stdoutOutput))
-          : getOutputFiles();
     }
   }
 

@@ -31,14 +31,12 @@ import com.google.common.collect.Iterables;
 import com.google.common.collect.Lists;
 import com.google.devtools.build.lib.actions.Action;
 import com.google.devtools.build.lib.actions.ActionAnalysisMetadata;
-import com.google.devtools.build.lib.actions.ActionInput;
 import com.google.devtools.build.lib.actions.ActionLookupData;
 import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.actions.Artifact.SpecialArtifact;
 import com.google.devtools.build.lib.actions.Artifact.TreeFileArtifact;
 import com.google.devtools.build.lib.actions.CommandLine;
 import com.google.devtools.build.lib.actions.CommandLineExpansionException;
-import com.google.devtools.build.lib.actions.ExecutionRequirements;
 import com.google.devtools.build.lib.actions.FileArtifactValue;
 import com.google.devtools.build.lib.actions.InputMetadataProvider;
 import com.google.devtools.build.lib.actions.PathMapper;
@@ -383,21 +381,18 @@ public final class StarlarkRuleImplementationFunctionsTest extends BuildViewTest
             Iterables.getOnlyElement(
                 ruleContext.getRuleContext().getAnalysisEnvironment().getRegisteredActions());
 
-    // The stdout file is a regular output of the action ...
+    // The stdout file is a regular output of the action, reported both in the action outputs and
+    // among the spawn's output files ...
     assertArtifactFilenames(action.getOutputs(), "a.txt", "b.img", "stdout.txt");
     Artifact stdoutOutput = action.getStdoutOutput();
     assertThat(stdoutOutput).isNotNull();
     assertThat(stdoutOutput.getFilename()).isEqualTo("stdout.txt");
-    assertThat(action.getExecutionInfo())
-        .containsEntry(ExecutionRequirements.STDOUT_OUTPUT, stdoutOutput.getExecPathString());
 
-    // ... but it is not reported as a regular spawn output file; instead it is exposed via
-    // Spawn#getStdout so that execution can redirect the spawn's stdout into it.
     Spawn spawn = action.getSpawnForTesting();
+    assertThat(spawn.getOutputFiles()).contains(stdoutOutput);
+    // ... but it is additionally exposed via Spawn#getStdout so that execution can redirect the
+    // spawn's standard output into it instead of emitting it as regular action stdout.
     assertThat(spawn.getStdout()).isEqualTo(stdoutOutput);
-    assertThat(spawn.getOutputFiles()).doesNotContain(stdoutOutput);
-    assertThat(spawn.getOutputFiles().stream().map(ActionInput::getExecPathString).toList())
-        .containsExactly("foo/a.txt", "foo/b.img");
   }
 
   @Test

@@ -372,14 +372,6 @@ public class ExecutionRequirements {
   /** Use this to request eager fetching of a single remote output into local memory. */
   public static final String REMOTE_EXECUTION_INLINE_OUTPUTS = "internal-inline-outputs";
 
-  /**
-   * Marks one of the spawn's outputs as the destination for the spawn's standard output stream. The
-   * value is the exec path of the output. The captured standard output is not reported as regular
-   * action output (in particular, it is not printed to the terminal), and, unlike the regular
-   * stdout/stderr streams, is not eagerly downloaded when building without the bytes.
-   */
-  public static final String STDOUT_OUTPUT = "internal-stdout-output";
-
   /** Tag for Google internal use. Indicates a memory estimate in bytes. */
   public static final String MEMORY_ESTIMATE = "internal-memory-estimate";
 

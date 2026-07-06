@@ -256,6 +256,27 @@ public class RemoteExecutionService {
     this.knownMissingCasDigests = knownMissingCasDigests;
   }
 
+  /**
+   * Returns the spawn's output files excluding the output into which its standard output is
+   * redirected, if any.
+   *
+   * <p>The stdout output is a regular output of the action, but the remote execution service
+   * captures the spawn's standard output separately (as the action result's stdout) rather than as
+   * a file at that path. It must therefore be omitted from the command's declared outputs, from the
+   * mandatory-output check, and from the regular files uploaded to the cache; its content is
+   * instead reconstructed from (or uploaded as) the action result's stdout digest.
+   */
+  private static ImmutableList<? extends ActionInput> outputsExcludingStdout(Spawn spawn) {
+    ActionInput stdout = spawn.getStdout();
+    ImmutableList.Builder<ActionInput> result = ImmutableList.builder();
+    for (ActionInput output : spawn.getOutputFiles()) {
+      if (!output.equals(stdout)) {
+        result.add(output);
+      }
+    }
+    return result.build();
+  }
+
   private Command buildCommand(
       boolean useOutputPaths,
       Collection<? extends ActionInput> outputs,
@@ -544,7 +565,7 @@ public class RemoteExecutionService {
       Command command =
           buildCommand(
               useOutputPaths(),
-              spawn.getOutputFiles(),
+              outputsExcludingStdout(spawn),
               spawn.getArguments(),
               spawn.getEnvironment(),
               platform,
@@ -709,10 +730,11 @@ public class RemoteExecutionService {
               Iterables.transform(
                   Iterables.concat(outputFiles, outputDirPaths, outputSymlinkPaths),
                   StringEncoding::unicodeToInternal));
-      // Check that all mandatory outputs are created.
+      // Check that all mandatory outputs are created. The stdout output is captured as the action
+      // result's stdout rather than as a regular output file, so it is excluded here.
       var spawn = action.getSpawn();
       var remotePathResolver = action.getRemotePathResolver();
-      return spawn.getOutputFiles().stream()
+      return outputsExcludingStdout(spawn).stream()
           .filter(spawn::isMandatoryOutput)
           .filter(
               output -> !allOutputPaths.contains(remotePathResolver.localPathToOutputPath(output)))
@@ -1770,8 +1792,15 @@ public class RemoteExecutionService {
       throws IOException, ExecException, InterruptedException {
     try (SilentCloseable c = Profiler.instance().profile("build upload manifest")) {
       ImmutableList.Builder<Path> outputFiles = ImmutableList.builder();
+      // If the spawn redirected its stdout into an output, upload that file as the action's stdout
+      // digest rather than as a regular output file, so that the uploaded action result matches a
+      // remotely executed one.
+      ActionInput stdoutOutput = action.getSpawn().getStdout();
+      Path stdoutPath =
+          stdoutOutput != null ? execRoot.getRelative(stdoutOutput.getExecPath()) : null;
+
       // Check that all mandatory outputs are created.
-      for (ActionInput outputFile : action.getSpawn().getOutputFiles()) {
+      for (ActionInput outputFile : outputsExcludingStdout(action.getSpawn())) {
         Symlinks followSymlinks = outputFile.isSymlink() ? Symlinks.NOFOLLOW : Symlinks.FOLLOW;
         Path localPath = execRoot.getRelative(outputFile.getExecPath());
         if (action.getSpawn().isMandatoryOutput(outputFile) && !localPath.exists(followSymlinks)) {
@@ -1780,12 +1809,6 @@ public class RemoteExecutionService {
         }
         outputFiles.add(localPath);
       }
-
-      // If the spawn redirected its stdout into an output, upload that file as the action's stdout
-      // digest rather than as a regular output file (it is excluded from getOutputFiles() above).
-      ActionInput stdoutOutput = action.getSpawn().getStdout();
-      Path stdoutPath =
-          stdoutOutput != null ? execRoot.getRelative(stdoutOutput.getExecPath()) : null;
 
       return UploadManifest.create(
           combinedCache.getRemoteCacheCapabilities(),

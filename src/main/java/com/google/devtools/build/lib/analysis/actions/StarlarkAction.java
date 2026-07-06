@@ -197,18 +197,8 @@ public class StarlarkAction extends SpawnAction {
                     unusedInputsList.get().getExecPathString())
                 .buildOrThrow();
       }
-      if (stdoutOutput != null) {
-        // Record which of the action's outputs captures the spawn's standard output. This is
-        // consumed during execution to redirect stdout into the output file and to keep it from
-        // being reported as regular action output.
-        executionInfo =
-            ImmutableMap.<String, String>builderWithExpectedSize(executionInfo.size() + 1)
-                .putAll(executionInfo)
-                .put(ExecutionRequirements.STDOUT_OUTPUT, stdoutOutput.getExecPathString())
-                .buildOrThrow();
-      }
       OutputPathsMode outputPathsMode = PathMappers.getOutputPathsMode(configuration);
-      return unusedInputsList.isPresent() || shadowedAction.isPresent()
+      return unusedInputsList.isPresent() || shadowedAction.isPresent() || stdoutOutput != null
           ? new EnhancedStarlarkAction(
               owner,
               tools,
@@ -222,7 +212,8 @@ public class StarlarkAction extends SpawnAction {
               mnemonic,
               outputPathsMode,
               unusedInputsList,
-              shadowedAction)
+              shadowedAction,
+              stdoutOutput)
           : new StarlarkAction(
               owner,
               tools,
@@ -238,7 +229,10 @@ public class StarlarkAction extends SpawnAction {
     }
   }
 
-  /** A {@link StarlarkAction} with {@code unused_inputs_list} and/or a shadowed action present. */
+  /**
+   * A {@link StarlarkAction} with {@code unused_inputs_list}, a shadowed action, and/or a {@code
+   * stdout} output present.
+   */
   @AutoCodec
   @VisibleForSerialization
   static final class EnhancedStarlarkAction extends StarlarkAction {
@@ -253,6 +247,9 @@ public class StarlarkAction extends SpawnAction {
 
     private final Optional<Artifact> unusedInputsList;
     private final Optional<Action> shadowedAction;
+    // The output into which the spawn's standard output is captured, or null if stdout is reported
+    // as regular action output.
+    @Nullable private final Artifact stdoutOutput;
     private boolean inputsDiscovered = false;
     private boolean prunedInputs = false;
 
@@ -269,7 +266,8 @@ public class StarlarkAction extends SpawnAction {
         String mnemonic,
         OutputPathsMode outputPathsMode,
         Optional<Artifact> unusedInputsList,
-        Optional<Action> shadowedAction) {
+        Optional<Action> shadowedAction,
+        @Nullable Artifact stdoutOutput) {
       super(
           owner,
           tools,
@@ -292,6 +290,7 @@ public class StarlarkAction extends SpawnAction {
               : null;
       this.unusedInputsList = unusedInputsList;
       this.shadowedAction = shadowedAction;
+      this.stdoutOutput = stdoutOutput;
     }
 
     @AutoCodec.Instantiator
@@ -309,7 +308,8 @@ public class StarlarkAction extends SpawnAction {
         String mnemonic,
         OutputPathsMode outputPathsMode,
         Optional<Artifact> unusedInputsList,
-        Optional<Action> shadowedAction) {
+        Optional<Action> shadowedAction,
+        @Nullable Artifact stdoutOutput) {
       super(
           owner,
           tools,
@@ -332,6 +332,13 @@ public class StarlarkAction extends SpawnAction {
               : null;
       this.unusedInputsList = unusedInputsList;
       this.shadowedAction = shadowedAction;
+      this.stdoutOutput = stdoutOutput;
+    }
+
+    @Nullable
+    @Override
+    public Artifact getStdoutOutput() {
+      return stdoutOutput;
     }
 
     @Override
