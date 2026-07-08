@@ -20,14 +20,23 @@ java_test(
     srcs = ["JavaCompileActionBuilderTest.java"],
     deps = [
         "//src/main/java/com/google/devtools/build/lib/actions:artifacts",
+        "//src/main/java/com/google/devtools/build/lib/actions:file_metadata",
         "//src/main/java/com/google/devtools/build/lib/cmdline",
+        "//src/main/java/com/google/devtools/build/lib/remote",
+        "//src/main/java/com/google/devtools/build/lib/remote/common:bulk_transfer_exception",
+        "//src/main/java/com/google/devtools/build/lib/remote/common:cache_not_found_exception",
         "//src/main/java/com/google/devtools/build/lib/rules/java:java-compilation",
+        "//src/main/java/com/google/devtools/build/lib/vfs",
+        "//src/main/java/com/google/devtools/build/lib/vfs/inmemoryfs",
         "//src/main/protobuf:deps_java_proto",
+        "//src/test/java/com/google/devtools/build/lib/actions/util",
         "//src/test/java/com/google/devtools/build/lib/analysis/util",
         "//src/test/java/com/google/devtools/build/lib/rules/java:java_compile_action_test_helper",
         "//src/test/java/com/google/devtools/build/lib/testutil:JunitUtils",
         "//third_party:junit4",
+        "//third_party:mockito",
         "//third_party:truth",
+        "@remoteapis//:build_bazel_remote_execution_v2_remote_execution_java_proto",
     ],
 )
 
