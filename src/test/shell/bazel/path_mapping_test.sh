@@ -445,8 +445,8 @@ EOF
   bazel build --experimental_output_paths=strip //pkg:all &> $TEST_log || fail "build failed unexpectedly"
 }
 
-# Verifies that path mapping results in cache hits for CppCompile actions
-# subject to transitions that don't affect their inputs.
+# Verifies that path mapping results in cache hits for CppCompile and CppLink
+# actions subject to transitions that don't affect their inputs.
 function test_path_stripping_cc_remote() {
   local -r pkg="${FUNCNAME[0]}"
 
@@ -482,6 +482,28 @@ transition_wrapper(
     greeting = "Hi there",
     target = ":main",
 )
+
+# Unlike main, this binary does not transitively depend on anything whose
+# content is affected by the greeting transition, only the configuration (and
+# thus the output paths) of its actions change.
+cc_binary(
+    name = "unaffected",
+    srcs = ["unaffected.cc"],
+)
+
+transition_wrapper(
+    name = "transitioned_unaffected",
+    greeting = "Hi there",
+    target = ":unaffected",
+)
+EOF
+  cat > "$pkg/unaffected.cc" <<'EOF'
+#include <iostream>
+
+int main() {
+  std::cout << "Unaffected!" << std::endl;
+  return 0;
+}
 EOF
   cat > "$pkg/main.cc" <<EOF
 #include <iostream>
@@ -743,7 +765,7 @@ EOF
     --repo_env=CC=clang \
     --verbose_failures \
     --experimental_output_paths=strip \
-    --modify_execution_info=CppCompile=+supports-path-mapping,CppModuleMap=+supports-path-mapping,CppArchive=+supports-path-mapping \
+    --modify_execution_info=CppCompile=+supports-path-mapping,CppModuleMap=+supports-path-mapping,CppArchive=+supports-path-mapping,CppLink=+supports-path-mapping \
     --remote_executor=grpc://localhost:${worker_port} \
     --features=layering_check \
     "//$pkg:main" &>"$TEST_log" || fail "Expected success"
@@ -754,11 +776,22 @@ EOF
   expect_log '42 43'
   expect_not_log 'remote cache hit'
 
+  bazel build \
+    --repo_env=CC=clang \
+    --verbose_failures \
+    --experimental_output_paths=strip \
+    --modify_execution_info=CppCompile=+supports-path-mapping,CppModuleMap=+supports-path-mapping,CppArchive=+supports-path-mapping,CppLink=+supports-path-mapping \
+    --remote_executor=grpc://localhost:${worker_port} \
+    --features=layering_check \
+    "//$pkg:unaffected" &>"$TEST_log" || fail "Expected success"
+
+  expect_not_log 'remote cache hit'
+
   bazel run \
     --repo_env=CC=clang \
     --verbose_failures \
     --experimental_output_paths=strip \
-    --modify_execution_info=CppCompile=+supports-path-mapping,CppModuleMap=+supports-path-mapping,CppArchive=+supports-path-mapping \
+    --modify_execution_info=CppCompile=+supports-path-mapping,CppModuleMap=+supports-path-mapping,CppArchive=+supports-path-mapping,CppLink=+supports-path-mapping \
     --remote_executor=grpc://localhost:${worker_port} \
     --features=layering_check \
     -s \
@@ -772,10 +805,11 @@ EOF
   # to path stripping, utils is legitimately different and should not (4 cached
   # out of 5 total).
   # Likewise, link actions for lib1 and lib2 should result in cache hits, but
-  # the one for utils does not and the linking action for main doesn't support
-  # path mapping (2 cached out of 4 in total). In CI, the C++ toolchain on Linux
-  # uses --start-lib/--end-lib linker support to avoid the CppArchive actions
-  # entirely (0 cached out of 1 in total).
+  # the one for utils does not. The linking action for main is path-mapped, but
+  # doesn't get a cache hit either since the object file of utils, which is
+  # legitimately different, is part of its inputs (2 cached out of 4 in total).
+  # In CI, the C++ toolchain on Linux uses --start-lib/--end-lib linker support
+  # to avoid the CppArchive actions entirely (0 cached out of 1 in total).
   # The two custom actions and the four genrule actions are not path-mapped
   # (0 cached out of 6 in total).
   if is_darwin; then
@@ -785,6 +819,168 @@ EOF
     expect_log ' 4 remote cache hit'
     expect_log ' 8 remote'
   fi
+
+  bazel build \
+    --repo_env=CC=clang \
+    --verbose_failures \
+    --experimental_output_paths=strip \
+    --modify_execution_info=CppCompile=+supports-path-mapping,CppModuleMap=+supports-path-mapping,CppArchive=+supports-path-mapping,CppLink=+supports-path-mapping \
+    --remote_executor=grpc://localhost:${worker_port} \
+    --features=layering_check \
+    "//$pkg:transitioned_unaffected" &>"$TEST_log" || fail "Expected success"
+
+  # The transition changes the output paths of the actions of the unaffected
+  # binary, but not their inputs or command lines. With path mapping applied to
+  # both its CppCompile and CppLink action, both should result in remote cache
+  # hits and nothing should have to execute remotely.
+  expect_log ' 2 remote cache hit'
+  expect_not_log '[0-9] remote[.,]'
+}
+
+# Verifies that dynamically linked C++ binaries built with path mapping enabled
+# for CppLink actions work correctly at runtime, in particular that the rpaths
+# embedded into the binary remain valid. Also documents the current limitation
+# that CppLink actions involving dynamic libraries do not result in cache hits
+# across configurations: the soname embedded into (and thus also the mangled
+# solib path of) a dynamic library built in a configuration with a Starlark
+# transition includes the "ST-<hash>" configuration checksum.
+function test_path_stripping_cc_dynamic_remote() {
+  local -r pkg="${FUNCNAME[0]}"
+
+  cat > MODULE.bazel <<EOF
+bazel_dep(name = "apple_support", version = "1.21.0")
+EOF
+  add_rules_cc "MODULE.bazel"
+
+  mkdir -p "$pkg"
+  cat > "$pkg/defs.bzl" <<EOF
+def _greeting_setting_impl(ctx):
+    return []
+
+greeting_setting = rule(
+    implementation = _greeting_setting_impl,
+    build_setting = config.string(),
+)
+
+def _greeting_transition_impl(settings, attr):
+    return {"//$pkg:greeting": attr.greeting}
+
+greeting_transition = transition(
+    implementation = _greeting_transition_impl,
+    inputs = [],
+    outputs = ["//$pkg:greeting"],
+)
+
+def _transition_wrapper_impl(ctx):
+    out = ctx.actions.declare_file(ctx.label.name)
+    ctx.actions.symlink(output = out, target_file = ctx.executable.target, is_executable = True)
+    return [
+        DefaultInfo(
+            executable = out,
+            runfiles = ctx.attr.target[DefaultInfo].default_runfiles,
+        ),
+    ]
+
+transition_wrapper = rule(
+    cfg = greeting_transition,
+    implementation = _transition_wrapper_impl,
+    attrs = {
+        "greeting": attr.string(),
+        "target": attr.label(
+            cfg = "target",
+            executable = True,
+        ),
+    },
+    executable = True,
+)
+EOF
+  cat > "$pkg/BUILD" <<EOF
+load(":defs.bzl", "greeting_setting", "transition_wrapper")
+load("@rules_cc//cc:cc_binary.bzl", "cc_binary")
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+
+# The greeting setting is not read by any rule or action, transitioning on it
+# only changes output paths, not action inputs or command lines.
+greeting_setting(
+    name = "greeting",
+    build_setting_default = "Hello",
+)
+
+cc_binary(
+    name = "main",
+    srcs = ["main.cc"],
+    linkstatic = False,
+    deps = [":lib"],
+)
+
+cc_library(
+    name = "lib",
+    srcs = ["lib.cc"],
+    hdrs = ["lib.h"],
+)
+
+transition_wrapper(
+    name = "transitioned_main",
+    greeting = "Hi there",
+    target = ":main",
+)
+EOF
+  cat > "$pkg/main.cc" <<EOF
+#include <iostream>
+
+#include "$pkg/lib.h"
+
+int main() {
+  std::cout << GetLibGreeting() << std::endl;
+  return 0;
+}
+EOF
+  cat > "$pkg/lib.h" <<'EOF'
+#ifndef LIB_H_
+#define LIB_H_
+
+#include <string>
+
+std::string GetLibGreeting();
+
+#endif
+EOF
+  cat > "$pkg/lib.cc" <<'EOF'
+#include "lib.h"
+
+std::string GetLibGreeting() {
+  return "Hello from the library!";
+}
+EOF
+
+  bazel run \
+    --repo_env=CC=clang \
+    --verbose_failures \
+    --experimental_output_paths=strip \
+    --modify_execution_info=CppCompile=+supports-path-mapping,CppModuleMap=+supports-path-mapping,CppArchive=+supports-path-mapping,CppLink=+supports-path-mapping \
+    --remote_executor=grpc://localhost:${worker_port} \
+    "//$pkg:main" &>"$TEST_log" || fail "Expected success"
+
+  expect_log 'Hello from the library!'
+  expect_not_log 'remote cache hit'
+
+  bazel run \
+    --repo_env=CC=clang \
+    --verbose_failures \
+    --experimental_output_paths=strip \
+    --modify_execution_info=CppCompile=+supports-path-mapping,CppModuleMap=+supports-path-mapping,CppArchive=+supports-path-mapping,CppLink=+supports-path-mapping \
+    --remote_executor=grpc://localhost:${worker_port} \
+    "//$pkg:transitioned_main" &>"$TEST_log" || fail "Expected success"
+
+  expect_log 'Hello from the library!'
+  # The two CppCompile actions are path-mapped and see identical inputs and
+  # command lines in both configurations, so they should result in remote cache
+  # hits. The two CppLink actions are also path-mapped, but do not get cache
+  # hits: the soname of (and thus also the linker command line referencing) the
+  # dynamic library embeds the "ST-<hash>" configuration checksum of the
+  # transitioned configuration.
+  expect_log ' 2 remote cache hit'
+  expect_log ' 2 remote[.,]'
 }
 
 function test_path_stripping_action_key_not_stale_for_path_collision() {
