@@ -327,6 +327,26 @@ public abstract class AbstractActionInputPrefetcher implements ActionInputPrefet
       MetadataSupplier metadataSupplier,
       Priority priority,
       Reason reason) {
+    return prefetchFilesInterruptibly(
+        action, inputs, metadataSupplier, priority, reason, /* forceDownload= */ false);
+  }
+
+  /**
+   * Same as {@link #prefetchFilesInterruptibly(ActionExecutionMetadata, Iterable,
+   * MetadataSupplier, Priority, Reason)}, except that with {@code forceDownload} set, files are
+   * verified against the local file system (and re-downloaded if missing or stale) even if a
+   * download for the same path already completed earlier in this invocation.
+   *
+   * <p>Use this when previously downloaded files may have been deleted within the same invocation,
+   * e.g. when a remotely cached repo is reinjected after its fetch was restarted.
+   */
+  public ListenableFuture<Void> prefetchFilesInterruptibly(
+      @Nullable ActionExecutionMetadata action,
+      Iterable<? extends ActionInput> inputs,
+      MetadataSupplier metadataSupplier,
+      Priority priority,
+      Reason reason,
+      boolean forceDownload) {
     List<ActionInput> files = new ArrayList<>();
 
     for (ActionInput input : inputs) {
@@ -360,7 +380,13 @@ public abstract class AbstractActionInputPrefetcher implements ActionInputPrefet
       for (var file : files) {
         transfers.add(
             prefetchFile(
-                action, dirsWithOutputPermissions, metadataSupplier, file, priority, reason));
+                action,
+                dirsWithOutputPermissions,
+                metadataSupplier,
+                file,
+                priority,
+                reason,
+                forceDownload));
       }
     }
 
@@ -392,7 +418,8 @@ public abstract class AbstractActionInputPrefetcher implements ActionInputPrefet
       MetadataSupplier metadataSupplier,
       ActionInput input,
       Priority priority,
-      Reason reason) {
+      Reason reason,
+      boolean forceDownload) {
     try {
       if (input instanceof VirtualActionInput virtualActionInput) {
         prefetchVirtualActionInput(virtualActionInput);
@@ -413,7 +440,8 @@ public abstract class AbstractActionInputPrefetcher implements ActionInputPrefet
         return toListenableFuture(
             plantUnresolvedSymlink(
                 inputPath.forHostFileSystem(),
-                PathFragment.create(metadata.getUnresolvedSymlinkTarget())));
+                PathFragment.create(metadata.getUnresolvedSymlinkTarget()),
+                forceDownload));
       }
       if (!canDownloadFile(inputPath, metadata)) {
         return immediateVoidFuture();
@@ -440,7 +468,8 @@ public abstract class AbstractActionInputPrefetcher implements ActionInputPrefet
               input,
               metadata,
               priority,
-              reason);
+              reason,
+              forceDownload);
 
       if (symlink != null) {
         result = result.andThen(plantSymlink(symlink));
@@ -564,7 +593,8 @@ public abstract class AbstractActionInputPrefetcher implements ActionInputPrefet
       ActionInput actionInput,
       FileArtifactValue metadata,
       Priority priority,
-      Reason reason) {
+      Reason reason,
+      boolean forceDownload) {
     // If the path to be prefetched is a non-dangling symlink, prefetch its target path instead.
     // Note that this only applies to symlinks created by spawns (or, currently, with the internal
     // version of BwoB); symlinks created in-process through an ActionFileSystem should have already
@@ -633,7 +663,7 @@ public abstract class AbstractActionInputPrefetcher implements ActionInputPrefet
               }
               return Completable.complete();
             }),
-        forceRefetch(finalPath));
+        forceDownload || forceRefetch(finalPath));
   }
 
   private void finalizeDownload(
@@ -723,15 +753,17 @@ public abstract class AbstractActionInputPrefetcher implements ActionInputPrefet
         forceRefetch(symlink.linkPath));
   }
 
-  private Completable plantUnresolvedSymlink(Path linkPath, PathFragment target) {
-    return downloadCache.executeIfNot(
-        linkPath,
+  private Completable plantUnresolvedSymlink(Path linkPath, PathFragment target, boolean force) {
+    Completable task =
         Completable.defer(
             () -> {
               linkPath.delete();
               linkPath.createSymbolicLink(target);
               return Completable.complete();
-            }));
+            });
+    return force
+        ? downloadCache.execute(linkPath, task, /* force= */ true)
+        : downloadCache.executeIfNot(linkPath, task);
   }
 
   public ImmutableSet<Path> downloadedFiles() {
