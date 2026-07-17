@@ -220,17 +220,28 @@ public final class RemoteExternalOverlayFileSystem extends FileSystem
         childMap,
         filesToPrefetch::add,
         Instant.now().plus(remoteCacheTtl));
-    try {
-      // TODO: This prefetches a large number of small files. Investigate whether BatchReadBlobs
-      // would be more efficient.
-      prefetch(filesToPrefetch);
-    } catch (BulkTransferException e) {
-      if (e.allCausedByCacheNotFoundException()) {
-        // The cache has lost the .bzl files, which should be treated just like a cache miss.
-        externalFs.deleteTree(repoDir);
-        return false;
+    for (int attempt = 0; ; attempt++) {
+      try {
+        // TODO: This prefetches a large number of small files. Investigate whether BatchReadBlobs
+        // would be more efficient.
+        prefetch(filesToPrefetch);
+        break;
+      } catch (BulkTransferException e) {
+        if (!e.allCausedByCacheNotFoundException()) {
+          throw e;
+        }
+        // The prefetcher converts all download errors into CacheNotFoundExceptions for the
+        // benefit of action rewinding, including transient ones such as digest verification
+        // mismatches observed while the remote connection is still processing the storm of
+        // streams cancelled together with an interrupted earlier fetch attempt. Retry once to
+        // distinguish transient failures from blobs that are actually missing from the remote
+        // cache.
+        if (attempt == 1) {
+          // The cache has lost the .bzl files, which should be treated just like a cache miss.
+          externalFs.deleteTree(repoDir);
+          return false;
+        }
       }
-      throw e;
     }
     // Create the repo directory on disk so that readdir reflects the overlaid state of the external
     // directory.
@@ -358,7 +369,13 @@ public final class RemoteExternalOverlayFileSystem extends FileSystem
                 Iterables.transform(paths, ActionInputHelper::fromPath),
                 actionInput -> externalFs.getMetadata(actionInput.getExecPath()),
                 ActionInputPrefetcher.Priority.CRITICAL,
-                ActionInputPrefetcher.Reason.INPUTS));
+                ActionInputPrefetcher.Reason.INPUTS,
+                // A repo may be reinjected within the same invocation after injectRemoteRepo
+                // deleted the native copies of its prefetched files (e.g. when its fetch is
+                // restarted due to memory pressure). The prefetcher's download cache would
+                // consider these files downloaded already, so force it to verify them against
+                // the local file system.
+                /* forceDownload= */ true));
   }
 
   /**
