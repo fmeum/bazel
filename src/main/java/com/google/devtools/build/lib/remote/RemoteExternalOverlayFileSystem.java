@@ -691,10 +691,31 @@ public final class RemoteExternalOverlayFileSystem extends FileSystem {
 
     @Override
     public synchronized InputStream getInputStream(PathFragment path) throws IOException {
-      if (shouldPrefetch(path)) {
-        return nativeFs.getInputStream(path);
-      }
       var relativePath = path.relativeTo(externalDirectory);
+      if (shouldPrefetch(path)) {
+        // Prefetched files are read from the native copies created during injection. The output
+        // base may have been modified out-of-band while this server retained the injected repo
+        // contents in memory across commands (e.g. by a CI disk cleaner pruning the output base
+        // of a warm server, whose on-disk footprint for an injected repo looks like leftovers).
+        // Verify the native copy and fall back to the remote cache if it is missing or has
+        // diverged, which also schedules the repo for reinjection so that the native copies are
+        // restored for the next command.
+        var nativeStatus = nativeFs.statNullable(path, /* followSymlinks= */ true);
+        if (nativeStatus != null
+            && nativeStatus.isFile()
+            && nativeStatus.getSize() == getFileSize(path, /* followSymlinks= */ true)) {
+          return nativeFs.getInputStream(path);
+        }
+        String repoName = relativePath.getSegment(0);
+        if (reposWithLostFiles.add(repoName)) {
+          reporter.handle(
+              Event.warn(
+                  ("the native copy of %s no longer matches the in-memory contents of the"
+                          + " remotely cached repo %s; falling back to the remote cache and"
+                          + " refetching the repo after the current command")
+                      .formatted(path, repoName)));
+        }
+      }
       var info =
           (RemoteActionFileSystem.RemoteInMemoryFileInfo) stat(path, /* followSymlinks= */ true);
       reporter.post(

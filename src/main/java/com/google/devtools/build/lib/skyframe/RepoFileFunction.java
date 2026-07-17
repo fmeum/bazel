@@ -112,7 +112,8 @@ public class RepoFileFunction implements SkyFunction {
       contents = FileSystemUtils.readWithKnownFileSize(path, path.getFileSize());
     } catch (IOException e) {
       throw new RepoFileFunctionException(
-          new IOException("error reading REPO.bazel file at " + path, e), Transience.TRANSIENT);
+          new IOException("error reading REPO.bazel file at " + path + ": " + e.getMessage(), e),
+          Transience.TRANSIENT);
     }
     ParserInput parserInput;
     try {

@@ -18,6 +18,7 @@
 import json
 import os
 import re
+import shutil
 import tempfile
 from absl.testing import absltest
 from src.test.py.bazel import test_base
@@ -1132,6 +1133,71 @@ class RemoteRepoContentsCacheTest(test_base.TestBase):
     self.assertTrue(
         os.path.exists(os.path.join(repo_dir, 'subdir/more_nested.bzl'))
     )
+
+  def testNativeCopiesOfPrefetchedFilesDeletedOutOfBand(self):
+    # Regression test for the native copies of prefetched files (REPO.bazel and
+    # .bzl files) being deleted from the output base while the server retains
+    # the injected repo contents in memory across commands, e.g. by a CI disk
+    # cleaner running between builds against a warm server. To such a cleaner,
+    # the on-disk footprint of an injected repo looks like leftovers: a sparse
+    # directory tree without a marker file.
+    self.ScratchFile(
+        'MODULE.bazel',
+        [
+            'repo = use_repo_rule("//:repo.bzl", "repo")',
+            'repo(name = "my_repo")',
+        ],
+    )
+    self.ScratchFile('BUILD.bazel')
+    self.ScratchFile(
+        'repo.bzl',
+        [
+            'def _repo_impl(rctx):',
+            '  rctx.file("BUILD", "filegroup(name=\'haha\')")',
+            '  rctx.file("sub/BUILD", """',
+            'load(":lazy.bzl", "lazy_fg")',
+            'lazy_fg(name = "lazy")',
+            '""")',
+            '  rctx.file("sub/lazy.bzl", """',
+            'def lazy_fg(name):',
+            '  native.filegroup(name = name)',
+            '""")',
+            '  print("JUST FETCHED")',
+            '  return rctx.repo_metadata(reproducible=True)',
+            'repo = repository_rule(_repo_impl)',
+        ],
+    )
+
+    repo_dir = self.RepoDir('my_repo')
+
+    # First fetch: not cached
+    _, _, stderr = self.RunBazel(['build', '@my_repo//:haha'])
+    self.assertIn('JUST FETCHED', '\n'.join(stderr))
+
+    # After expunging: cached. The .bzl files and REPO.bazel are prefetched to
+    # the native file system, but sub/lazy.bzl has not been read yet.
+    self.RunBazel(['clean', '--expunge'])
+    _, _, stderr = self.RunBazel(['build', '@my_repo//:haha'])
+    self.assertNotIn('JUST FETCHED', '\n'.join(stderr))
+    self.assertTrue(os.path.exists(os.path.join(repo_dir, 'sub/lazy.bzl')))
+    self.assertFalse(os.path.exists(os.path.join(repo_dir, 'sub/BUILD')))
+
+    # Simulate an external cleaner deleting the repo contents from the output
+    # base while the server keeps the injected repo contents in memory.
+    shutil.rmtree(repo_dir)
+
+    # Loading a package that reads the not-yet-read .bzl file succeeds by
+    # falling back to the remote cache.
+    _, _, stderr = self.RunBazel(['build', '@my_repo//sub:lazy'])
+    stderr_text = '\n'.join(stderr)
+    self.assertNotIn('JUST FETCHED', stderr_text)
+    self.assertIn('no longer matches the in-memory contents', stderr_text)
+
+    # The repo is reinjected on the next command, restoring the native copies
+    # of the prefetched files without a refetch.
+    _, _, stderr = self.RunBazel(['build', '@my_repo//sub:lazy'])
+    self.assertNotIn('JUST FETCHED', '\n'.join(stderr))
+    self.assertTrue(os.path.exists(os.path.join(repo_dir, 'sub/lazy.bzl')))
 
   def testRun(self):
     self.ScratchFile(
