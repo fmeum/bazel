@@ -38,25 +38,25 @@ public class AspectValue extends BasicActionLookupValue
       AspectKey key,
       Aspect aspect,
       ConfiguredAspect configuredAspect,
-      @Nullable NestedSet<Package.Metadata> transitivePackages) {
-    return transitivePackages == null
+      @Nullable NestedSet<Package.RepoMetadata> transitiveRepos) {
+    return transitiveRepos == null
         ? new AspectValue(aspect, configuredAspect)
-        : new AspectValueWithTransitivePackages(key, aspect, configuredAspect, transitivePackages);
+        : new AspectValueWithTransitiveRepos(key, aspect, configuredAspect, transitiveRepos);
   }
 
   public static AspectValue createForAlias(
       AspectKey key,
       Aspect aspect,
       ConfiguredAspect configuredAspect,
-      @Nullable NestedSet<Package.Metadata> transitivePackages) {
-    return transitivePackages == null
+      @Nullable NestedSet<Package.RepoMetadata> transitiveRepos) {
+    return transitiveRepos == null
         ? new AspectValueForAlias(aspect, configuredAspect)
-        : new AspectValueWithTransitivePackagesForAlias(
-            key, aspect, configuredAspect, transitivePackages);
+        : new AspectValueWithTransitiveReposForAlias(
+            key, aspect, configuredAspect, transitiveRepos);
   }
 
   // These variables are only non-final because they may be clear()ed to save memory. They are null
-  // only after they are cleared except for transitivePackagesForPackageRootResolution.
+  // only after they are cleared except for transitiveRepos.
   @Nullable private Aspect aspect;
   @Nullable private TransitiveInfoProviderMap providers;
 
@@ -84,8 +84,8 @@ public class AspectValue extends BasicActionLookupValue
     this.writesOutputToMasterLog = writesOutputToMasterLog;
   }
 
-  public AspectKey getKeyForTransitivePackageTracking() {
-    throw new UnsupportedOperationException("Only supported if transitive packages are tracked.");
+  public AspectKey getKeyForTransitiveRepoTracking() {
+    throw new UnsupportedOperationException("Only supported if transitive repos are tracked.");
   }
 
   public final Aspect getAspect() {
@@ -121,7 +121,7 @@ public class AspectValue extends BasicActionLookupValue
 
   @Nullable
   @Override
-  public NestedSet<Package.Metadata> getTransitivePackages() {
+  public NestedSet<Package.RepoMetadata> getTransitiveRepos() {
     return null;
   }
 
@@ -140,42 +140,42 @@ public class AspectValue extends BasicActionLookupValue
     return getStringHelper().toString();
   }
 
-  private static class AspectValueWithTransitivePackages extends AspectValue {
+  private static class AspectValueWithTransitiveRepos extends AspectValue {
     @Nullable
-    private transient NestedSet<Package.Metadata> transitivePackages; // Null after clear().
+    private transient NestedSet<Package.RepoMetadata> transitiveRepos; // Null after clear().
 
     @Nullable private AspectKey key;
 
-    private AspectValueWithTransitivePackages(
+    private AspectValueWithTransitiveRepos(
         AspectKey key,
         Aspect aspect,
         ConfiguredAspect configuredAspect,
-        NestedSet<Package.Metadata> transitivePackages) {
+        NestedSet<Package.RepoMetadata> transitiveRepos) {
       super(aspect, configuredAspect);
-      this.transitivePackages = checkNotNull(transitivePackages);
+      this.transitiveRepos = checkNotNull(transitiveRepos);
       this.key = checkNotNull(key);
     }
 
     @Override
-    public NestedSet<Package.Metadata> getTransitivePackages() {
-      return transitivePackages;
+    public NestedSet<Package.RepoMetadata> getTransitiveRepos() {
+      return transitiveRepos;
     }
 
     @Override
-    public AspectKey getKeyForTransitivePackageTracking() {
+    public AspectKey getKeyForTransitiveRepoTracking() {
       return checkNotNull(key);
     }
 
     @Override
     public void clear(boolean clearEverything) {
       super.clear(clearEverything);
-      transitivePackages = null;
+      transitiveRepos = null;
       key = null;
     }
 
     @Override
     protected ToStringHelper getStringHelper() {
-      return super.getStringHelper().add("key", key).add("transitivePackages", transitivePackages);
+      return super.getStringHelper().add("key", key).add("transitiveRepos", transitiveRepos);
     }
   }
 
@@ -196,19 +196,19 @@ public class AspectValue extends BasicActionLookupValue
     }
   }
 
-  private static final class AspectValueWithTransitivePackagesForAlias
-      extends AspectValueWithTransitivePackages {
-    private AspectValueWithTransitivePackagesForAlias(
+  private static final class AspectValueWithTransitiveReposForAlias
+      extends AspectValueWithTransitiveRepos {
+    private AspectValueWithTransitiveReposForAlias(
         AspectKey key,
         Aspect aspect,
         ConfiguredAspect configuredAspect,
-        NestedSet<Package.Metadata> transitivePackages) {
-      super(key, aspect, configuredAspect, transitivePackages);
+        NestedSet<Package.RepoMetadata> transitiveRepos) {
+      super(key, aspect, configuredAspect, transitiveRepos);
     }
   }
 
   public static boolean isForAliasTarget(AspectValue aspectValue) {
     return aspectValue instanceof AspectValueForAlias
-        || aspectValue instanceof AspectValueWithTransitivePackagesForAlias;
+        || aspectValue instanceof AspectValueWithTransitiveReposForAlias;
   }
 }

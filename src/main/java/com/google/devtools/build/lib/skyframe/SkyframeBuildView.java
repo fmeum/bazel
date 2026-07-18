@@ -1371,7 +1371,7 @@ public final class SkyframeBuildView {
       @Nullable OrderedSetMultimap<DependencyKind, ConfiguredTargetAndData> materializerTargets,
       ConfigConditions configConditions,
       @Nullable ToolchainCollection<ResolvedToolchainContext> toolchainContexts,
-      @Nullable NestedSet<Package.Metadata> transitivePackages,
+      @Nullable NestedSet<Package.RepoMetadata> transitiveRepos,
       ExecGroupCollection.Builder execGroupCollectionBuilder,
       boolean crashIfExecutionPhase)
       throws InterruptedException,
@@ -1410,7 +1410,7 @@ public final class SkyframeBuildView {
         materializerTargets,
         configConditions,
         toolchainContexts,
-        transitivePackages,
+        transitiveRepos,
         execGroupCollectionBuilder,
         starlarkExecTransition.orElse(null));
   }

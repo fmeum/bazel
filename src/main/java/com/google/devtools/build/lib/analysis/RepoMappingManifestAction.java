@@ -77,12 +77,12 @@ public final class RepoMappingManifestAction extends AbstractFileWriteAction
                   });
 
   // Uses MapFn's args parameter just like Fingerprint#addString to compute a cacheable fingerprint
-  // of just the repo name and mapping of a given Package.
-  private static final CommandLineItem.ExceptionlessMapFn<Package.Metadata>
+  // of just the repo name and mapping of a given repository.
+  private static final CommandLineItem.ExceptionlessMapFn<Package.RepoMetadata>
       REPO_AND_MAPPING_DIGEST_FN =
-          (pkgMetadata, args) -> {
-            args.accept(pkgMetadata.packageIdentifier().getRepository().getName());
-            args.accept(repoMappingFingerprintCache.get(pkgMetadata.repositoryMapping().entries()));
+          (repoMetadata, args) -> {
+            args.accept(repoMetadata.repoName().getName());
+            args.accept(repoMappingFingerprintCache.get(repoMetadata.repositoryMapping().entries()));
           };
 
   private static final CommandLineItem.ExceptionlessMapFn<Artifact> OWNER_REPO_FN =
@@ -94,7 +94,7 @@ public final class RepoMappingManifestAction extends AbstractFileWriteAction
   private static final CommandLineItem.ExceptionlessMapFn<SymlinkEntry> FIRST_SEGMENT_FN =
       (symlink, args) -> args.accept(symlink.getPath().getSegment(0));
 
-  private final NestedSet<Package.Metadata> transitivePackages;
+  private final NestedSet<Package.RepoMetadata> transitiveRepos;
   private final NestedSet<Artifact> runfilesArtifacts;
   private final boolean hasRunfilesSymlinks;
   private final NestedSet<SymlinkEntry> runfilesRootSymlinks;
@@ -104,14 +104,14 @@ public final class RepoMappingManifestAction extends AbstractFileWriteAction
   public RepoMappingManifestAction(
       ActionOwner owner,
       Artifact output,
-      NestedSet<Package.Metadata> transitivePackages,
+      NestedSet<Package.RepoMetadata> transitiveRepos,
       NestedSet<Artifact> runfilesArtifacts,
       NestedSet<SymlinkEntry> runfilesSymlinks,
       NestedSet<SymlinkEntry> runfilesRootSymlinks,
       String workspaceName,
       boolean emitCompactRepoMapping) {
     super(owner, NestedSetBuilder.emptySet(Order.STABLE_ORDER), output);
-    this.transitivePackages = transitivePackages;
+    this.transitiveRepos = transitiveRepos;
     this.runfilesArtifacts = runfilesArtifacts;
     this.hasRunfilesSymlinks = !runfilesSymlinks.isEmpty();
     this.runfilesRootSymlinks = runfilesRootSymlinks;
@@ -136,7 +136,7 @@ public final class RepoMappingManifestAction extends AbstractFileWriteAction
       Fingerprint fp)
       throws CommandLineExpansionException, EvalException, InterruptedException {
     fp.addUUID(MY_UUID);
-    actionKeyContext.addNestedSetToFingerprint(REPO_AND_MAPPING_DIGEST_FN, fp, transitivePackages);
+    actionKeyContext.addNestedSetToFingerprint(REPO_AND_MAPPING_DIGEST_FN, fp, transitiveRepos);
     actionKeyContext.addNestedSetToFingerprint(OWNER_REPO_FN, fp, runfilesArtifacts);
     fp.addBoolean(hasRunfilesSymlinks);
     actionKeyContext.addNestedSetToFingerprint(FIRST_SEGMENT_FN, fp, runfilesRootSymlinks);
@@ -148,7 +148,7 @@ public final class RepoMappingManifestAction extends AbstractFileWriteAction
   public String describeKey() {
     return """
     GUID: %s
-    transitivePackages: %s
+    transitiveRepos: %s
     runfilesArtifacts: %s
     hasRunfilesSymlinks: %s
     runfilesRootSymlinks: %s
@@ -157,7 +157,7 @@ public final class RepoMappingManifestAction extends AbstractFileWriteAction
     """
         .formatted(
             MY_UUID,
-            describeNestedSetFingerprint(REPO_AND_MAPPING_DIGEST_FN, transitivePackages),
+            describeNestedSetFingerprint(REPO_AND_MAPPING_DIGEST_FN, transitiveRepos),
             describeNestedSetFingerprint(OWNER_REPO_FN, runfilesArtifacts),
             hasRunfilesSymlinks,
             describeNestedSetFingerprint(FIRST_SEGMENT_FN, runfilesRootSymlinks),
@@ -215,12 +215,12 @@ public final class RepoMappingManifestAction extends AbstractFileWriteAction
       var reposInRunfilesPaths = reposInRunfilesPathsBuilder.build();
 
       ImmutableSortedMap<RepositoryName, RepositoryMapping> sortedRepoMappings =
-          transitivePackages.toList().stream()
+          transitiveRepos.toList().stream()
               .collect(
                   toImmutableSortedMap(
                       comparing(RepositoryName::getName),
-                      pkgMetadata -> pkgMetadata.packageIdentifier().getRepository(),
-                      Package.Metadata::repositoryMapping,
+                      Package.RepoMetadata::repoName,
+                      Package.RepoMetadata::repositoryMapping,
                       // All packages in a given repository have the same repository mapping, so the
                       // particular way of resolving duplicates does not matter.
                       (first, second) -> first));
@@ -250,8 +250,8 @@ public final class RepoMappingManifestAction extends AbstractFileWriteAction
       } else {
         // All repositories generated by a module extension have the same Map instance as the
         // entries of their RepositoryMapping, with every repo appearing as an entry. If a module
-        // extension generates N repos and all of them are in transitivePackages, iterating over the
-        // packages and then over each mapping's entries would thus require time quadratic in N. We
+        // extension generates N repos and all of them are in transitiveRepos, iterating over the
+        // repos and then over each mapping's entries would thus require time quadratic in N. We
         // prevent this by caching the relevant (target apparent name, target canonical name) pairs
         // per entry map instance.
         IdentityHashMap<

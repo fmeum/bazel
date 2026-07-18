@@ -36,8 +36,8 @@ public final class RuleConfiguredTargetValue
 
   public RuleConfiguredTargetValue(
       RuleConfiguredTarget configuredTarget,
-      @Nullable NestedSet<Package.Metadata> transitivePackages) {
-    super(configuredTarget, transitivePackages);
+      @Nullable NestedSet<Package.RepoMetadata> transitiveRepos) {
+    super(configuredTarget, transitiveRepos);
     // These are specifically *not* copied to save memory.
     this.actions = configuredTarget.getActions();
   }

@@ -872,7 +872,7 @@ public abstract class SkyframeExecutor implements WalkableGraphFactory {
             new BuildViewProvider(),
             ruleClassProvider,
             cpuBoundSemaphore,
-            shouldStoreTransitivePackagesInLoadingAndAnalysis(),
+            shouldStoreTransitiveReposInLoadingAndAnalysis(),
             shouldUnblockCpuWorkWhenFetchingDeps,
             analysisProgress,
             this::getExistingPackage,
@@ -882,7 +882,7 @@ public abstract class SkyframeExecutor implements WalkableGraphFactory {
         new AspectFunction(
             new BuildViewProvider(),
             ruleClassProvider,
-            shouldStoreTransitivePackagesInLoadingAndAnalysis(),
+            shouldStoreTransitiveReposInLoadingAndAnalysis(),
             this::getExistingPackage,
             new BaseTargetPrerequisitesSupplierImpl(),
             this::getRemoteAnalysisCacheReaderDepsProvider,
@@ -892,7 +892,7 @@ public abstract class SkyframeExecutor implements WalkableGraphFactory {
         new ToplevelStarlarkAspectFunction(
             new BuildViewProvider(),
             ruleClassProvider,
-            shouldStoreTransitivePackagesInLoadingAndAnalysis(),
+            shouldStoreTransitiveReposInLoadingAndAnalysis(),
             this::getExistingPackage));
     map.put(SkyFunctions.LOAD_ASPECTS, new LoadAspectsFunction());
     map.put(GenQueryPackageProviderFactory.GENQUERY_SCOPE, GenQueryPackageProviderFactory.FUNCTION);
@@ -1306,11 +1306,11 @@ public abstract class SkyframeExecutor implements WalkableGraphFactory {
     return null;
   }
 
-  private boolean shouldStoreTransitivePackagesInLoadingAndAnalysis() {
-    // Transitive packages may be needed for either RepoMappingManifestAction or Skymeld with
+  private boolean shouldStoreTransitiveReposInLoadingAndAnalysis() {
+    // Transitive repos may be needed for either RepoMappingManifestAction or Skymeld with
     // external repository support. They are never needed if external repositories are disabled. To
     // avoid complexity from toggling this, just choose a setting for the lifetime of the server.
-    // TODO(b/283125139): Can we support external repositories without tracking transitive packages?
+    // TODO(b/283125139): Can we support external repositories without tracking transitive repos?
     return allowExternalRepositories;
   }
 

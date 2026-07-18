@@ -25,6 +25,7 @@ import com.google.devtools.build.lib.analysis.config.FragmentOptions;
 import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.cmdline.PackageIdentifier;
 import com.google.devtools.build.lib.cmdline.RepositoryMapping;
+import com.google.devtools.build.lib.cmdline.RepositoryName;
 import com.google.devtools.build.lib.collect.nestedset.NestedSet;
 import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
 import com.google.devtools.build.lib.packages.AspectClass;
@@ -39,6 +40,7 @@ import com.google.devtools.build.lib.skyframe.ConfiguredTargetKey;
 import com.google.devtools.build.lib.skyframe.config.BuildConfigurationKey;
 import com.google.devtools.build.lib.testutil.TestConstants;
 import com.google.devtools.build.lib.vfs.DigestHashFunction;
+import com.google.devtools.build.lib.vfs.PathFragment;
 import com.google.devtools.build.lib.vfs.Root;
 import com.google.devtools.build.lib.vfs.RootedPath;
 import com.google.devtools.build.lib.vfs.inmemoryfs.InMemoryFileSystem;
@@ -60,34 +62,36 @@ public final class TransitiveDependencyStateTest {
       Root.fromPath(new InMemoryFileSystem(DigestHashFunction.SHA256).getPath("/fake"));
 
   @Test
-  public void singlyAddedPackages_areSorted() {
+  public void singlyAddedRepos_areSorted() {
     var orderedPackages =
         ImmutableList.<Package.Metadata>of(
-            createFakePackageMetadata(PackageIdentifier.createInMainRepo("package1")),
-            createFakePackageMetadata(PackageIdentifier.createInMainRepo("package2")),
-            createFakePackageMetadata(PackageIdentifier.createInMainRepo("package3")));
+            createFakePackageMetadata(createInRepo("repo1")),
+            createFakePackageMetadata(createInRepo("repo2")),
+            createFakePackageMetadata(createInRepo("repo3")));
+    var orderedRepos =
+        orderedPackages.stream().map(Package.Metadata::repoMetadata).collect(toImmutableList());
     var workingCopy = new ArrayList<>(orderedPackages);
 
     for (int i = 0; i < 3; i++) {
       var state = newTransitiveState();
 
       Collections.shuffle(workingCopy, rng);
-      workingCopy.forEach(state::updateTransitivePackages);
+      workingCopy.forEach(state::updateTransitiveRepos);
 
-      assertThat(state.transitivePackages().toList())
-          .containsExactlyElementsIn(orderedPackages)
+      assertThat(state.transitiveRepos().toList())
+          .containsExactlyElementsIn(orderedRepos)
           .inOrder();
     }
   }
 
   @Test
-  public void configuredTargetPackages_areSorted() {
+  public void configuredTargetRepos_areSorted() {
     ImmutableList<ConfiguredTargetKey> orderedKeys = getOrderedConfiguredTargetKeys();
 
-    ImmutableList<Package.Metadata> orderedPackageMetadataList =
-        createFakePackageMetadataList(orderedKeys.size());
-    ImmutableList<NestedSet<Package.Metadata>> orderedPackageMetadataNestedSets =
-        asSingletonNestedSets(orderedPackageMetadataList);
+    ImmutableList<Package.RepoMetadata> orderedRepoMetadataList =
+        createFakeRepoMetadataList(orderedKeys.size());
+    ImmutableList<NestedSet<Package.RepoMetadata>> orderedRepoMetadataNestedSets =
+        asSingletonNestedSets(orderedRepoMetadataList);
 
     var shuffledIndices = new ArrayList<Integer>();
     for (int i = 0; i < orderedKeys.size(); i++) {
@@ -100,25 +104,25 @@ public final class TransitiveDependencyStateTest {
       // Adds the entries to `state` in random order.
       Collections.shuffle(shuffledIndices, rng);
       for (int index : shuffledIndices) {
-        state.updateTransitivePackages(
-            orderedKeys.get(index), orderedPackageMetadataNestedSets.get(index));
+        state.updateTransitiveRepos(
+            orderedKeys.get(index), orderedRepoMetadataNestedSets.get(index));
       }
 
       // The result is always ordered.
-      assertThat(state.transitivePackages().toList())
-          .containsExactlyElementsIn(orderedPackageMetadataList)
+      assertThat(state.transitiveRepos().toList())
+          .containsExactlyElementsIn(orderedRepoMetadataList)
           .inOrder();
     }
   }
 
   @Test
-  public void aspectPackages_areSorted() {
+  public void aspectRepos_areSorted() {
     ImmutableList<AspectKey> orderedKeys = getOrderedAspectKeys();
 
-    ImmutableList<Package.Metadata> orderedPackageMetadataList =
-        createFakePackageMetadataList(orderedKeys.size());
-    ImmutableList<NestedSet<Package.Metadata>> orderedPackagMetadataNestedSets =
-        asSingletonNestedSets(orderedPackageMetadataList);
+    ImmutableList<Package.RepoMetadata> orderedRepoMetadataList =
+        createFakeRepoMetadataList(orderedKeys.size());
+    ImmutableList<NestedSet<Package.RepoMetadata>> orderedRepoMetadataNestedSets =
+        asSingletonNestedSets(orderedRepoMetadataList);
 
     var shuffledIndices = new ArrayList<Integer>();
     for (int i = 0; i < orderedKeys.size(); i++) {
@@ -131,20 +135,25 @@ public final class TransitiveDependencyStateTest {
       // Adds the entries to `state` in random order.
       Collections.shuffle(shuffledIndices, rng);
       for (int index : shuffledIndices) {
-        state.updateTransitivePackages(
-            orderedKeys.get(index), orderedPackagMetadataNestedSets.get(index));
+        state.updateTransitiveRepos(
+            orderedKeys.get(index), orderedRepoMetadataNestedSets.get(index));
       }
 
       // The result is always ordered.
-      assertThat(state.transitivePackages().toList())
-          .containsExactlyElementsIn(orderedPackageMetadataList)
+      assertThat(state.transitiveRepos().toList())
+          .containsExactlyElementsIn(orderedRepoMetadataList)
           .inOrder();
     }
   }
 
   private static TransitiveDependencyState newTransitiveState() {
     return new TransitiveDependencyState(
-        /* storeTransitivePackages= */ true, /* prerequisitePackages= */ p -> null);
+        /* storeTransitiveRepos= */ true, /* prerequisitePackages= */ p -> null);
+  }
+
+  private static PackageIdentifier createInRepo(String repoName) {
+    return PackageIdentifier.create(
+        RepositoryName.createUnvalidated(repoName), PathFragment.create("pkg"));
   }
 
   private static Package.Metadata createFakePackageMetadata(PackageIdentifier id) {
@@ -152,31 +161,40 @@ public final class TransitiveDependencyStateTest {
         .packageIdentifier(id)
         .buildFilename(
             RootedPath.toRootedPath(
-                fakeRoot, fakeRoot.getRelative(id.getPackageFragment().getRelative("BUILD"))))
+                fakeRoot,
+                fakeRoot.getRelative(
+                    id.getRepository()
+                        .getName()
+                        .isEmpty()
+                        ? id.getPackageFragment().getRelative("BUILD")
+                        : PathFragment.create(id.getRepository().getName())
+                            .getRelative(id.getPackageFragment())
+                            .getRelative("BUILD"))))
         .workspaceName("workspace")
         .repositoryMapping(RepositoryMapping.EMPTY)
         .succinctTargetNotFoundErrors(PackageSettings.DEFAULTS.succinctTargetNotFoundErrors())
         .build();
   }
 
-  private static ImmutableList<Package.Metadata> createFakePackageMetadataList(int count) {
+  private static ImmutableList<Package.RepoMetadata> createFakeRepoMetadataList(int count) {
     var orderedIds = new ArrayList<PackageIdentifier>(count);
     for (int i = 0; i < count; ++i) {
-      orderedIds.add(PackageIdentifier.createInMainRepo("package" + i));
+      orderedIds.add(createInRepo("repo" + i));
     }
-    // Scrambles the order so if the result is ordered it's not somehow due to package sorting.
+    // Scrambles the order so if the result is ordered it's not somehow due to repo sorting.
     Collections.shuffle(orderedIds, rng);
     return orderedIds.stream()
         .map(TransitiveDependencyStateTest::createFakePackageMetadata)
+        .map(Package.Metadata::repoMetadata)
         .collect(toImmutableList());
   }
 
-  private static ImmutableList<NestedSet<Package.Metadata>> asSingletonNestedSets(
-      List<Package.Metadata> packageMetadataList) {
-    return packageMetadataList.stream()
+  private static ImmutableList<NestedSet<Package.RepoMetadata>> asSingletonNestedSets(
+      List<Package.RepoMetadata> repoMetadataList) {
+    return repoMetadataList.stream()
         .map(
-            pkgMetadata ->
-                NestedSetBuilder.<Package.Metadata>stableOrder().add(pkgMetadata).build())
+            repoMetadata ->
+                NestedSetBuilder.<Package.RepoMetadata>stableOrder().add(repoMetadata).build())
         .collect(toImmutableList());
   }
 

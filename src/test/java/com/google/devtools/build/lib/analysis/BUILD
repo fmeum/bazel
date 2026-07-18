@@ -449,14 +449,13 @@ java_test(
 )
 
 java_test(
-    name = "ConfiguredTargetTransitivePackagesTest",
-    srcs = ["ConfiguredTargetTransitivePackagesTest.java"],
+    name = "ConfiguredTargetTransitiveReposTest",
+    srcs = ["ConfiguredTargetTransitiveReposTest.java"],
     deps = [
         "//src/main/java/com/google/devtools/build/lib/analysis:configured_target",
         "//src/main/java/com/google/devtools/build/lib/analysis:configured_target_value",
         "//src/main/java/com/google/devtools/build/lib/analysis/config:build_configuration",
         "//src/main/java/com/google/devtools/build/lib/cmdline",
-        "//src/main/java/com/google/devtools/build/lib/vfs:pathfragment",
         "//src/test/java/com/google/devtools/build/lib/analysis/util",
         "//src/test/java/com/google/devtools/build/lib/packages:testutil",
         "//src/test/java/com/google/devtools/build/lib/skyframe/util:SkyframeExecutorTestUtils",

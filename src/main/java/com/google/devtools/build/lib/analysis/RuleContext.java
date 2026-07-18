@@ -190,7 +190,7 @@ public class RuleContext extends TargetContext
   @Nullable private final RequiredConfigFragmentsProvider requiredConfigFragments;
 
   @Nullable
-  private final NestedSet<Package.Metadata> transitivePackagesForRunfileRepoMappingManifest;
+  private final NestedSet<Package.RepoMetadata> transitiveReposForRunfileRepoMappingManifest;
 
   private final List<Expander> makeVariableExpanders = new ArrayList<>();
 
@@ -246,8 +246,8 @@ public class RuleContext extends TargetContext
     this.toolchainContexts = builder.toolchainContexts;
     this.execGroupCollection = execGroupCollection;
     this.requiredConfigFragments = builder.requiredConfigFragments;
-    this.transitivePackagesForRunfileRepoMappingManifest =
-        builder.transitivePackagesForRunfileRepoMappingManifest;
+    this.transitiveReposForRunfileRepoMappingManifest =
+        builder.transitiveReposForRunfileRepoMappingManifest;
     this.starlarkThread = createStarlarkThread(builder.mutability); // uses above state
     this.prerequisitesCollection = prerequisitesCollection;
     this.conflictFinder = builder.conflictFinder;
@@ -1206,14 +1206,14 @@ public class RuleContext extends TargetContext
   }
 
   /**
-   * Returns the set of transitive package metadata. This is only intended to be used to create the
-   * repo mapping manifest for the runfiles tree. Can be null if transitive packages are not tracked
+   * Returns the set of transitive repo metadata. This is only intended to be used to create the
+   * repo mapping manifest for the runfiles tree. Can be null if transitive repos are not tracked
    * (see {@link
-   * com.google.devtools.build.lib.skyframe.SkyframeExecutor#shouldStoreTransitivePackagesInLoadingAndAnalysis}).
+   * com.google.devtools.build.lib.skyframe.SkyframeExecutor#shouldStoreTransitiveReposInLoadingAndAnalysis}).
    */
   @Nullable
-  public NestedSet<Package.Metadata> getTransitivePackagesForRunfileRepoMappingManifest() {
-    return transitivePackagesForRunfileRepoMappingManifest;
+  public NestedSet<Package.RepoMetadata> getTransitiveReposForRunfileRepoMappingManifest() {
+    return transitiveReposForRunfileRepoMappingManifest;
   }
 
   private boolean isUserDefinedMakeVariable(String makeVariable) {
@@ -1463,7 +1463,7 @@ public class RuleContext extends TargetContext
     private Supplier<IncrementalArtifactConflictFinder> conflictFinder = () -> null;
     @Nullable private RequiredConfigFragmentsProvider requiredConfigFragments;
 
-    @Nullable private NestedSet<Package.Metadata> transitivePackagesForRunfileRepoMappingManifest;
+    @Nullable private NestedSet<Package.RepoMetadata> transitiveReposForRunfileRepoMappingManifest;
 
     @VisibleForTesting
     public Builder(
@@ -1702,9 +1702,9 @@ public class RuleContext extends TargetContext
     }
 
     @CanIgnoreReturnValue
-    public Builder setTransitivePackagesForRunfileRepoMappingManifest(
-        @Nullable NestedSet<Package.Metadata> packages) {
-      this.transitivePackagesForRunfileRepoMappingManifest = packages;
+    public Builder setTransitiveReposForRunfileRepoMappingManifest(
+        @Nullable NestedSet<Package.RepoMetadata> repos) {
+      this.transitiveReposForRunfileRepoMappingManifest = repos;
       return this;
     }
 

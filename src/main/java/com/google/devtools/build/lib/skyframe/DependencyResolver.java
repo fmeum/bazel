@@ -192,7 +192,7 @@ public final class DependencyResolver {
 
     public static State createForTesting(TargetAndConfiguration targetAndConfiguration) {
       var state =
-          new State(/* storeTransitivePackages= */ false, /* prerequisitePackages= */ p -> null);
+          new State(/* storeTransitiveRepos= */ false, /* prerequisitePackages= */ p -> null);
       state.targetAndConfiguration = targetAndConfiguration;
       return state;
     }
@@ -201,23 +201,23 @@ public final class DependencyResolver {
         TargetAndConfiguration targetAndConfiguration, TransitionCollector transitionCollector) {
       var state =
           new State(
-              /* storeTransitivePackages= */ false,
+              /* storeTransitiveRepos= */ false,
               /* prerequisitePackages= */ p -> null,
               transitionCollector);
       state.targetAndConfiguration = targetAndConfiguration;
       return state;
     }
 
-    State(boolean storeTransitivePackages, PrerequisitePackageFunction prerequisitePackages) {
-      this(storeTransitivePackages, prerequisitePackages, NULL_TRANSITION_COLLECTOR);
+    State(boolean storeTransitiveRepos, PrerequisitePackageFunction prerequisitePackages) {
+      this(storeTransitiveRepos, prerequisitePackages, NULL_TRANSITION_COLLECTOR);
     }
 
     private State(
-        boolean storeTransitivePackages,
+        boolean storeTransitiveRepos,
         PrerequisitePackageFunction prerequisitePackages,
         TransitionCollector transitionCollector) {
       this.transitiveState =
-          new TransitiveDependencyState(storeTransitivePackages, prerequisitePackages);
+          new TransitiveDependencyState(storeTransitiveRepos, prerequisitePackages);
       this.transitionCollector = transitionCollector;
     }
 
@@ -225,8 +225,8 @@ public final class DependencyResolver {
       return transitiveState.transitiveRootCauses();
     }
 
-    public NestedSet<Package.Metadata> transitivePackages() {
-      return transitiveState.transitivePackages();
+    public NestedSet<Package.RepoMetadata> transitiveRepos() {
+      return transitiveState.transitiveRepos();
     }
 
     @Override

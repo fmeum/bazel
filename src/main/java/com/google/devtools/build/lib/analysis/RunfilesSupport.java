@@ -683,8 +683,8 @@ public final class RunfilesSupport {
   @Nullable
   private static Artifact createRepoMappingManifestAction(
       RuleContext ruleContext, Runfiles runfiles, Artifact owningExecutable) {
-    if (ruleContext.getTransitivePackagesForRunfileRepoMappingManifest() == null) {
-      // If transitive packages are not tracked for repo mapping manifest, we don't need the action.
+    if (ruleContext.getTransitiveReposForRunfileRepoMappingManifest() == null) {
+      // If transitive repos are not tracked for repo mapping manifest, we don't need the action.
       return null;
     }
 
@@ -703,7 +703,7 @@ public final class RunfilesSupport {
             new RepoMappingManifestAction(
                 ruleContext.getActionOwner(),
                 repoMappingManifest,
-                ruleContext.getTransitivePackagesForRunfileRepoMappingManifest(),
+                ruleContext.getTransitiveReposForRunfileRepoMappingManifest(),
                 runfiles.getArtifacts(),
                 runfiles.getSymlinks(),
                 runfiles.getRootSymlinks(),

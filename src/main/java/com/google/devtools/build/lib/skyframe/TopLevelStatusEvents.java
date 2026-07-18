@@ -59,22 +59,22 @@ public final class TopLevelStatusEvents {
   }
 
   /**
-   * An event that signals that we can start planting the symlinks for the transitive packages under
-   * a top level target.
+   * An event that signals that we can start planting the symlinks to the external repositories
+   * transitively loaded by a top level target.
    *
    * <p>Should always be sent out before {@link TopLevelEntityAnalysisConcludedEvent} to ensure
    * consistency.
    */
   public record TopLevelTargetReadyForSymlinkPlanting(
-      NestedSet<Package.Metadata> transitivePackagesForSymlinkPlanting)
+      NestedSet<Package.RepoMetadata> transitiveReposForSymlinkPlanting)
       implements TopLevelStatusEventWithType {
     public TopLevelTargetReadyForSymlinkPlanting {
-      requireNonNull(transitivePackagesForSymlinkPlanting, "transitivePackagesForSymlinkPlanting");
+      requireNonNull(transitiveReposForSymlinkPlanting, "transitiveReposForSymlinkPlanting");
     }
 
     public static TopLevelTargetReadyForSymlinkPlanting create(
-        NestedSet<Package.Metadata> transitivePackagesForSymlinkPlanting) {
-      return new TopLevelTargetReadyForSymlinkPlanting(transitivePackagesForSymlinkPlanting);
+        NestedSet<Package.RepoMetadata> transitiveReposForSymlinkPlanting) {
+      return new TopLevelTargetReadyForSymlinkPlanting(transitiveReposForSymlinkPlanting);
     }
 
     @Override
