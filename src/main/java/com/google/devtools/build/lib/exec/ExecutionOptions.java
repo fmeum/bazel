@@ -402,6 +402,21 @@ public abstract class ExecutionOptions extends OptionsBase {
   public abstract Duration getExperimentalCpuLoadSchedulingWindowSize();
 
   @Option(
+      name = "experimental_path_mapping_symlink_farm",
+      defaultValue = "true",
+      documentationCategory = OptionDocumentationCategory.OUTPUT_PARAMETERS,
+      effectTags = {OptionEffectTag.AFFECTS_OUTPUTS},
+      help =
+          "If enabled and --experimental_output_paths=strip is in effect, Bazel maintains a"
+              + " symlink farm under the path-mapped output directory (e.g. bazel-out/cfg) that"
+              + " makes path-mapped exec paths embedded in build outputs, such as object file"
+              + " paths in macOS debug info, resolve to the corresponding"
+              + " configuration-specific outputs. Mapped paths produced with different contents"
+              + " by multiple configurations resolve to nothing rather than to the contents"
+              + " produced by an arbitrary configuration.")
+  public abstract boolean getExperimentalPathMappingSymlinkFarm();
+
+  @Option(
       name = "local_test_jobs",
       defaultValue = "auto",
       documentationCategory = OptionDocumentationCategory.TESTING,

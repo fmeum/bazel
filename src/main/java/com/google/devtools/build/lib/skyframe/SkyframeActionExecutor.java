@@ -58,6 +58,7 @@ import com.google.devtools.build.lib.actions.ActionSuccessEvent;
 import com.google.devtools.build.lib.actions.ActionTemplate;
 import com.google.devtools.build.lib.actions.AlreadyReportedActionExecutionException;
 import com.google.devtools.build.lib.actions.Artifact;
+import com.google.devtools.build.lib.actions.Artifact.TreeFileArtifact;
 import com.google.devtools.build.lib.actions.Artifact.OwnerlessArtifactWrapper;
 import com.google.devtools.build.lib.actions.Artifact.SpecialArtifact;
 import com.google.devtools.build.lib.actions.ArtifactPathResolver;
@@ -66,6 +67,7 @@ import com.google.devtools.build.lib.actions.DiscoveredModulesPruner;
 import com.google.devtools.build.lib.actions.EnvironmentalExecException;
 import com.google.devtools.build.lib.actions.Executor;
 import com.google.devtools.build.lib.actions.FileArtifactValue;
+import com.google.devtools.build.lib.actions.FileStateType;
 import com.google.devtools.build.lib.actions.FilesetOutputTree;
 import com.google.devtools.build.lib.actions.ImportantOutputHandler;
 import com.google.devtools.build.lib.actions.ImportantOutputHandler.ImportantOutputException;
@@ -81,7 +83,9 @@ import com.google.devtools.build.lib.actions.SpawnResult;
 import com.google.devtools.build.lib.actions.StoppedScanningActionEvent;
 import com.google.devtools.build.lib.actions.ThreadStateReceiver;
 import com.google.devtools.build.lib.actions.cache.OutputMetadataStore;
+import com.google.devtools.build.lib.analysis.actions.PathMappingSymlinkFarm;
 import com.google.devtools.build.lib.analysis.config.CoreOptions;
+import com.google.devtools.build.lib.analysis.config.CoreOptions.OutputPathsMode;
 import com.google.devtools.build.lib.bugreport.BugReport;
 import com.google.devtools.build.lib.buildeventstream.BuildEventProtocolOptions;
 import com.google.devtools.build.lib.buildtool.BuildRequestOptions;
@@ -227,6 +231,8 @@ public final class SkyframeActionExecutor {
 
   private ActionOutputDirectoryHelper outputDirectoryHelper;
 
+  @Nullable private PathMappingSymlinkFarm pathMappingSymlinkFarm;
+
   private OptionsProvider options;
   private final AtomicBoolean hadExecutionError = new AtomicBoolean(false);
   private boolean freeDiscoveredInputsAfterExecution;
@@ -350,6 +356,12 @@ public final class SkyframeActionExecutor {
         options.getOptions(ExecutionOptions.class).getRemoteRetryOnTransientCacheError() > 0;
     this.outputService = checkNotNull(outputService);
     this.outputDirectoryHelper = outputDirectoryHelper;
+    this.pathMappingSymlinkFarm =
+        options.getOptions(CoreOptions.class).getOutputPathsMode() == OutputPathsMode.STRIP
+            ? new PathMappingSymlinkFarm(
+                executorEngine.getExecRoot(),
+                options.getOptions(ExecutionOptions.class).getExperimentalPathMappingSymlinkFarm())
+            : null;
 
     // Retaining discovered inputs is only worthwhile for incremental builds or builds with extra
     // actions. Starlark actions shadowing others are not a problem, though, because the issue is
@@ -484,6 +496,32 @@ public final class SkyframeActionExecutor {
         action, actionFileSystem, inputMetadataProvider, outputMetadataStore);
   }
 
+  /**
+   * Records the outputs of a completed (executed or cached) action in the path mapping symlink
+   * farm so that their mapped exec paths resolve on the local filesystem.
+   */
+  void recordOutputsInPathMappingSymlinkFarm(ActionExecutionValue value) {
+    PathMappingSymlinkFarm farm = pathMappingSymlinkFarm;
+    if (farm == null) {
+      return;
+    }
+    for (Map.Entry<Artifact, FileArtifactValue> entry : value.getAllFileValues().entrySet()) {
+      Artifact artifact = entry.getKey();
+      FileArtifactValue metadata = entry.getValue();
+      if (artifact.isRunfilesTree() || metadata.getType() == FileStateType.NONEXISTENT) {
+        continue;
+      }
+      farm.addOutput(artifact.getExecPath(), metadata.getDigest(), metadata.getSize());
+    }
+    for (TreeArtifactValue tree : value.getAllTreeArtifactValues().values()) {
+      for (Map.Entry<TreeFileArtifact, FileArtifactValue> child :
+          tree.getChildValues().entrySet()) {
+        farm.addOutput(
+            child.getKey().getExecPath(), child.getValue().getDigest(), child.getValue().getSize());
+      }
+    }
+  }
+
   void executionOver() {
     // These may transitively holds a bunch of heavy objects, so it's important to clear it at the
     // end of a build.
@@ -496,6 +534,7 @@ public final class SkyframeActionExecutor {
     this.rewoundActions = null;
     this.actionCacheChecker = null;
     this.outputDirectoryHelper = null;
+    this.pathMappingSymlinkFarm = null;
     this.actionConcurrencyMeter.stop();
     this.actionConcurrencyMeter = null;
   }

@@ -443,6 +443,8 @@ public class ActionExecutionFunction implements SkyFunction {
           .unregisterOutputsAfterExecutionDone(action.getOutputs());
     }
 
+    skyframeActionExecutor.recordOutputsInPathMappingSymlinkFarm(result);
+
     return result;
   }
 

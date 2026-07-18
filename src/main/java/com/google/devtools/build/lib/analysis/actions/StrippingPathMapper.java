@@ -87,7 +87,7 @@ import javax.annotation.Nullable;
 public final class StrippingPathMapper implements PathMapper {
   public static final String GUID = "8eb2ad5a-85d4-435b-858f-5c192e91997d";
 
-  private static final String FIXED_CONFIG_SEGMENT = "cfg";
+  static final String FIXED_CONFIG_SEGMENT = "cfg";
   private static final String ARCHIVED_TREE_ARTIFACTS_SEGMENT = ":archived_tree_artifacts";
 
   private final PathFragment outputRoot;

@@ -1362,6 +1362,7 @@ java_library(
     name = "actions/path_mappers",
     srcs = [
         "actions/PathMappers.java",
+        "actions/PathMappingSymlinkFarm.java",
         "actions/StrippingPathMapper.java",
     ],
     deps = [
@@ -1378,7 +1379,9 @@ java_library(
         "//src/main/java/com/google/devtools/build/lib/collect/nestedset",
         "//src/main/java/com/google/devtools/build/lib/starlarkbuildapi",
         "//src/main/java/com/google/devtools/build/lib/util",
+        "//src/main/java/com/google/devtools/build/lib/vfs",
         "//src/main/java/com/google/devtools/build/lib/vfs:pathfragment",
+        "//third_party:flogger",
         "//third_party:guava",
         "//third_party:jsr305",
     ],

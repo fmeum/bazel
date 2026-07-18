@@ -155,6 +155,20 @@ java_test(
 )
 
 java_test(
+    name = "PathMappingSymlinkFarmTest",
+    srcs = ["PathMappingSymlinkFarmTest.java"],
+    deps = [
+        "//src/main/java/com/google/devtools/build/lib/analysis:actions/path_mappers",
+        "//src/main/java/com/google/devtools/build/lib/vfs",
+        "//src/main/java/com/google/devtools/build/lib/vfs:pathfragment",
+        "//src/main/java/com/google/devtools/build/lib/vfs/inmemoryfs",
+        "//third_party:jsr305",
+        "//third_party:junit4",
+        "//third_party:truth",
+    ],
+)
+
+java_test(
     name = "SpawnActionTemplateTest",
     srcs = ["SpawnActionTemplateTest.java"],
     deps = [
