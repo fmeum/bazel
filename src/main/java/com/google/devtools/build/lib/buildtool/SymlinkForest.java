@@ -14,11 +14,12 @@
 
 package com.google.devtools.build.lib.buildtool;
 
+import static java.util.stream.Collectors.joining;
+
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Ascii;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
-import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Iterables;
 import com.google.common.flogger.GoogleLogger;
 import com.google.devtools.build.lib.cmdline.IgnoredSubdirectories;
@@ -379,12 +380,11 @@ public class SymlinkForest {
    * of the current build. Only works with a single package path. Before planting the new symlinks,
    * remove all existing symlinks in execroot which don't match certain criteria.
    *
-   * <p>It's possible to have a conflict here. For example when we plant symlinks form a
-   * case-insensitive FS to a case-sensitive one.
-   *
-   * @return a set of potentially conflicting baseNames, all in lowercase.
+   * <p>If the source root contains directories whose names differ only in case and the execroot's
+   * file system is case-insensitive, planting one of their symlinks fails and an {@link
+   * IOException} explaining the conflict is thrown.
    */
-  public static ImmutableSet<String> eagerlyPlantSymlinkForestSinglePackagePath(
+  public static void eagerlyPlantSymlinkForestSinglePackagePath(
       Path execroot,
       Path sourceRoot,
       String prefix,
@@ -395,7 +395,6 @@ public class SymlinkForest {
     deleteSiblingRepositorySymlinks(siblingRepositoryLayout, execroot);
 
     Map<String, List<Path>> symlinkBaseNameToTargets = new HashMap<>();
-    Set<String> potentiallyConflictingBaseNamesLowercase = new HashSet<>();
     for (Path target : sourceRoot.getDirectoryEntries()) {
       String baseNameLowercase = Ascii.toLowerCase(target.getBaseName());
       symlinkBaseNameToTargets
@@ -403,23 +402,33 @@ public class SymlinkForest {
           .add(target);
     }
 
-    for (Entry<String, List<Path>> entry : symlinkBaseNameToTargets.entrySet()) {
-      var baseNameLowercase = entry.getKey();
-      var targets = entry.getValue();
-      // Easy case: there's no clashing expected. Just plant with the ORIGINAL base name.
-      if (targets.size() == 1) {
-        Path target = Iterables.getOnlyElement(targets);
+    for (List<Path> targets : symlinkBaseNameToTargets.values()) {
+      for (Path target : targets) {
         String originalBaseName = target.getBaseName();
         Path link = execroot.getRelative(originalBaseName);
-        if (symlinkShouldBePlanted(
+        if (!symlinkShouldBePlanted(
             prefix, ignoredPaths, siblingRepositoryLayout, originalBaseName, target)) {
-          link.createSymbolicLink(target);
+          continue;
         }
-      } else {
-        potentiallyConflictingBaseNamesLowercase.add(baseNameLowercase);
+        try {
+          link.createSymbolicLink(target);
+        } catch (IOException e) {
+          if (targets.size() > 1) {
+            // The entries in this group differ only in case, so on a case-insensitive file system
+            // their symlinks clash. Error out eagerly instead of trying to figure out which of
+            // them the current build actually needs.
+            throw new IOException(
+                String.format(
+                    "Directories %s exist in the workspace but differ only in casing and the"
+                        + " output base file system is case-insensitive. Rename or remove all but"
+                        + " one of them.",
+                    targets.stream().map(Path::getBaseName).sorted().collect(joining(", "))),
+                e);
+          }
+          throw e;
+        }
       }
     }
-    return ImmutableSet.copyOf(potentiallyConflictingBaseNamesLowercase);
   }
 
   static boolean symlinkShouldBePlanted(
@@ -481,10 +490,4 @@ public class SymlinkForest {
     return PackageIdentifier.create(repo.getRepository(), packageFragment);
   }
 
-  /** Checked exception for issues with Symlink planting. */
-  public static class SymlinkPlantingException extends Exception {
-    public SymlinkPlantingException(String msg, IOException e) {
-      super(msg, e);
-    }
-  }
 }

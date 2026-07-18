@@ -16,9 +16,7 @@ package com.google.devtools.build.lib.skyframe;
 import static com.google.common.util.concurrent.MoreExecutors.directExecutor;
 import static com.google.common.util.concurrent.Uninterruptibles.awaitTerminationUninterruptibly;
 
-import com.google.common.base.Ascii;
 import com.google.common.collect.ImmutableMap;
-import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Sets;
 import com.google.common.eventbus.EventBus;
 import com.google.common.eventbus.Subscribe;
@@ -30,9 +28,9 @@ import com.google.common.util.concurrent.ThreadFactoryBuilder;
 import com.google.devtools.build.lib.actions.PackageRoots;
 import com.google.devtools.build.lib.analysis.AnalysisPhaseCompleteEvent;
 import com.google.devtools.build.lib.buildtool.SymlinkForest;
-import com.google.devtools.build.lib.buildtool.SymlinkForest.SymlinkPlantingException;
 import com.google.devtools.build.lib.cmdline.IgnoredSubdirectories;
 import com.google.devtools.build.lib.cmdline.PackageIdentifier;
+import com.google.devtools.build.lib.cmdline.RepositoryName;
 import com.google.devtools.build.lib.collect.nestedset.NestedSet;
 import com.google.devtools.build.lib.collect.nestedset.NestedSet.Node;
 import com.google.devtools.build.lib.packages.Package;
@@ -64,13 +62,13 @@ public class IncrementalPackageRoots implements PackageRoots {
   // loading threads.
   private static final int SYMLINK_PLANTING_PARALLELISM = 200;
 
-  // We only keep track of PackageIdentifier from external repos here as a memory optimization:
-  // packages belong to the main repository all share the same root, which is singleSourceRoot.
-  private final Map<PackageIdentifier, Root> threadSafeExternalRepoPackageRootsMap;
+  // Packages in the main repository all share the same root (singleSourceRoot), so as a memory
+  // optimization we only keep track of the roots of external repositories here.
+  private final Map<RepositoryName, Root> threadSafeExternalRepoRootsMap;
 
   @GuardedBy("stateLock")
   @Nullable
-  private Set<NestedSet.Node> donePackages = Sets.newConcurrentHashSet();
+  private Set<NestedSet.Node> doneRepoSets = Sets.newConcurrentHashSet();
 
   // Only tracks the symlinks lazily planted after the first eager planting wave.
   @GuardedBy("stateLock")
@@ -89,9 +87,6 @@ public class IncrementalPackageRoots implements PackageRoots {
   private final boolean allowExternalRepositories;
   @Nullable private EventBus eventBus;
 
-  // "maybe" because some conflicts in a case-insensitive FS may not be in a case-sensitive one.
-  private ImmutableSet<String> maybeConflictingBaseNamesLowercase = ImmutableSet.of();
-
   private IncrementalPackageRoots(
       Path execroot,
       Root singleSourceRoot,
@@ -100,7 +95,7 @@ public class IncrementalPackageRoots implements PackageRoots {
       IgnoredSubdirectories ignoredPaths,
       boolean useSiblingRepositoryLayout,
       boolean allowExternalRepositories) {
-    this.threadSafeExternalRepoPackageRootsMap = new ConcurrentHashMap<>();
+    this.threadSafeExternalRepoRootsMap = new ConcurrentHashMap<>();
     this.execroot = execroot;
     this.singleSourceRoot = singleSourceRoot;
     this.prefix = prefix;
@@ -137,40 +132,16 @@ public class IncrementalPackageRoots implements PackageRoots {
   }
 
   /**
-   * Eagerly plant the symlinks to the directories under the single source root. It's possible that
-   * there's a conflict when we plant symlinks eagerly. In that case, we skip planting the
-   * conflicting symlinks eagerly and wait until later in the build to see which of the conflicting
-   * dir we actually need.
+   * Eagerly plant the symlinks to the directories under the single source root.
    *
-   * <p>Eagerly planting the symlinks is much cheaper, hence we'd like to do it as much as possible
-   * and only resort to the other route when really necessary.
-   *
-   * <p>Example: when we plant symlinks in a case-insensitive FS, "foo" and "Foo" would conflict:
-   *
-   * <pre>
-   * /sourceroot
-   *    ├── noclash
-   *    ├── foo
-   *    └── Foo
-   *
-   * /execroot
-   *    ├── noclash -> /sourceroot/noclash
-   *    ├── foo -> /sourceroot/foo
-   *    └── Foo (clashing with foo in a case-insensitive FS)
-   * </pre>
-   *
-   * We'd plant the symlink to "noclash" first, then wait to see whether we need "foo" or "Foo". If
-   * we end up needing both, throw an error. See {@link #recursiveRegisterAndPlantMissingSymlinks}.
+   * <p>Only the symlinks to external repositories, whose set is discovered incrementally during
+   * analysis, are planted lazily later on. If two directories under the source root differ only in
+   * casing and the symlinks clash on a case-insensitive file system, this errors out eagerly.
    */
   public void eagerlyPlantSymlinksToSingleSourceRoot() throws AbruptExitException {
     try {
-      maybeConflictingBaseNamesLowercase =
-          SymlinkForest.eagerlyPlantSymlinkForestSinglePackagePath(
-              execroot,
-              singleSourceRoot.asPath(),
-              prefix,
-              ignoredPaths,
-              useSiblingRepositoryLayout);
+      SymlinkForest.eagerlyPlantSymlinkForestSinglePackagePath(
+          execroot, singleSourceRoot.asPath(), prefix, ignoredPaths, useSiblingRepositoryLayout);
     } catch (IOException e) {
       throwAbruptExitException(e);
     }
@@ -188,7 +159,7 @@ public class IncrementalPackageRoots implements PackageRoots {
     return packageId ->
         packageId.getRepository().isMain()
             ? singleSourceRoot
-            : threadSafeExternalRepoPackageRootsMap.get(packageId);
+            : threadSafeExternalRepoRootsMap.get(packageId.getRepository());
   }
 
   // Intentionally don't allow concurrent events here to prevent a race condition between planting
@@ -197,39 +168,40 @@ public class IncrementalPackageRoots implements PackageRoots {
   @Subscribe
   public void lazilyPlantSymlinks(TopLevelTargetReadyForSymlinkPlanting event)
       throws AbruptExitException {
-    if (allowExternalRepositories || !maybeConflictingBaseNamesLowercase.isEmpty()) {
-      Set<NestedSet.Node> donePackagesLocalRef;
-      Set<Path> lazilyPlantedSymlinksLocalRef;
-      // May still race with analysisFinished, hence the synchronization.
-      synchronized (stateLock) {
-        if (donePackages == null || lazilyPlantedSymlinks == null) {
-          return;
-        }
-        donePackagesLocalRef = donePackages;
-        lazilyPlantedSymlinksLocalRef = lazilyPlantedSymlinks;
+    if (!allowExternalRepositories) {
+      return;
+    }
+    Set<NestedSet.Node> doneRepoSetsLocalRef;
+    Set<Path> lazilyPlantedSymlinksLocalRef;
+    // May still race with analysisFinished, hence the synchronization.
+    synchronized (stateLock) {
+      if (doneRepoSets == null || lazilyPlantedSymlinks == null) {
+        return;
       }
+      doneRepoSetsLocalRef = doneRepoSets;
+      lazilyPlantedSymlinksLocalRef = lazilyPlantedSymlinks;
+    }
 
-      // Initial capacity: arbitrarily chosen.
-      // This list doesn't need to be thread-safe, as items are added sequentially.
-      List<ListenableFuture<Void>> futures = new ArrayList<>(128);
-      recursiveRegisterAndPlantMissingSymlinks(
-          event.transitivePackagesForSymlinkPlanting(),
-          donePackagesLocalRef,
-          lazilyPlantedSymlinksLocalRef,
-          futures);
+    // Initial capacity: arbitrarily chosen.
+    // This list doesn't need to be thread-safe, as items are added sequentially.
+    List<ListenableFuture<Void>> futures = new ArrayList<>(128);
+    recursiveRegisterAndPlantMissingSymlinks(
+        event.transitiveReposForSymlinkPlanting(),
+        doneRepoSetsLocalRef,
+        lazilyPlantedSymlinksLocalRef,
+        futures);
 
-      // Now wait on the futures. After that, we can be sure that the symlinks have been planted.
-      try {
-        Futures.whenAllSucceed(futures).call(() -> null, directExecutor()).get();
-      } catch (InterruptedException e) {
-        Thread.currentThread().interrupt();
-        // Bail
-      } catch (ExecutionException e) {
-        if (e.getCause() instanceof AbruptExitException) {
-          throw (AbruptExitException) e.getCause();
-        }
-        throw new IllegalStateException("Unexpected exception", e);
+    // Now wait on the futures. After that, we can be sure that the symlinks have been planted.
+    try {
+      Futures.whenAllSucceed(futures).call(() -> null, directExecutor()).get();
+    } catch (InterruptedException e) {
+      Thread.currentThread().interrupt();
+      // Bail
+    } catch (ExecutionException e) {
+      if (e.getCause() instanceof AbruptExitException) {
+        throw (AbruptExitException) e.getCause();
       }
+      throw new IllegalStateException("Unexpected exception", e);
     }
   }
 
@@ -239,19 +211,17 @@ public class IncrementalPackageRoots implements PackageRoots {
   }
 
   /**
-   * Lazily plant the required symlinks that couldn't be planted in the initial eager planting wave.
-   *
-   * <p>There are 2 possibilities: either we're planting symlinks to the external repos, or there's
-   * potentially conflicting symlinks detected.
+   * Lazily plant the symlinks to the external repositories transitively loaded by a top level
+   * target, which couldn't be planted in the initial eager planting wave.
    */
   private void recursiveRegisterAndPlantMissingSymlinks(
-      NestedSet<Package.Metadata> packages,
-      Set<Node> donePackagesRef,
+      NestedSet<Package.RepoMetadata> repos,
+      Set<Node> doneRepoSetsRef,
       Set<Path> lazilyPlantedSymlinksRef,
       List<ListenableFuture<Void>> futures) {
     // Optimization to prune subsequent traversals.
     // A false negative does not affect correctness.
-    if (!donePackagesRef.add(packages.toNode())) {
+    if (!doneRepoSetsRef.add(repos.toNode())) {
       return;
     }
 
@@ -260,74 +230,33 @@ public class IncrementalPackageRoots implements PackageRoots {
       if (symlinkPlantingPool.isShutdown()) {
         return;
       }
-      for (Package.Metadata pkg : packages.getLeaves()) {
+      for (Package.RepoMetadata repo : repos.getLeaves()) {
+        if (repo.repoName().isMain()) {
+          // Symlinks to the main repository's directories were already planted eagerly.
+          continue;
+        }
         futures.add(
             symlinkPlantingPool.submit(
-                () -> plantSingleSymlinkForPackage(pkg, lazilyPlantedSymlinksRef)));
+                () -> plantSingleSymlinkForExternalRepo(repo, lazilyPlantedSymlinksRef)));
       }
     }
-    for (NestedSet<Package.Metadata> transitive : packages.getNonLeaves()) {
+    for (NestedSet<Package.RepoMetadata> transitive : repos.getNonLeaves()) {
       recursiveRegisterAndPlantMissingSymlinks(
-          transitive, donePackagesRef, lazilyPlantedSymlinksRef, futures);
+          transitive, doneRepoSetsRef, lazilyPlantedSymlinksRef, futures);
     }
   }
 
-  private Void plantSingleSymlinkForPackage(
-      Package.Metadata pkg, Set<Path> lazilyPlantedSymlinksRef) throws AbruptExitException {
+  private Void plantSingleSymlinkForExternalRepo(
+      Package.RepoMetadata repo, Set<Path> lazilyPlantedSymlinksRef) throws AbruptExitException {
     try {
-      PackageIdentifier pkgId = pkg.packageIdentifier();
-      if (isExternalRepository(pkgId)) {
-        threadSafeExternalRepoPackageRootsMap.putIfAbsent(
-            pkg.packageIdentifier(), pkg.sourceRoot());
-        SymlinkForest.plantSingleSymlinkForExternalRepo(
-            pkgId.getRepository(),
-            pkg.sourceRoot().asPath(),
-            execroot,
-            useSiblingRepositoryLayout,
-            lazilyPlantedSymlinksRef);
-      } else if (!maybeConflictingBaseNamesLowercase.isEmpty()) {
-        String originalBaseName = pkgId.getTopLevelDir();
-        String baseNameLowercase = Ascii.toLowerCase(originalBaseName);
-
-        // As Skymeld only supports single package path at the moment, we only seek to symlink to
-        // the top-level dir i.e. what's directly under the source root.
-        Path link = execroot.getRelative(originalBaseName);
-        Path target = singleSourceRoot.getRelative(originalBaseName);
-
-        if (originalBaseName.isEmpty()
-            || !maybeConflictingBaseNamesLowercase.contains(baseNameLowercase)
-            || !SymlinkForest.symlinkShouldBePlanted(
-                prefix, ignoredPaths, useSiblingRepositoryLayout, originalBaseName, target)) {
-          // We should have already eagerly planted a symlink for this, or there's nothing to do.
-          return null;
-        }
-
-        if (lazilyPlantedSymlinksRef.add(link)) {
-          try {
-            link.createSymbolicLink(target);
-          } catch (IOException e) {
-            StringBuilder errorMessage =
-                new StringBuilder(
-                    String.format("Failed to plant a symlink: %s -> %s", link, target));
-            if (link.exists() && link.isSymbolicLink()) {
-              // If the link already exists, it must mean that we're planting from a
-              // case-insensitive file system and this is a legitimate conflict.
-              // TODO(b/295300378) We technically can go deeper here and try to create the subdirs
-              // to try to resolve the conflict, but the complexity isn't worth it at the moment
-              // and the non-skymeld code path isn't doing any better. Revisit if necessary.
-              Path existingTarget = link.resolveSymbolicLinks();
-              if (!existingTarget.equals(target)) {
-                errorMessage.append(
-                    String.format(
-                        ". Found an existing conflicting symlink: %s -> %s", link, existingTarget));
-              }
-            }
-
-            throw new SymlinkPlantingException(errorMessage.toString(), e);
-          }
-        }
-      }
-    } catch (IOException | SymlinkPlantingException e) {
+      threadSafeExternalRepoRootsMap.putIfAbsent(repo.repoName(), repo.sourceRoot());
+      SymlinkForest.plantSingleSymlinkForExternalRepo(
+          repo.repoName(),
+          repo.sourceRoot().asPath(),
+          execroot,
+          useSiblingRepositoryLayout,
+          lazilyPlantedSymlinksRef);
+    } catch (IOException e) {
       throwAbruptExitException(e);
     }
     return null;
@@ -343,10 +272,6 @@ public class IncrementalPackageRoots implements PackageRoots {
                         .setCode(FailureDetails.SymlinkForest.Code.CREATION_FAILED))
                 .build()),
         e);
-  }
-
-  private static boolean isExternalRepository(PackageIdentifier pkgId) {
-    return !pkgId.getRepository().isMain();
   }
 
   public void shutdown() {
@@ -367,9 +292,8 @@ public class IncrementalPackageRoots implements PackageRoots {
       eventBus = null;
     }
     synchronized (stateLock) {
-      donePackages = null;
+      doneRepoSets = null;
       lazilyPlantedSymlinks = null;
-      maybeConflictingBaseNamesLowercase = ImmutableSet.of();
     }
     synchronized (symlinkPlantingPool) {
       if (!symlinkPlantingPool.isShutdown()) {

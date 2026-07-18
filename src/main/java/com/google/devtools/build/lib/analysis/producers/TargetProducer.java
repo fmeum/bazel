@@ -114,7 +114,7 @@ final class TargetProducer implements StateMachine, ValueOrExceptionSink<NoSuchP
       transitiveState.addTransitiveCause(
           new LoadingFailedCause(label, DetailedExitCode.of(failureDetail)));
     }
-    transitiveState.updateTransitivePackages(pkg.getMetadata());
+    transitiveState.updateTransitiveRepos(pkg.getMetadata());
     sink.acceptTarget(target);
     return runAfter;
   }

@@ -32,6 +32,7 @@ import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.cmdline.LabelSyntaxException;
 import com.google.devtools.build.lib.cmdline.PackageIdentifier;
 import com.google.devtools.build.lib.cmdline.RepositoryMapping;
+import com.google.devtools.build.lib.cmdline.RepositoryName;
 import com.google.devtools.build.lib.cmdline.StarlarkThreadContext;
 import com.google.devtools.build.lib.collect.CollectionUtils;
 import com.google.devtools.build.lib.events.Event;
@@ -1376,14 +1377,7 @@ public class Package extends Packageoid {
     }
   }
 
-  /**
-   * A collection of data that is known before BUILD file evaluation even begins.
-   *
-   * <p><b>Important:</b> Tracking of transitive packages relies on a {@link
-   * com.google.devtools.build.lib.collect.nestedset.NestedSet<Metadata>}, so this class must have a
-   * cheap {@link #hashCode()}. Some fields, such as {@link #repositoryMapping}, would be cheap to
-   * hash for Blaze but not Bazel.
-   */
+  /** A collection of data that is known before BUILD file evaluation even begins. */
   // TODO(bazel-team): move to Packageoid.java or to its own file to reduce size of Package.java?
   @AutoCodec
   public record Metadata(
@@ -1401,11 +1395,16 @@ public class Package extends Packageoid {
       boolean succinctTargetNotFoundErrors,
       Root sourceRoot) {
 
-    // See class-level Javadoc for an explanation of why we need this.
     @Override
     public int hashCode() {
-      // Within a single build a package is uniquely identified by its PackageIdentifier.
+      // Within a single build a package is uniquely identified by its PackageIdentifier. Some
+      // fields, such as repositoryMapping, would be expensive to hash.
       return packageIdentifier.hashCode();
+    }
+
+    /** Returns the repo-level metadata of the repository this package lives in. */
+    public RepoMetadata repoMetadata() {
+      return new RepoMetadata(packageIdentifier.getRepository(), repositoryMapping, sourceRoot);
     }
 
     public static Builder builder() {
@@ -1543,6 +1542,35 @@ public class Package extends Packageoid {
           packageIdentifier.getSourceRoot());
 
       return sourceRoot;
+    }
+  }
+
+  /**
+   * Repo-level metadata tracked transitively through the analysis graph, i.e. the per-repository
+   * projection of {@link Metadata}.
+   *
+   * <p>All packages in a given repository share the same {@code RepoMetadata} value (and typically
+   * the same {@code repositoryMapping} and {@code sourceRoot} instances), so a transitive set of
+   * these is bounded by the number of repositories rather than the number of packages.
+   *
+   * <p><b>Important:</b> Tracking relies on a {@link
+   * com.google.devtools.build.lib.collect.nestedset.NestedSet<RepoMetadata>}, so this class must
+   * have a cheap {@link #hashCode()}. {@link RepositoryName} caches its hash code, whereas hashing
+   * {@link #repositoryMapping} would be expensive.
+   */
+  @AutoCodec
+  public record RepoMetadata(
+      RepositoryName repoName, RepositoryMapping repositoryMapping, Root sourceRoot) {
+    public RepoMetadata {
+      Preconditions.checkNotNull(repoName);
+      Preconditions.checkNotNull(repositoryMapping);
+      Preconditions.checkNotNull(sourceRoot);
+    }
+
+    @Override
+    public int hashCode() {
+      // Within a single build a repository is uniquely identified by its RepositoryName.
+      return repoName.hashCode();
     }
   }
 

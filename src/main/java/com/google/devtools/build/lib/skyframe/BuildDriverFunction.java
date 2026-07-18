@@ -233,15 +233,15 @@ public class BuildDriverFunction implements SkyFunction {
     if (topLevelSkyValue instanceof ConfiguredTargetValue configuredTargetValue) {
       ConfiguredTarget configuredTarget = configuredTargetValue.getConfiguredTarget();
       // It's possible that this code path is triggered AFTER the analysis cache clean up and the
-      // transitive packages for package root resolution is already cleared. In such a case, the
+      // transitive repos for symlink planting are already cleared. In such a case, the
       // symlinks should have already been planted.
-      NestedSet<Package.Metadata> transitivePackagesForSymlinkPlanting =
-          configuredTargetValue.getTransitivePackages();
-      if (transitivePackagesForSymlinkPlanting != null) {
+      NestedSet<Package.RepoMetadata> transitiveReposForSymlinkPlanting =
+          configuredTargetValue.getTransitiveRepos();
+      if (transitiveReposForSymlinkPlanting != null) {
         postEventIfNecessary(
             postedEventsTypes,
             env,
-            TopLevelTargetReadyForSymlinkPlanting.create(transitivePackagesForSymlinkPlanting));
+            TopLevelTargetReadyForSymlinkPlanting.create(transitiveReposForSymlinkPlanting));
       }
 
       BuildConfigurationValue buildConfigurationValue =
@@ -336,11 +336,11 @@ public class BuildDriverFunction implements SkyFunction {
             buildDriverKey.isExtraActionTopLevelOnly());
 
         // It's possible that this code path is triggered AFTER the analysis cache clean up and the
-        // transitive packages for package root resolution is already cleared. In such a case, the
+        // transitive repos for symlink planting are already cleared. In such a case, the
         // symlinks should have already been planted.
-        NestedSet<Package.Metadata> transitivePackagesForSymlinkPlanting =
-            aspectValue.getTransitivePackages();
-        if (transitivePackagesForSymlinkPlanting != null) {
+        NestedSet<Package.RepoMetadata> transitiveReposForSymlinkPlanting =
+            aspectValue.getTransitiveRepos();
+        if (transitiveReposForSymlinkPlanting != null) {
           // This event should be sent out exactly once per aspect in this BuildDriverKey, even with
           // resets. We achieve this by marking the event type as sent only after sending the event
           // for all aspects, but must avoid triggering Skyframe restarts while doing so.
@@ -349,7 +349,7 @@ public class BuildDriverFunction implements SkyFunction {
             env.getListener()
                 .post(
                     TopLevelTargetReadyForSymlinkPlanting.create(
-                        transitivePackagesForSymlinkPlanting));
+                        transitiveReposForSymlinkPlanting));
           }
         }
         aspectCompletionKeys.add(AspectCompletionKey.create(aspectKey, topLevelArtifactContext));

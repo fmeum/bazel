@@ -35,15 +35,15 @@ public final class TransitiveDependencyState {
   private final NestedSetBuilder<Cause> transitiveRootCauses;
 
   /**
-   * State for constructing the packages transitively loaded for the value being built.
+   * State for constructing the repositories transitively loaded for the value being built.
    *
    * <p>See {@link
-   * com.google.devtools.build.lib.analysis.ConfiguredObjectValue#getTransitivePackages}.
+   * com.google.devtools.build.lib.analysis.ConfiguredObjectValue#getTransitiveRepos}.
    *
-   * <p>Non-null when transitive packages are tracked, determined by {@link
-   * com.google.devtools.build.lib.skyframe.SkyframeExecutor#shouldStoreTransitivePackagesInLoadingAndAnalysis}.
+   * <p>Non-null when transitive repositories are tracked, determined by {@link
+   * com.google.devtools.build.lib.skyframe.SkyframeExecutor#shouldStoreTransitiveReposInLoadingAndAnalysis}.
    */
-  @Nullable private final PackageCollector packageCollector;
+  @Nullable private final RepoCollector repoCollector;
 
   /**
    * Retrieves packages that were previously requested by transitive dependencies.
@@ -67,15 +67,15 @@ public final class TransitiveDependencyState {
   private final PrerequisitePackageFunction prerequisitePackages;
 
   public TransitiveDependencyState(
-      boolean storeTransitivePackages, PrerequisitePackageFunction prerequisitePackages) {
+      boolean storeTransitiveRepos, PrerequisitePackageFunction prerequisitePackages) {
     this.transitiveRootCauses = NestedSetBuilder.stableOrder();
-    this.packageCollector = storeTransitivePackages ? new PackageCollector() : null;
+    this.repoCollector = storeTransitiveRepos ? new RepoCollector() : null;
     this.prerequisitePackages = prerequisitePackages;
   }
 
   public static TransitiveDependencyState createForTesting() {
     return new TransitiveDependencyState(
-        /* storeTransitivePackages= */ false,
+        /* storeTransitiveRepos= */ false,
         // Always returning null here causes the underlying code to fall back on declaring Package
         // edges for prerequisites, which is benign.
         /* prerequisitePackages= */ p -> null);
@@ -86,11 +86,11 @@ public final class TransitiveDependencyState {
   }
 
   @Nullable
-  public NestedSet<Package.Metadata> transitivePackages() {
-    if (packageCollector == null) {
+  public NestedSet<Package.RepoMetadata> transitiveRepos() {
+    if (repoCollector == null) {
       return null;
     }
-    return packageCollector.buildSet();
+    return repoCollector.buildSet();
   }
 
   public void addTransitiveCauses(NestedSet<Cause> transitiveCauses) {
@@ -105,33 +105,33 @@ public final class TransitiveDependencyState {
     return !transitiveRootCauses.isEmpty();
   }
 
-  public boolean storeTransitivePackages() {
-    return packageCollector != null;
+  public boolean storeTransitiveRepos() {
+    return repoCollector != null;
   }
 
-  /** Adds to the set of transitive package metadata if {@link #storeTransitivePackages} is true. */
-  public void updateTransitivePackages(Package.Metadata pkg) {
-    if (packageCollector == null) {
+  /** Adds to the set of transitive repo metadata if {@link #storeTransitiveRepos} is true. */
+  public void updateTransitiveRepos(Package.Metadata pkg) {
+    if (repoCollector == null) {
       return;
     }
-    packageCollector.packages.add(pkg);
+    repoCollector.repos.add(pkg.repoMetadata());
   }
 
-  /** Adds to the set of transitive package metadata if {@link #storeTransitivePackages} is true. */
-  public void updateTransitivePackages(
-      ConfiguredTargetKey key, NestedSet<Package.Metadata> packages) {
-    if (packageCollector == null) {
+  /** Adds to the set of transitive repo metadata if {@link #storeTransitiveRepos} is true. */
+  public void updateTransitiveRepos(
+      ConfiguredTargetKey key, NestedSet<Package.RepoMetadata> repos) {
+    if (repoCollector == null) {
       return;
     }
-    packageCollector.configuredTargetPackages.put(key, packages);
+    repoCollector.configuredTargetRepos.put(key, repos);
   }
 
-  /** Adds to the set of transitive package metadata if {@link #storeTransitivePackages} is true. */
-  public void updateTransitivePackages(AspectKey key, NestedSet<Package.Metadata> packages) {
-    if (packageCollector == null) {
+  /** Adds to the set of transitive repo metadata if {@link #storeTransitiveRepos} is true. */
+  public void updateTransitiveRepos(AspectKey key, NestedSet<Package.RepoMetadata> repos) {
+    if (repoCollector == null) {
       return;
     }
-    packageCollector.aspectPackages.put(key, packages);
+    repoCollector.aspectRepos.put(key, repos);
   }
 
   @Nullable
@@ -140,7 +140,7 @@ public final class TransitiveDependencyState {
   }
 
   /**
-   * Collects package metadata of dependencies to be unified in a {@link NestedSet}.
+   * Collects repo metadata of dependencies to be unified in a {@link NestedSet}.
    *
    * <p>Performs bookkeeping so the result is deterministic.
    *
@@ -148,23 +148,24 @@ public final class TransitiveDependencyState {
    * example, if a client requests {@code //foo} and {@code //bar}, it could receive any of the
    * following: {@code (//foo, null), (null, //bar), (//foo, //bar) or (null, null)}.
    *
-   * <p>This class tracks how the {@link Package}s are added so they can be given a deterministic
-   * order. This is required for determinism of {@link ActionKeyComputer#computeKey}.
+   * <p>This class tracks how the {@link Package.RepoMetadata}s are added so they can be given a
+   * deterministic order. This is required for determinism of {@link
+   * ActionKeyComputer#computeKey}.
    */
-  private static class PackageCollector {
+  private static class RepoCollector {
     /**
-     * Keeps packages that were added directly as a list.
+     * Keeps repos that were added directly as a list.
      *
      * <p>These will be sorted.
      */
-    private final ArrayList<Package.Metadata> packages = new ArrayList<>();
+    private final ArrayList<Package.RepoMetadata> repos = new ArrayList<>();
 
-    /** Stores transitive {@link Package.Metadata}s of {@link ConfiguredTargetValues}s. */
-    private final TreeMap<ConfiguredTargetKey, NestedSet<Package.Metadata>>
-        configuredTargetPackages = new TreeMap<>(ConfiguredTargetKey.ORDERING);
+    /** Stores transitive {@link Package.RepoMetadata}s of {@link ConfiguredTargetValues}s. */
+    private final TreeMap<ConfiguredTargetKey, NestedSet<Package.RepoMetadata>>
+        configuredTargetRepos = new TreeMap<>(ConfiguredTargetKey.ORDERING);
 
-    /** Stores transitive {@link Package.Metadata}s of {@link AspectValue}s. */
-    private final TreeMap<AspectKey, NestedSet<Package.Metadata>> aspectPackages =
+    /** Stores transitive {@link Package.RepoMetadata}s of {@link AspectValue}s. */
+    private final TreeMap<AspectKey, NestedSet<Package.RepoMetadata>> aspectRepos =
         new TreeMap<>(AspectKey.ORDERING);
 
     /**
@@ -172,17 +173,17 @@ public final class TransitiveDependencyState {
      *
      * <p>It's safe to call this multiple times.
      */
-    private NestedSet<Package.Metadata> buildSet() {
-      var result = NestedSetBuilder.<Package.Metadata>stableOrder();
+    private NestedSet<Package.RepoMetadata> buildSet() {
+      var result = NestedSetBuilder.<Package.RepoMetadata>stableOrder();
 
-      Collections.sort(packages, comparing(Package.Metadata::packageIdentifier));
-      result.addAll(packages);
+      Collections.sort(repos, comparing((Package.RepoMetadata m) -> m.repoName().getName()));
+      result.addAll(repos);
 
-      for (NestedSet<Package.Metadata> packageSet : configuredTargetPackages.values()) {
-        result.addTransitive(packageSet);
+      for (NestedSet<Package.RepoMetadata> repoSet : configuredTargetRepos.values()) {
+        result.addTransitive(repoSet);
       }
-      for (NestedSet<Package.Metadata> packageSet : aspectPackages.values()) {
-        result.addTransitive(packageSet);
+      for (NestedSet<Package.RepoMetadata> repoSet : aspectRepos.values()) {
+        result.addTransitive(repoSet);
       }
 
       return result.build();

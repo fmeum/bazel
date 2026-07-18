@@ -70,7 +70,7 @@ public sealed class RemoteConfiguredTargetValue
 
   @Nullable // Never serialized.
   @Override
-  public final NestedSet<Package.Metadata> getTransitivePackages() {
+  public final NestedSet<Package.RepoMetadata> getTransitiveRepos() {
     return null;
   }
 

@@ -84,7 +84,7 @@ import net.starlark.java.syntax.Location;
 final class ToplevelStarlarkAspectFunction implements SkyFunction {
   private final BuildViewProvider buildViewProvider;
   private final RuleClassProvider ruleClassProvider;
-  private final boolean storeTransitivePackages;
+  private final boolean storeTransitiveRepos;
   // Do not use this field for package retrieval of the base configured target since it will cause
   // incrementality errors because an essential dependency edge would not be registered.
   private final PrerequisitePackageFunction prerequisitePackages;
@@ -92,11 +92,11 @@ final class ToplevelStarlarkAspectFunction implements SkyFunction {
   ToplevelStarlarkAspectFunction(
       BuildViewProvider buildViewProvider,
       RuleClassProvider ruleClassProvider,
-      boolean storeTransitivePackages,
+      boolean storeTransitiveRepos,
       PrerequisitePackageFunction prerequisitePackages) {
     this.buildViewProvider = buildViewProvider;
     this.ruleClassProvider = ruleClassProvider;
-    this.storeTransitivePackages = storeTransitivePackages;
+    this.storeTransitiveRepos = storeTransitiveRepos;
     this.prerequisitePackages = prerequisitePackages;
   }
 
@@ -131,7 +131,7 @@ final class ToplevelStarlarkAspectFunction implements SkyFunction {
     Target target =
         getTarget(packageValue, topLevelAspectsKey.getBaseConfiguredTargetKey().getLabel());
 
-    State state = env.getState(() -> new State(storeTransitivePackages, prerequisitePackages));
+    State state = env.getState(() -> new State(storeTransitiveRepos, prerequisitePackages));
 
     // Configuration of top level target could change during the analysis phase with rule
     // transitions. In order not to wait for the complete configuration of the assigned target,
@@ -442,9 +442,9 @@ final class ToplevelStarlarkAspectFunction implements SkyFunction {
     @Nullable private Location location = null;
     @Nullable private DetailedExitCode exitCode = null;
 
-    State(boolean storeTransitivePackages, PrerequisitePackageFunction prerequisitePackages) {
+    State(boolean storeTransitiveRepos, PrerequisitePackageFunction prerequisitePackages) {
       this.transitiveState =
-          new TransitiveDependencyState(storeTransitivePackages, prerequisitePackages);
+          new TransitiveDependencyState(storeTransitiveRepos, prerequisitePackages);
       this.storedEvents = new StoredEventHandler();
     }
 

@@ -135,10 +135,10 @@ final class AspectFunction implements SkyFunction {
   /**
    * Indicates whether the set of packages transitively loaded for a given {@link AspectValue} will
    * be needed later (see {@link
-   * com.google.devtools.build.lib.analysis.ConfiguredObjectValue#getTransitivePackages}). If not,
+   * com.google.devtools.build.lib.analysis.ConfiguredObjectValue#getTransitiveRepos}). If not,
    * they are not collected and stored.
    */
-  private final boolean storeTransitivePackages;
+  private final boolean storeTransitiveRepos;
 
   /**
    * Packages of prerequisites.
@@ -172,14 +172,14 @@ final class AspectFunction implements SkyFunction {
   AspectFunction(
       BuildViewProvider buildViewProvider,
       RuleClassProvider ruleClassProvider,
-      boolean storeTransitivePackages,
+      boolean storeTransitiveRepos,
       PrerequisitePackageFunction prerequisitePackages,
       BaseTargetPrerequisitesSupplier baseTargetPrerequisitesSupplier,
       Supplier<RemoteAnalysisCacheReaderDepsProvider> cachingDependenciesSupplier,
       AnalysisProgressReceiver analysisProgressReceiver) {
     this.buildViewProvider = buildViewProvider;
     this.ruleClassProvider = ruleClassProvider;
-    this.storeTransitivePackages = storeTransitivePackages;
+    this.storeTransitiveRepos = storeTransitiveRepos;
     this.prerequisitePackages = prerequisitePackages;
     this.baseTargetPrerequisitesSupplier = baseTargetPrerequisitesSupplier;
     this.cachingDependenciesSupplier = cachingDependenciesSupplier;
@@ -214,9 +214,9 @@ final class AspectFunction implements SkyFunction {
     private RetrievalContext retrievalContext = null;
 
     private State(
-        boolean storeTransitivePackages, PrerequisitePackageFunction prerequisitePackages) {
+        boolean storeTransitiveRepos, PrerequisitePackageFunction prerequisitePackages) {
       this.computeDependenciesState =
-          new DependencyResolver.State(storeTransitivePackages, prerequisitePackages);
+          new DependencyResolver.State(storeTransitiveRepos, prerequisitePackages);
     }
 
     @Override
@@ -264,7 +264,7 @@ final class AspectFunction implements SkyFunction {
       throws AspectFunctionException, InterruptedException {
     AspectKey key = (AspectKey) skyKey.argument();
     java.util.function.Supplier<State> stateSupplier =
-        () -> new State(storeTransitivePackages, prerequisitePackages);
+        () -> new State(storeTransitiveRepos, prerequisitePackages);
 
     RemoteAnalysisCacheReaderDepsProvider remoteCachingDependencies =
         cachingDependenciesSupplier.get();
@@ -312,7 +312,7 @@ final class AspectFunction implements SkyFunction {
           key,
           aspect,
           ConfiguredAspect.NonApplicableAspect.INSTANCE,
-          computeDependenciesState.transitivePackages());
+          computeDependenciesState.transitiveRepos());
     }
 
     if (AliasProvider.isAlias(associatedTarget)) {
@@ -339,7 +339,7 @@ final class AspectFunction implements SkyFunction {
           key,
           aspect,
           ConfiguredAspect.NonApplicableAspect.INSTANCE,
-          computeDependenciesState.transitivePackages());
+          computeDependenciesState.transitiveRepos());
     }
 
     ImmutableList<Aspect> topologicalAspectPath;
@@ -914,18 +914,18 @@ final class AspectFunction implements SkyFunction {
       return null;
     }
 
-    NestedSet<Package.Metadata> transitivePackages =
-        storeTransitivePackages
-            ? NestedSetBuilder.<Package.Metadata>stableOrder()
-                .add(originalTarget.getPackageMetadata())
-                .addTransitive(transitiveState.transitivePackages())
-                .addTransitive(real.getTransitivePackages())
+    NestedSet<Package.RepoMetadata> transitiveRepos =
+        storeTransitiveRepos
+            ? NestedSetBuilder.<Package.RepoMetadata>stableOrder()
+                .add(originalTarget.getPackageMetadata().repoMetadata())
+                .addTransitive(transitiveState.transitiveRepos())
+                .addTransitive(real.getTransitiveRepos())
                 .build()
             : null;
 
     analysisProgressReceiver.doneConfigureAspect();
     return AspectValue.createForAlias(
-        originalKey, aspect, ConfiguredAspect.forAlias(real), transitivePackages);
+        originalKey, aspect, ConfiguredAspect.forAlias(real), transitiveRepos);
   }
 
   private static AspectKey buildAliasAspectKey(
@@ -999,7 +999,7 @@ final class AspectFunction implements SkyFunction {
                     baseTargetToolchainContexts,
                     execGroupCollectionBuilder,
                     configuration,
-                    transitiveState.transitivePackages(),
+                    transitiveState.transitiveRepos(),
                     key,
                     starlarkExecTransition);
       } catch (MissingDepException e) {
@@ -1040,7 +1040,7 @@ final class AspectFunction implements SkyFunction {
     if (configuredAspect != NonApplicableAspect.INSTANCE) {
       analysisProgressReceiver.doneConfigureAspect();
     }
-    return AspectValue.create(key, aspect, configuredAspect, transitiveState.transitivePackages());
+    return AspectValue.create(key, aspect, configuredAspect, transitiveState.transitiveRepos());
   }
 
   private static boolean targetSatisfiesAspect(Target target, Aspect aspect) {

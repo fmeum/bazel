@@ -227,7 +227,7 @@ public final class ConfiguredTargetFactory {
       @Nullable OrderedSetMultimap<DependencyKind, ConfiguredTargetAndData> materializerTargets,
       ConfigConditions configConditions,
       @Nullable ToolchainCollection<ResolvedToolchainContext> toolchainContexts,
-      @Nullable NestedSet<Package.Metadata> transitivePackages,
+      @Nullable NestedSet<Package.RepoMetadata> transitiveRepos,
       ExecGroupCollection.Builder execGroupCollectionBuilder,
       @Nullable StarlarkAttributeTransitionProvider starlarkExecTransition)
       throws InterruptedException,
@@ -246,7 +246,7 @@ public final class ConfiguredTargetFactory {
             materializerTargets,
             configConditions,
             toolchainContexts,
-            transitivePackages,
+            transitiveRepos,
             execGroupCollectionBuilder,
             starlarkExecTransition);
       } finally {
@@ -367,7 +367,7 @@ public final class ConfiguredTargetFactory {
       @Nullable OrderedSetMultimap<DependencyKind, ConfiguredTargetAndData> materializerTargets,
       ConfigConditions configConditions,
       @Nullable ToolchainCollection<ResolvedToolchainContext> toolchainContexts,
-      @Nullable NestedSet<Package.Metadata> transitivePackages,
+      @Nullable NestedSet<Package.RepoMetadata> transitiveRepos,
       ExecGroupCollection.Builder execGroupCollectionBuilder,
       @Nullable StarlarkAttributeTransitionProvider starlarkExecTransition)
       throws InterruptedException,
@@ -403,7 +403,7 @@ public final class ConfiguredTargetFactory {
                     Iterables.transform(
                         prerequisiteMap.values(), ConfiguredTargetAndData::getConfiguredTarget),
                     starlarkExecTransition))
-            .setTransitivePackagesForRunfileRepoMappingManifest(transitivePackages)
+            .setTransitiveReposForRunfileRepoMappingManifest(transitiveRepos)
             .setConflictFinder(conflictFinder)
             .setAllowMaterializerRuleRealDeps(ruleClass.materializerRuleAllowsRealDeps())
             .build();
@@ -679,7 +679,7 @@ public final class ConfiguredTargetFactory {
           ToolchainCollection<AspectBaseTargetResolvedToolchainContext> baseTargetToolchainContexts,
       @Nullable ExecGroupCollection.Builder execGroupCollectionBuilder,
       BuildConfigurationValue aspectConfiguration,
-      @Nullable NestedSet<Package.Metadata> transitivePackages,
+      @Nullable NestedSet<Package.RepoMetadata> transitiveRepos,
       AspectKeyCreator.AspectKey aspectKey,
       StarlarkAttributeTransitionProvider starlarkExecTransition)
       throws InterruptedException,
@@ -713,7 +713,7 @@ public final class ConfiguredTargetFactory {
                             prerequisiteMap.values(), ConfiguredTargetAndData::getConfiguredTarget),
                         ImmutableList.of(configuredTarget)),
                     starlarkExecTransition))
-            .setTransitivePackagesForRunfileRepoMappingManifest(transitivePackages)
+            .setTransitiveReposForRunfileRepoMappingManifest(transitiveRepos)
             .setConflictFinder(conflictFinder)
             .build();
 

@@ -28,14 +28,14 @@ abstract class AbstractConfiguredTargetValue<T extends ConfiguredTarget>
   // clear(true) is called.
   @Nullable private T configuredTarget;
 
-  // May be null after clearing; because transitive packages are not tracked; or after
+  // May be null after clearing; because transitive repos are not tracked; or after
   // deserialization.
-  @Nullable private transient NestedSet<Package.Metadata> transitivePackages;
+  @Nullable private transient NestedSet<Package.RepoMetadata> transitiveRepos;
 
   AbstractConfiguredTargetValue(
-      T configuredTarget, @Nullable NestedSet<Package.Metadata> transitivePackages) {
+      T configuredTarget, @Nullable NestedSet<Package.RepoMetadata> transitiveRepos) {
     this.configuredTarget = Preconditions.checkNotNull(configuredTarget);
-    this.transitivePackages = transitivePackages;
+    this.transitiveRepos = transitiveRepos;
   }
 
   @Nullable // May be null after clearing.
@@ -46,8 +46,8 @@ abstract class AbstractConfiguredTargetValue<T extends ConfiguredTarget>
 
   @Nullable
   @Override
-  public NestedSet<Package.Metadata> getTransitivePackages() {
-    return transitivePackages;
+  public NestedSet<Package.RepoMetadata> getTransitiveRepos() {
+    return transitiveRepos;
   }
 
   @Override
@@ -60,6 +60,6 @@ abstract class AbstractConfiguredTargetValue<T extends ConfiguredTarget>
     if (clearEverything) {
       this.configuredTarget = null;
     }
-    this.transitivePackages = null;
+    this.transitiveRepos = null;
   }
 }

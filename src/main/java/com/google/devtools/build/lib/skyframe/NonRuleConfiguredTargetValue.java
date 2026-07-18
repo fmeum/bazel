@@ -33,16 +33,17 @@ public final class NonRuleConfiguredTargetValue
   private final TargetData targetData;
 
   NonRuleConfiguredTargetValue(
-      ConfiguredTarget configuredTarget, @Nullable NestedSet<Package.Metadata> transitivePackages) {
-    super(configuredTarget, transitivePackages);
+      ConfiguredTarget configuredTarget,
+      @Nullable NestedSet<Package.RepoMetadata> transitiveRepos) {
+    super(configuredTarget, transitiveRepos);
     this.targetData = null;
   }
 
   NonRuleConfiguredTargetValue(
       ConfiguredTarget configuredTarget,
-      @Nullable NestedSet<Package.Metadata> transitivePackages,
+      @Nullable NestedSet<Package.RepoMetadata> transitiveRepos,
       TargetData targetData) {
-    super(configuredTarget, transitivePackages);
+    super(configuredTarget, transitiveRepos);
     this.targetData = targetData;
   }
 
