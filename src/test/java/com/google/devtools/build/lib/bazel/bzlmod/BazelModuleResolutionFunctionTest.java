@@ -486,4 +486,38 @@ public class BazelModuleResolutionFunctionTest extends BuildViewTestCase {
         .isEqualTo(Version.parse("1.0"));
     assertThat(depGraph.get(createModuleKey("c", "1.0")).getDeps()).doesNotContainKey("d");
   }
+
+  @Test
+  public void nodepAndDevDep_sameModule() throws Exception {
+    // Declaring the same module as both a nodep dep (repo_name=None) and a dev_dependency in the
+    // root module is not a repo name collision (the nodep call registers no repo name). In the
+    // root module dev deps are honored, so the dev_dependency pulls the module into the graph as a
+    // regular dep, which in turn fulfills the coexisting nodep edge.
+    scratch.overwriteFile(
+        "MODULE.bazel",
+        """
+        bazel_dep(name='b',version='1.0')
+        bazel_dep(name='c',version='1.0',repo_name=None)
+        bazel_dep(name='c',version='1.0',dev_dependency=True)
+        """);
+
+    registry
+        .addModule(createModuleKey("b", "1.0"), "module(name='b', version='1.0')")
+        .addModule(createModuleKey("c", "1.0"), "module(name='c', version='1.0')");
+    invalidatePackages(false);
+
+    EvaluationResult<BazelModuleResolutionValue> result =
+        SkyframeExecutorTestUtils.evaluate(
+            skyframeExecutor, BazelModuleResolutionValue.KEY, false, reporter);
+
+    if (result.hasError()) {
+      fail(result.getError().toString());
+    }
+    var depGraph = result.get(BazelModuleResolutionValue.KEY).getResolvedDepGraph();
+    assertThat(depGraph).containsKey(createModuleKey("c", "1.0"));
+    assertThat(depGraph.get(ModuleKey.ROOT).getDeps().get("c").version())
+        .isEqualTo(Version.parse("1.0"));
+    assertThat(depGraph.get(ModuleKey.ROOT).getNodepDeps())
+        .containsExactly(createModuleKey("c", "1.0"));
+  }
 }

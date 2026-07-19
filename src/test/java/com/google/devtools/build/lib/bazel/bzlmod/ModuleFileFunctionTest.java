@@ -260,6 +260,65 @@ public class ModuleFileFunctionTest extends FoundationTestCase {
   }
 
   @Test
+  public void testRootModule_nodepDepAndDevDepOnSameModule() throws Exception {
+    // Declaring the same module as both a nodep dep (repo_name=None) and a dev_dependency is not a
+    // repo name collision: the nodep call registers no repo name, while the dev_dependency call
+    // registers the module's default repo name. The root module ends up with both a regular dep
+    // and a nodep dep on the module.
+    scratch.overwriteFile(
+        rootDirectory.getRelative("MODULE.bazel").getPathString(),
+        "module(name='aaa',version='0.1')",
+        "bazel_dep(name='bbb',version='1.0',repo_name=None)",
+        "bazel_dep(name='bbb',version='1.0',dev_dependency=True)");
+    FakeRegistry registry = registryFactory.newFakeRegistry("/foo");
+    ModuleFileFunction.REGISTRIES.set(differencer, ImmutableSet.of(registry.getUrl()));
+
+    EvaluationResult<RootModuleFileValue> result =
+        evaluator.evaluate(
+            ImmutableList.of(ModuleFileValue.KEY_FOR_ROOT_MODULE), evaluationContext);
+    if (result.hasError()) {
+      fail(result.getError().toString());
+    }
+    RootModuleFileValue rootModuleFileValue = result.get(ModuleFileValue.KEY_FOR_ROOT_MODULE);
+    assertThat(rootModuleFileValue.module())
+        .isEqualTo(
+            InterimModuleBuilder.create("aaa", "0.1")
+                .setKey(ModuleKey.ROOT)
+                .addDep("bbb", createModuleKey("bbb", "1.0"))
+                .addNodepDep(createModuleKey("bbb", "1.0"))
+                .build());
+  }
+
+  @Test
+  public void testRootModule_nodepDepAndDevDepOnSameModule_ignoreDevDeps() throws Exception {
+    // With dev deps ignored, the dev_dependency bazel_dep is dropped and only the nodep dep
+    // remains. A nodep dep is honored only if the module is already in the graph by some other
+    // means, so on its own it does not pull the module in.
+    scratch.overwriteFile(
+        rootDirectory.getRelative("MODULE.bazel").getPathString(),
+        "module(name='aaa',version='0.1')",
+        "bazel_dep(name='bbb',version='1.0',repo_name=None)",
+        "bazel_dep(name='bbb',version='1.0',dev_dependency=True)");
+    FakeRegistry registry = registryFactory.newFakeRegistry("/foo");
+    ModuleFileFunction.REGISTRIES.set(differencer, ImmutableSet.of(registry.getUrl()));
+    ModuleFileFunction.IGNORE_DEV_DEPS.set(differencer, true);
+
+    EvaluationResult<RootModuleFileValue> result =
+        evaluator.evaluate(
+            ImmutableList.of(ModuleFileValue.KEY_FOR_ROOT_MODULE), evaluationContext);
+    if (result.hasError()) {
+      fail(result.getError().toString());
+    }
+    RootModuleFileValue rootModuleFileValue = result.get(ModuleFileValue.KEY_FOR_ROOT_MODULE);
+    assertThat(rootModuleFileValue.module())
+        .isEqualTo(
+            InterimModuleBuilder.create("aaa", "0.1")
+                .setKey(ModuleKey.ROOT)
+                .addNodepDep(createModuleKey("bbb", "1.0"))
+                .build());
+  }
+
+  @Test
   public void testRootModule_noModuleFunctionIsOkay() throws Exception {
     scratch.overwriteFile(
         rootDirectory.getRelative("MODULE.bazel").getPathString(),
