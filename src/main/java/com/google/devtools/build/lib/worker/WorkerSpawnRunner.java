@@ -65,6 +65,7 @@ import com.google.devtools.build.lib.worker.WorkerProtocol.WorkResponse;
 import com.google.protobuf.ByteString;
 import java.io.IOException;
 import java.io.InterruptedIOException;
+import java.io.OutputStream;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -199,7 +200,11 @@ final class WorkerSpawnRunner implements SpawnRunner {
                     PathFragment.EMPTY_FRAGMENT, /* willAccessRepeatedly= */ true),
                 execRoot);
       }
-      SandboxOutputs outputs = SandboxHelpers.getOutputs(spawn);
+      // A persistent worker returns its captured output in the work response rather than as a file,
+      // so the stdout output (if any) is not produced in the worker's sandbox. Exclude it from the
+      // outputs to copy out and instead write the captured output into it below.
+      ActionInput stdoutOutput = spawn.getStdout();
+      SandboxOutputs outputs = SandboxHelpers.getOutputs(spawn, stdoutOutput);
 
       WorkerParser.WorkerConfig workerConfig = workerParser.compute(spawn, context);
       WorkerKey key = workerConfig.getWorkerKey();
@@ -213,7 +218,19 @@ final class WorkerSpawnRunner implements SpawnRunner {
               spawn, key, context, inputFiles, outputs, flagFiles, inputFileCache, spawnMetrics);
 
       FileOutErr outErr = context.getFileOutErr();
-      response.getOutputBytes().writeTo(outErr.getErrorStream());
+      if (stdoutOutput != null && response.getExitCode() == 0) {
+        // On success, capture the worker's output into the stdout output file, keeping it off the
+        // terminal. On failure, fall through and report it as usual so the diagnostics remain
+        // visible (the output file is discarded along with the failed action anyway).
+        Path stdoutPath =
+            execRoot.getRelative(spawn.getPathMapper().map(stdoutOutput.getExecPath()));
+        stdoutPath.getParentDirectory().createDirectoryAndParents();
+        try (OutputStream stdoutStream = stdoutPath.getOutputStream()) {
+          response.getOutputBytes().writeTo(stdoutStream);
+        }
+      } else {
+        response.getOutputBytes().writeTo(outErr.getErrorStream());
+      }
     }
     Duration wallTime = Duration.between(startTime, Instant.now());
 

@@ -139,4 +139,29 @@ function test_stdout_output_consumed_by_downstream_action() {
   assert_equals "hello-from-stdout" "$(cat "$out")"
 }
 
+function do_test_strategy() {
+  local strategy="$1"
+  bazel build //pkg:captured "--spawn_strategy=${strategy}" >&"$TEST_log" \
+    || fail "build with strategy ${strategy} failed"
+  local out
+  out=$(find "$(bazel info bazel-bin)/pkg" -name "captured.out")
+  [[ -n "$out" ]] || fail "captured.out was not produced under ${strategy}"
+  assert_equals "hello-from-stdout" "$(cat "$out")"
+  # The captured stdout is not echoed to the terminal as regular action output.
+  expect_not_log "hello-from-stdout"
+}
+
+function test_stdout_local_strategy() {
+  do_test_strategy local
+}
+
+function test_stdout_sandboxed_strategy() {
+  # Sandboxing is only reliably available on Linux in the test environment.
+  if [[ "$(uname -s)" != "Linux" ]]; then
+    echo "Skipping sandboxed strategy test on non-Linux platform"
+    return 0
+  fi
+  do_test_strategy sandboxed
+}
+
 run_suite "ctx.actions.run stdout parameter tests"

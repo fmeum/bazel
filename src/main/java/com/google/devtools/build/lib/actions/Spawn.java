@@ -130,15 +130,21 @@ public interface Spawn extends DescribableExecutionUnit {
   Collection<? extends ActionInput> getOutputFiles();
 
   /**
-   * Returns the output that captures this spawn's standard output stream, or {@code null} if the
-   * standard output is reported as regular spawn output.
+   * Returns the output into which this spawn's standard output stream is captured, or {@code null}
+   * if the standard output is reported as regular action output (i.e. printed to the terminal).
    *
-   * <p>When non-null, the returned output is <em>not</em> included in {@link #getOutputFiles} and
-   * must not be requested from a remote execution service as a regular output. Instead, the
-   * captured standard output is written to this output: locally by redirecting the process's
-   * standard output stream, and for remote execution by mapping the action result's stdout digest
-   * to this output. The captured standard output is not printed to the terminal and, when building
-   * without the bytes, is only downloaded on demand like any other output.
+   * <p>The returned output, when non-null, is an ordinary output of the spawn and is included in
+   * {@link #getOutputFiles}. The only difference from a plain output is <em>how</em> its content is
+   * produced: the spawn's standard output is captured into it (locally by redirecting the process's
+   * standard output stream, and for remote execution by writing the action result's stdout to it),
+   * and, as a consequence, that standard output is not <em>also</em> emitted as the action's
+   * standard output (it is not printed to the terminal). In all other respects it behaves like any
+   * other output, including participating in build-without-the-bytes and action rewinding.
+   *
+   * <p>Because a remote execution service captures a command's standard output separately from its
+   * declared output files, remote execution machinery omits this output from the remote command's
+   * declared outputs and instead maps the action result's stdout to it; this is an implementation
+   * detail of the remote transport and does not make the output any less of a regular output.
    */
   @Nullable
   default ActionInput getStdout() {

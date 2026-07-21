@@ -730,9 +730,24 @@ public final class SandboxHelpers {
   }
 
   public static SandboxOutputs getOutputs(Spawn spawn) {
+    return getOutputs(spawn, /* excludedOutput= */ null);
+  }
+
+  /**
+   * Returns the outputs of the spawn, optionally excluding a single output.
+   *
+   * <p>The excluded output is used for a spawn's {@linkplain Spawn#getStdout stdout output} when the
+   * execution strategy does not produce it as a file in the sandbox (e.g. a persistent worker
+   * returns the captured output in its response instead), so that the strategy does not expect it to
+   * be created and copied out like a regular file output.
+   */
+  public static SandboxOutputs getOutputs(Spawn spawn, @Nullable ActionInput excludedOutput) {
     ImmutableMap.Builder<PathFragment, PathFragment> files = ImmutableMap.builder();
     ImmutableMap.Builder<PathFragment, PathFragment> dirs = ImmutableMap.builder();
     for (ActionInput output : spawn.getOutputFiles()) {
+      if (output.equals(excludedOutput)) {
+        continue;
+      }
       PathFragment mappedPath = spawn.getPathMapper().map(output.getExecPath());
       if (output instanceof Artifact && ((Artifact) output).isTreeArtifact()) {
         dirs.put(output.getExecPath(), mappedPath);

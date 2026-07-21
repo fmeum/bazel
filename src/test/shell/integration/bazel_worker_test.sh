@@ -201,6 +201,59 @@ java_binary(
 EOF
 }
 
+function test_worker_stdout() {
+  prepare_example_worker
+  # A rule that captures the worker's output into a file via the ctx.actions.run stdout parameter
+  # instead of via a regular output file. The worker prints its result to stdout (no --output_file),
+  # which the worker strategy writes into the stdout output.
+  cat >capture.bzl <<EOF
+def _capture_impl(ctx):
+  worker = ctx.executable.worker
+  out = ctx.actions.declare_file(ctx.label.name + ".out")
+  argfile = ctx.actions.declare_file(ctx.label.name + "_input")
+  ctx.actions.write(output = argfile, content = "\n".join(ctx.attr.args))
+  ctx.actions.run(
+      inputs = [argfile],
+      outputs = [],
+      executable = worker,
+      stdout = out,
+      mnemonic = "Work",
+      execution_requirements = {
+          "supports-workers": "1",
+          "requires-worker-protocol": "${WORKER_PROTOCOL}",
+      },
+      arguments = ctx.attr.worker_args + ["@" + argfile.path],
+  )
+  return [DefaultInfo(files = depset([out]))]
+
+capture = rule(
+    implementation = _capture_impl,
+    attrs = {
+        "worker": attr.label(cfg = "exec", mandatory = True, allow_files = True, executable = True),
+        "worker_args": attr.string_list(),
+        "args": attr.string_list(),
+    },
+)
+EOF
+  cat >>BUILD <<EOF
+load(":capture.bzl", "capture")
+
+capture(
+  name = "captured",
+  worker = ":worker",
+  worker_args = ["--worker_protocol=${WORKER_PROTOCOL}"],
+  args = ["hello worker stdout"],
+)
+EOF
+
+  bazel build :captured &> "$TEST_log" \
+    || fail "build failed"
+  # The captured stdout ends up in the output file ...
+  assert_contains "hello worker stdout" "$BINS/captured.out"
+  # ... and is not printed to the terminal as regular action output.
+  assert_not_contains "hello worker stdout" "$TEST_log"
+}
+
 function test_example_worker() {
   prepare_example_worker
   cat >>BUILD <<EOF

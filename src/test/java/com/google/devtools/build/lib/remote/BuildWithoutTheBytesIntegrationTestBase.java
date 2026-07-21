@@ -96,6 +96,78 @@ public abstract class BuildWithoutTheBytesIntegrationTestBase extends BuildInteg
     assertOutputsDoNotExist("//:foobar");
   }
 
+  private void writeStdoutRule() throws IOException {
+    // A rule whose only output is the captured stdout of a tool invoked via ctx.actions.run.
+    write(
+        "a/defs.bzl",
+        """
+        def _impl(ctx):
+            tool = ctx.actions.declare_file(ctx.label.name + ".sh")
+            ctx.actions.write(
+                tool,
+                "#!/bin/bash\\nprintf '%s' 'hello stdout'\\n",
+                is_executable = True,
+            )
+            out = ctx.actions.declare_file(ctx.label.name + ".out")
+            ctx.actions.run(
+                outputs = [],
+                executable = tool,
+                stdout = out,
+                mnemonic = "Capture",
+            )
+            return DefaultInfo(files = depset([out]))
+
+        capture = rule(implementation = _impl)
+        """);
+    write(
+        "a/BUILD",
+        """
+        load(":defs.bzl", "capture")
+
+        capture(name = "capture")
+        """);
+  }
+
+  @Test
+  public void stdoutOutput_notDownloadedUnderMinimal() throws Exception {
+    // The stdout output is an ordinary output: under build-without-the-bytes it is not eagerly
+    // downloaded, but its (remote) metadata is available.
+    if (!hasAccessToRemoteOutputs()) {
+      return;
+    }
+    writeStdoutRule();
+
+    buildTarget("//a:capture");
+    waitDownloads();
+
+    assertOnlyOutputRemoteContent("//a:capture", "capture.out", "hello stdout");
+  }
+
+  @Test
+  public void stdoutOutput_downloadedWithRegex() throws Exception {
+    // remote_download_regex matching the stdout file forces it to be downloaded, just like any
+    // other output.
+    writeStdoutRule();
+    addOptions("--remote_download_regex=.*capture\\.out$");
+
+    buildTarget("//a:capture");
+    waitDownloads();
+
+    assertOnlyOutputContent("//a:capture", "capture.out", "hello stdout");
+  }
+
+  @Test
+  public void stdoutOutput_downloadTopLevel() throws Exception {
+    // Requesting top-level outputs downloads the stdout output with its captured content.
+    setDownloadToplevel();
+    writeStdoutRule();
+
+    buildTarget("//a:capture");
+    waitDownloads();
+
+    assertOnlyOutputContent("//a:capture", "capture.out", "hello stdout");
+  }
+
   @Test
   public void disableRunfiles_buildSuccessfully() throws Exception {
     // Disable on Windows since it fails for unknown reasons.
