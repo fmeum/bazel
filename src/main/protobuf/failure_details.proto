@@ -1264,6 +1264,7 @@ message Worker {
     NO_RESPONSE = 11 [(metadata) = { exit_code: 1 }];
     FINISH_FAILURE = 12 [(metadata) = { exit_code: 1 }];
     FORBIDDEN_INPUT = 13 [(metadata) = { exit_code: 1 }];
+    STDOUT_UNSUPPORTED = 14 [(metadata) = { exit_code: 1 }];
   }
 
   Code code = 1;

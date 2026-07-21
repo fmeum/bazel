@@ -629,7 +629,10 @@ This function must be top-level, i.e. lambdas and nested functions are not allow
                     + " is captured into the file, it is not <em>also</em> emitted as the action's"
                     + " standard output: it is not printed to the terminal. This makes it possible"
                     + " to capture a tool's standard output without wrapping the invocation in a"
-                    + " shell."),
+                    + " shell.<p>This is incompatible with persistent worker execution (a worker"
+                    + " returns its output in the work response rather than on the process's"
+                    + " standard output stream); an action that both sets <code>stdout</code> and"
+                    + " runs on a worker fails."),
       })
   void run(
       Sequence<?> outputs,

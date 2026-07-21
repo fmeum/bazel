@@ -65,7 +65,6 @@ import com.google.devtools.build.lib.worker.WorkerProtocol.WorkResponse;
 import com.google.protobuf.ByteString;
 import java.io.IOException;
 import java.io.InterruptedIOException;
-import java.io.OutputStream;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -82,6 +81,9 @@ final class WorkerSpawnRunner implements SpawnRunner {
   public static final String ERROR_MESSAGE_PREFIX =
       "Worker strategy cannot execute this %s action, ";
   public static final String REASON_NO_TOOLS = "because the action has no tools";
+  public static final String REASON_STDOUT =
+      "because it redirects its standard output into a file (the 'stdout' parameter of"
+          + " ctx.actions.run is not supported by worker execution)";
 
   /**
    * The verbosity level implied by `--worker_verbose`. This value allows for manually setting some
@@ -167,6 +169,14 @@ final class WorkerSpawnRunner implements SpawnRunner {
           String.format(ERROR_MESSAGE_PREFIX + REASON_NO_TOOLS, spawn.getMnemonic()),
           Code.NO_TOOLS);
     }
+    if (spawn.getStdout() != null) {
+      // A persistent worker returns its output in the work response rather than as the process's
+      // standard output stream, so the 'stdout' output of ctx.actions.run cannot be captured. Fail
+      // rather than silently producing incorrect output.
+      throw createUserExecException(
+          String.format(ERROR_MESSAGE_PREFIX + REASON_STDOUT, spawn.getMnemonic()),
+          Code.STDOUT_UNSUPPORTED);
+    }
 
     Instant startTime = Instant.now();
     SpawnMetrics.Builder spawnMetrics;
@@ -200,11 +210,7 @@ final class WorkerSpawnRunner implements SpawnRunner {
                     PathFragment.EMPTY_FRAGMENT, /* willAccessRepeatedly= */ true),
                 execRoot);
       }
-      // A persistent worker returns its captured output in the work response rather than as a file,
-      // so the stdout output (if any) is not produced in the worker's sandbox. Exclude it from the
-      // outputs to copy out and instead write the captured output into it below.
-      ActionInput stdoutOutput = spawn.getStdout();
-      SandboxOutputs outputs = SandboxHelpers.getOutputs(spawn, stdoutOutput);
+      SandboxOutputs outputs = SandboxHelpers.getOutputs(spawn);
 
       WorkerParser.WorkerConfig workerConfig = workerParser.compute(spawn, context);
       WorkerKey key = workerConfig.getWorkerKey();
@@ -218,19 +224,7 @@ final class WorkerSpawnRunner implements SpawnRunner {
               spawn, key, context, inputFiles, outputs, flagFiles, inputFileCache, spawnMetrics);
 
       FileOutErr outErr = context.getFileOutErr();
-      if (stdoutOutput != null && response.getExitCode() == 0) {
-        // On success, capture the worker's output into the stdout output file, keeping it off the
-        // terminal. On failure, fall through and report it as usual so the diagnostics remain
-        // visible (the output file is discarded along with the failed action anyway).
-        Path stdoutPath =
-            execRoot.getRelative(spawn.getPathMapper().map(stdoutOutput.getExecPath()));
-        stdoutPath.getParentDirectory().createDirectoryAndParents();
-        try (OutputStream stdoutStream = stdoutPath.getOutputStream()) {
-          response.getOutputBytes().writeTo(stdoutStream);
-        }
-      } else {
-        response.getOutputBytes().writeTo(outErr.getErrorStream());
-      }
+      response.getOutputBytes().writeTo(outErr.getErrorStream());
     }
     Duration wallTime = Duration.between(startTime, Instant.now());
 

@@ -135,11 +135,11 @@ java_binary(
 EOF
 }
 
-function test_worker_multiplexer_stdout() {
+function test_worker_multiplexer_stdout_is_rejected() {
   prepare_example_worker
-  # A rule that captures the multiplex worker's output into a file via the ctx.actions.run stdout
-  # parameter instead of via a regular output file. The worker prints its result to stdout (no
-  # --output_file), which the worker strategy writes into the stdout output.
+  # The 'stdout' parameter of ctx.actions.run is not supported by (multiplex) worker execution: the
+  # worker returns its output in the work response rather than as the process's standard output
+  # stream. Such an action must fail rather than silently producing incorrect output.
   cat >capture.bzl <<'EOF'
 def _capture_impl(ctx):
   worker = ctx.executable.worker
@@ -181,9 +181,9 @@ capture(
 EOF
 
   bazel build :captured &> $TEST_log \
-    || fail "build failed"
-  assert_contains "hello multiplex stdout" "$BINS/captured.out"
-  assert_not_contains "hello multiplex stdout" "$TEST_log"
+    && fail "expected build to fail because stdout is unsupported by worker execution"
+  expect_log "Worker strategy cannot execute this Work action"
+  expect_log "stdout"
 }
 
 function test_example_worker_multiplexer() {
