@@ -257,6 +257,27 @@ public class RemoteExecutionService {
     this.knownMissingCasDigests = knownMissingCasDigests;
   }
 
+  /**
+   * Returns the spawn's output files excluding the output into which its standard output is
+   * redirected, if any.
+   *
+   * <p>The stdout output is a regular output of the action, but the remote execution service
+   * captures the spawn's standard output separately (as the action result's stdout) rather than as
+   * a file at that path. It must therefore be omitted from the command's declared outputs, from the
+   * mandatory-output check, and from the regular files uploaded to the cache; its content is
+   * instead reconstructed from (or uploaded as) the action result's stdout digest.
+   */
+  private static ImmutableList<? extends ActionInput> outputsExcludingStdout(Spawn spawn) {
+    ActionInput stdout = spawn.getStdout();
+    ImmutableList.Builder<ActionInput> result = ImmutableList.builder();
+    for (ActionInput output : spawn.getOutputFiles()) {
+      if (!output.equals(stdout)) {
+        result.add(output);
+      }
+    }
+    return result.build();
+  }
+
   private Command buildCommand(
       boolean useOutputPaths,
       Collection<? extends ActionInput> outputs,
@@ -545,7 +566,7 @@ public class RemoteExecutionService {
       Command command =
           buildCommand(
               useOutputPaths(),
-              spawn.getOutputFiles(),
+              outputsExcludingStdout(spawn),
               spawn.getArguments(),
               spawn.getEnvironment(),
               platform,
@@ -718,10 +739,11 @@ public class RemoteExecutionService {
               Iterables.transform(
                   Iterables.concat(outputFiles, outputDirPaths, outputSymlinkPaths),
                   StringEncoding::unicodeToInternal));
-      // Check that all mandatory outputs are created.
+      // Check that all mandatory outputs are created. The stdout output is captured as the action
+      // result's stdout rather than as a regular output file, so it is excluded here.
       var spawn = action.getSpawn();
       var remotePathResolver = action.getRemotePathResolver();
-      return spawn.getOutputFiles().stream()
+      return outputsExcludingStdout(spawn).stream()
           .filter(spawn::isMandatoryOutput)
           .filter(
               output -> !allOutputPaths.contains(remotePathResolver.localPathToOutputPath(output)))
@@ -1372,12 +1394,65 @@ public class RemoteExecutionService {
       }
     }
 
+    // If the spawn redirects its standard output into one of its outputs, the action result stores
+    // the captured stdout as the stdout digest (or inline raw bytes) rather than as a regular
+    // output file. Reconstruct the output from it, honoring build-without-the-bytes just like a
+    // regular output, instead of eagerly downloading it as part of the action's stdout below.
+    ActionInput stdoutOutput = action.getSpawn().getStdout();
+    if (stdoutOutput != null) {
+      PathFragment stdoutExecPath = stdoutOutput.getExecPath();
+      Path stdoutPath = execRoot.getRelative(stdoutExecPath);
+      if (result.actionResult.hasStdoutDigest()) {
+        Digest digest = result.actionResult.getStdoutDigest();
+        FileMetadata stdoutFile =
+            new FileMetadata(stdoutPath, digest, /* isExecutable= */ false, ByteString.EMPTY);
+        if (shouldDownload(result, stdoutExecPath, /* treeRootExecPath= */ null)) {
+          Path tmpPath = tempPathGenerator.generateTempPath();
+          realToTmpPath.put(stdoutPath, tmpPath);
+          downloadsBuilder.add(
+              downloadFile(
+                  context,
+                  progressStatusListener,
+                  stdoutFile,
+                  tmpPath,
+                  action.getRemotePathResolver()));
+        } else if (hasBazelOutputService) {
+          downloadsBuilder.add(immediateFuture(stdoutFile));
+        } else {
+          checkNotNull(remoteActionFileSystem)
+              .injectRemoteFile(
+                  stdoutPath.asFragment(),
+                  DigestUtil.toBinaryDigest(digest),
+                  digest.getSizeBytes(),
+                  expirationTime);
+        }
+      } else {
+        // The stdout was returned inline (or is empty). Since inline content is not necessarily
+        // present in the CAS, materialize it directly rather than deferring via injected metadata.
+        // It still goes through the temporary-path machinery so it is moved into place under the
+        // output lock and cleaned up on a failed download.
+        byte[] content = result.actionResult.getStdoutRaw().toByteArray();
+        Digest digest = digestUtil.compute(content);
+        Path tmpPath = tempPathGenerator.generateTempPath();
+        FileSystemUtils.writeContent(tmpPath, content);
+        realToTmpPath.put(stdoutPath, tmpPath);
+        downloadsBuilder.add(
+            immediateFuture(
+                new FileMetadata(stdoutPath, digest, /* isExecutable= */ false, ByteString.EMPTY)));
+      }
+    }
+
     FileOutErr outErr = action.getSpawnExecutionContext().getFileOutErr();
 
-    // Always download the action stdout/stderr.
+    // Always download the action stdout/stderr, except for stdout that was redirected into an
+    // output above (in which case it must not be reported as regular action stdout).
     FileOutErr tmpOutErr = outErr.childOutErr();
     List<ListenableFuture<Void>> outErrDownloads =
-        combinedCache.downloadOutErr(context, result.actionResult, tmpOutErr);
+        combinedCache.downloadOutErr(
+            context,
+            result.actionResult,
+            tmpOutErr,
+            /* downloadStdout= */ stdoutOutput == null);
     for (ListenableFuture<Void> future : outErrDownloads) {
       downloadsBuilder.add(transform(future, (v) -> null, directExecutor()));
     }
@@ -1740,8 +1815,15 @@ public class RemoteExecutionService {
       throws IOException, ExecException, InterruptedException {
     try (SilentCloseable c = Profiler.instance().profile("build upload manifest")) {
       ImmutableList.Builder<Path> outputFiles = ImmutableList.builder();
+      // If the spawn redirected its stdout into an output, upload that file as the action's stdout
+      // digest rather than as a regular output file, so that the uploaded action result matches a
+      // remotely executed one.
+      ActionInput stdoutOutput = action.getSpawn().getStdout();
+      Path stdoutPath =
+          stdoutOutput != null ? execRoot.getRelative(stdoutOutput.getExecPath()) : null;
+
       // Check that all mandatory outputs are created.
-      for (ActionInput outputFile : action.getSpawn().getOutputFiles()) {
+      for (ActionInput outputFile : outputsExcludingStdout(action.getSpawn())) {
         Symlinks followSymlinks = outputFile.isSymlink() ? Symlinks.NOFOLLOW : Symlinks.FOLLOW;
         Path localPath = execRoot.getRelative(outputFile.getExecPath());
         if (action.getSpawn().isMandatoryOutput(outputFile) && !localPath.exists(followSymlinks)) {
@@ -1760,6 +1842,7 @@ public class RemoteExecutionService {
           action.getCommand(),
           outputFiles.build(),
           action.getSpawnExecutionContext().getFileOutErr(),
+          stdoutPath,
           spawnResult.exitCode(),
           spawnResult.getStartTime(),
           spawnResult.getWallTimeInMs(),

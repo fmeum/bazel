@@ -821,6 +821,7 @@ public class GrpcCacheClientTest {
             command,
             outputs,
             outErr,
+            /* stdoutPath= */ null,
             /* exitCode= */ 0,
             /* startTime= */ null,
             /* wallTimeInMs= */ 0,

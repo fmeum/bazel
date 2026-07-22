@@ -209,6 +209,7 @@ public final class RemoteRepoContentsCacheImpl implements RemoteRepoContentsCach
                   COMMAND,
                   ImmutableList.of(fetchedRepoMarkerFile, fetchedRepoDir),
                   /* outErr= */ null,
+                  /* stdoutPath= */ null,
                   /* exitCode= */ 0,
                   /* startTime= */ Instant.now(),
                   /* wallTimeInMs= */ 0,

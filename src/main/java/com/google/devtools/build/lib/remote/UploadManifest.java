@@ -109,6 +109,7 @@ public class UploadManifest {
       Command command,
       Collection<Path> outputFiles,
       @Nullable FileOutErr outErr,
+      @Nullable Path stdoutPath,
       int exitCode,
       Instant startTime,
       int wallTimeInMs,
@@ -128,7 +129,7 @@ public class UploadManifest {
             preserveExecutableBit);
     manifest.addFiles(outputFiles);
     if (outErr != null) {
-      manifest.setStdoutStderr(outErr);
+      manifest.setStdoutStderr(outErr, stdoutPath);
     }
     manifest.addAction(actionKey, action, command);
     if (manifest.getStderrDigest() != null) {
@@ -193,14 +194,18 @@ public class UploadManifest {
     this.preserveExecutableBit = preserveExecutableBit;
   }
 
-  private void setStdoutStderr(FileOutErr outErr) throws IOException {
+  private void setStdoutStderr(FileOutErr outErr, @Nullable Path stdoutPath) throws IOException {
     if (outErr.getErrorPath().exists()) {
       stderrDigest = digestUtil.compute(outErr.getErrorPath());
       digestToFile.put(stderrDigest, outErr.getErrorPath());
     }
-    if (outErr.getOutputPath().exists()) {
-      stdoutDigest = digestUtil.compute(outErr.getOutputPath());
-      digestToFile.put(stdoutDigest, outErr.getOutputPath());
+    // When the spawn redirects its stdout into one of its outputs, the captured stdout lives in that
+    // output rather than in the regular stdout buffer. Upload it as the action's stdout digest (and
+    // not as a regular output file) to keep the action result consistent with remote execution.
+    Path effectiveStdoutPath = stdoutPath != null ? stdoutPath : outErr.getOutputPath();
+    if (effectiveStdoutPath.exists()) {
+      stdoutDigest = digestUtil.compute(effectiveStdoutPath);
+      digestToFile.put(stdoutDigest, effectiveStdoutPath);
     }
   }
 
