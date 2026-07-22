@@ -441,6 +441,54 @@ public final class StarlarkRuleImplementationFunctionsTest extends BuildViewTest
   }
 
   @Test
+  public void testCreateSpawnActionStdoutWithWorkerFails() throws Exception {
+    setRuleContext(createRuleContext("//foo:foo"));
+    ev.checkEvalErrorContains(
+        "parameter 'stdout' of actions.run is incompatible with worker execution",
+        "out = ruleContext.actions.declare_file('stdout.txt')",
+        "ruleContext.actions.run(",
+        "  outputs = [],",
+        "  executable = ruleContext.files.tools[0],",
+        "  toolchain = None,",
+        "  execution_requirements = {'supports-workers': '1'},",
+        "  stdout = out)");
+  }
+
+  @Test
+  public void testCreateSpawnActionStdoutWithMultiplexWorkerFails() throws Exception {
+    setRuleContext(createRuleContext("//foo:foo"));
+    ev.checkEvalErrorContains(
+        "parameter 'stdout' of actions.run is incompatible with worker execution",
+        "out = ruleContext.actions.declare_file('stdout.txt')",
+        "ruleContext.actions.run(",
+        "  outputs = [],",
+        "  executable = ruleContext.files.tools[0],",
+        "  toolchain = None,",
+        "  execution_requirements = {'supports-multiplex-workers': '1'},",
+        "  stdout = out)");
+  }
+
+  @Test
+  public void testCreateSpawnActionStdoutWithoutWorkerSupportSucceeds() throws Exception {
+    // A non-worker execution requirement does not trigger the worker incompatibility check.
+    StarlarkRuleContext ruleContext = createRuleContext("//foo:foo");
+    setRuleContext(ruleContext);
+    ev.exec(
+        "out = ruleContext.actions.declare_file('stdout.txt')",
+        "ruleContext.actions.run(",
+        "  outputs = [],",
+        "  executable = ruleContext.files.tools[0],",
+        "  toolchain = None,",
+        "  execution_requirements = {'requires-worker-protocol': 'json'},",
+        "  stdout = out)");
+    SpawnAction action =
+        (SpawnAction)
+            Iterables.getOnlyElement(
+                ruleContext.getRuleContext().getAnalysisEnvironment().getRegisteredActions());
+    assertThat(action.getStdoutOutput()).isEqualTo(action.getPrimaryOutput());
+  }
+
+  @Test
   public void createSpawnAction_progressMessageWithSubstitutions() throws Exception {
     StarlarkRuleContext ruleContext = createRuleContext("//foo:foo");
     setRuleContext(ruleContext);

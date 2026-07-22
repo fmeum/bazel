@@ -135,57 +135,6 @@ java_binary(
 EOF
 }
 
-function test_worker_multiplexer_stdout_is_rejected() {
-  prepare_example_worker
-  # The 'stdout' parameter of ctx.actions.run is not supported by (multiplex) worker execution: the
-  # worker returns its output in the work response rather than as the process's standard output
-  # stream. Such an action must fail rather than silently producing incorrect output.
-  cat >capture.bzl <<'EOF'
-def _capture_impl(ctx):
-  worker = ctx.executable.worker
-  out = ctx.actions.declare_file(ctx.label.name + ".out")
-  argfile = ctx.actions.declare_file(ctx.label.name + "_input")
-  ctx.actions.write(output = argfile, content = "\n".join(ctx.attr.args))
-  ctx.actions.run(
-      inputs = [argfile],
-      outputs = [],
-      executable = worker,
-      stdout = out,
-      mnemonic = "Work",
-      execution_requirements = {
-          "supports-multiplex-workers": "1",
-          "supports-multiplex-sandboxing": "1",
-          "requires-worker-protocol": "proto",
-      },
-      arguments = ctx.attr.worker_args + ["@" + argfile.path],
-  )
-  return [DefaultInfo(files = depset([out]))]
-
-capture = rule(
-    implementation = _capture_impl,
-    attrs = {
-        "worker": attr.label(cfg = "exec", mandatory = True, allow_files = True, executable = True),
-        "worker_args": attr.string_list(),
-        "args": attr.string_list(),
-    },
-)
-EOF
-  cat >>BUILD <<EOF
-load(":capture.bzl", "capture")
-
-capture(
-  name = "captured",
-  worker = ":worker",
-  args = ["hello multiplex stdout"],
-)
-EOF
-
-  bazel build :captured &> $TEST_log \
-    && fail "expected build to fail because stdout is unsupported by worker execution"
-  expect_log "Worker strategy cannot execute this Work action"
-  expect_log "stdout"
-}
-
 function test_example_worker_multiplexer() {
   prepare_example_worker
   cat >>BUILD <<EOF

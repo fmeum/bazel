@@ -631,8 +631,9 @@ This function must be top-level, i.e. lambdas and nested functions are not allow
                     + " to capture a tool's standard output without wrapping the invocation in a"
                     + " shell.<p>This is incompatible with persistent worker execution (a worker"
                     + " returns its output in the work response rather than on the process's"
-                    + " standard output stream); an action that both sets <code>stdout</code> and"
-                    + " runs on a worker fails."),
+                    + " standard output stream); setting <code>stdout</code> on an action that also"
+                    + " declares worker support (the <code>supports-workers</code> or"
+                    + " <code>supports-multiplex-workers</code> execution requirement) is an error."),
       })
   void run(
       Sequence<?> outputs,

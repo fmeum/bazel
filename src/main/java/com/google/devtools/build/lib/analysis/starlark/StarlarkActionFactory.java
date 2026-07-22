@@ -30,6 +30,7 @@ import com.google.devtools.build.lib.actions.Artifact.SpecialArtifact;
 import com.google.devtools.build.lib.actions.ArtifactRoot;
 import com.google.devtools.build.lib.actions.CommandLine;
 import com.google.devtools.build.lib.actions.ExecException;
+import com.google.devtools.build.lib.actions.ExecutionRequirements;
 import com.google.devtools.build.lib.actions.ParamFileInfo;
 import com.google.devtools.build.lib.actions.ResourceSet;
 import com.google.devtools.build.lib.actions.ResourceSetOrBuilder;
@@ -866,6 +867,19 @@ public class StarlarkActionFactory implements StarlarkActionFactoryApi {
             executionRequirementsUnchecked,
             ruleContext.getRule(),
             getSemantics().getBool(BuildLanguageOptions.INCOMPATIBLE_ALLOW_TAGS_PROPAGATION));
+
+    // A persistent worker returns its output in the work response rather than on the process's
+    // standard output stream, so the 'stdout' output cannot be captured under worker execution.
+    // Reject the combination at analysis time rather than failing (or misbehaving) at execution.
+    if (stdoutOutput != null
+        && ("1".equals(executionInfo.get(ExecutionRequirements.SUPPORTS_WORKERS))
+            || "1".equals(executionInfo.get(ExecutionRequirements.SUPPORTS_MULTIPLEX_WORKERS)))) {
+      throw Starlark.errorf(
+          "parameter 'stdout' of actions.run is incompatible with worker execution (the"
+              + " '%s' or '%s' execution requirement)",
+          ExecutionRequirements.SUPPORTS_WORKERS,
+          ExecutionRequirements.SUPPORTS_MULTIPLEX_WORKERS);
+    }
     builder.setExecutionInfo(executionInfo);
 
     String execGroup = determineExecGroup(ruleContext, execGroupUnchecked, toolchainUnchecked);

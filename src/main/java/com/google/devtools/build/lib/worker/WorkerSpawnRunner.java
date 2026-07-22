@@ -81,9 +81,6 @@ final class WorkerSpawnRunner implements SpawnRunner {
   public static final String ERROR_MESSAGE_PREFIX =
       "Worker strategy cannot execute this %s action, ";
   public static final String REASON_NO_TOOLS = "because the action has no tools";
-  public static final String REASON_STDOUT =
-      "because it redirects its standard output into a file (the 'stdout' parameter of"
-          + " ctx.actions.run is not supported by worker execution)";
 
   /**
    * The verbosity level implied by `--worker_verbose`. This value allows for manually setting some
@@ -168,14 +165,6 @@ final class WorkerSpawnRunner implements SpawnRunner {
       throw createUserExecException(
           String.format(ERROR_MESSAGE_PREFIX + REASON_NO_TOOLS, spawn.getMnemonic()),
           Code.NO_TOOLS);
-    }
-    if (spawn.getStdout() != null) {
-      // A persistent worker returns its output in the work response rather than as the process's
-      // standard output stream, so the 'stdout' output of ctx.actions.run cannot be captured. Fail
-      // rather than silently producing incorrect output.
-      throw createUserExecException(
-          String.format(ERROR_MESSAGE_PREFIX + REASON_STDOUT, spawn.getMnemonic()),
-          Code.STDOUT_UNSUPPORTED);
     }
 
     Instant startTime = Instant.now();

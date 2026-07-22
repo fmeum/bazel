@@ -70,6 +70,30 @@ capture = rule(
     },
 )
 
+def _capture_worker_impl(ctx):
+    out = ctx.actions.declare_file(ctx.attr.name + ".out")
+    ctx.actions.run(
+        outputs = [],
+        executable = ctx.executable._tool,
+        arguments = [ctx.attr.text],
+        stdout = out,
+        mnemonic = "Capture",
+        execution_requirements = {"supports-workers": "1"},
+    )
+    return [DefaultInfo(files = depset([out]))]
+
+capture_worker = rule(
+    implementation = _capture_worker_impl,
+    attrs = {
+        "text": attr.string(mandatory = True),
+        "_tool": attr.label(
+            default = ":echo_tool",
+            executable = True,
+            cfg = "exec",
+        ),
+    },
+)
+
 def _consume_impl(ctx):
     out = ctx.actions.declare_file(ctx.attr.name + ".copy")
     ctx.actions.run_shell(
@@ -96,7 +120,7 @@ EOF
 
   cat > pkg/BUILD <<'EOF'
 load("@rules_shell//shell:sh_binary.bzl", "sh_binary")
-load(":defs.bzl", "capture", "consume")
+load(":defs.bzl", "capture", "capture_worker", "consume")
 
 sh_binary(
     name = "echo_tool",
@@ -105,6 +129,11 @@ sh_binary(
 
 capture(
     name = "captured",
+    text = "hello-from-stdout",
+)
+
+capture_worker(
+    name = "captured_worker",
     text = "hello-from-stdout",
 )
 
@@ -162,6 +191,14 @@ function test_stdout_sandboxed_strategy() {
     return 0
   fi
   do_test_strategy sandboxed
+}
+
+function test_stdout_with_worker_support_fails_analysis() {
+  # An action that both sets stdout and declares worker support is rejected at analysis time,
+  # regardless of the strategy that would actually run it.
+  bazel build --nobuild //pkg:captured_worker >&"$TEST_log" \
+    && fail "expected analysis to fail for stdout + supports-workers"
+  expect_log "parameter 'stdout' of actions.run is incompatible with worker execution"
 }
 
 run_suite "ctx.actions.run stdout parameter tests"
