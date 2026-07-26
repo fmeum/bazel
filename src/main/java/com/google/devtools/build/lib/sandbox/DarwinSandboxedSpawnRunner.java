@@ -198,11 +198,13 @@ final class DarwinSandboxedSpawnRunner extends AbstractSandboxSpawnRunner {
     ImmutableSet<Path> extraWritableDirs = getWritableDirs(sandboxExecRoot, environment);
     writableDirs.addAll(extraWritableDirs);
 
+    SandboxOutputs outputs = SandboxHelpers.getOutputs(spawn);
     SandboxInputs inputs =
         SandboxHelpers.processInputFiles(
             context.getInputMapping(PathFragment.EMPTY_FRAGMENT, /* willAccessRepeatedly= */ true),
-            execRoot);
-    SandboxOutputs outputs = SandboxHelpers.getOutputs(spawn);
+            execRoot,
+            treeArtifactMetadataProvider(context),
+            outputs);
 
     final Path sandboxConfigPath = sandboxPath.getRelative("sandbox.sb");
     Duration timeout = context.getTimeout();

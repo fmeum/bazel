@@ -24,6 +24,7 @@ import com.google.common.collect.ImmutableSet;
 import com.google.devtools.build.lib.actions.ActionExecutionMetadata;
 import com.google.devtools.build.lib.actions.EnvironmentalExecException;
 import com.google.devtools.build.lib.actions.ExecException;
+import com.google.devtools.build.lib.actions.InputMetadataProvider;
 import com.google.devtools.build.lib.actions.ResourceManager;
 import com.google.devtools.build.lib.actions.ResourceManager.ResourceHandle;
 import com.google.devtools.build.lib.actions.ResourceManager.ResourcePriority;
@@ -62,6 +63,7 @@ import java.time.Instant;
 import java.util.Map;
 import java.util.Optional;
 import java.util.stream.Stream;
+import javax.annotation.Nullable;
 
 /** Abstract common ancestor for sandbox spawn runners implementing the common parts. */
 abstract class AbstractSandboxSpawnRunner implements SpawnRunner {
@@ -448,6 +450,18 @@ abstract class AbstractSandboxSpawnRunner implements SpawnRunner {
 
   protected SandboxOptions getSandboxOptions() {
     return sandboxOptions;
+  }
+
+  /**
+   * Returns the {@link InputMetadataProvider} to pass to {@link SandboxHelpers#processInputFiles}
+   * to enable materializing tree artifacts as their root directory, or null if that behavior is
+   * disabled.
+   */
+  @Nullable
+  protected InputMetadataProvider treeArtifactMetadataProvider(SpawnExecutionContext context) {
+    return sandboxOptions.getExperimentalSandboxSymlinkTreeArtifacts()
+        ? context.getInputMetadataProvider()
+        : null;
   }
 
   @Override

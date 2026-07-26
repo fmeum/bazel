@@ -260,10 +260,13 @@ final class LinuxSandboxedSpawnRunner extends AbstractSandboxSpawnRunner {
     Path sandboxExecRoot = sandboxPath.getRelative("execroot").getRelative(workspaceName);
     sandboxExecRoot.createDirectoryAndParents();
 
+    SandboxOutputs outputs = SandboxHelpers.getOutputs(spawn);
     SandboxInputs inputs =
         SandboxHelpers.processInputFiles(
             context.getInputMapping(PathFragment.EMPTY_FRAGMENT, /* willAccessRepeatedly= */ true),
-            execRoot);
+            execRoot,
+            treeArtifactMetadataProvider(context),
+            outputs);
 
     ImmutableMap<String, String> environment =
         localEnvProvider.rewriteLocalEnv(spawn.getEnvironment(), binTools, "/tmp");
@@ -294,7 +297,6 @@ final class LinuxSandboxedSpawnRunner extends AbstractSandboxSpawnRunner {
       }
     }
 
-    SandboxOutputs outputs = SandboxHelpers.getOutputs(spawn);
     Duration timeout = context.getTimeout();
     SandboxOptions sandboxOptions = getSandboxOptions();
 

@@ -31,6 +31,9 @@ import com.google.common.flogger.GoogleLogger;
 import com.google.common.io.ByteStreams;
 import com.google.devtools.build.lib.actions.ActionInput;
 import com.google.devtools.build.lib.actions.Artifact;
+import com.google.devtools.build.lib.actions.Artifact.SpecialArtifact;
+import com.google.devtools.build.lib.actions.Artifact.TreeFileArtifact;
+import com.google.devtools.build.lib.actions.InputMetadataProvider;
 import com.google.devtools.build.lib.actions.Spawn;
 import com.google.devtools.build.lib.actions.UserExecException;
 import com.google.devtools.build.lib.actions.VirtualActionInput;
@@ -44,6 +47,7 @@ import com.google.devtools.build.lib.exec.TreeDeleter;
 import com.google.devtools.build.lib.server.FailureDetails.FailureDetail;
 import com.google.devtools.build.lib.server.FailureDetails.Sandbox;
 import com.google.devtools.build.lib.server.FailureDetails.Sandbox.Code;
+import com.google.devtools.build.lib.skyframe.TreeArtifactValue;
 import com.google.devtools.build.lib.vfs.Dirent;
 import com.google.devtools.build.lib.vfs.FileAccessException;
 import com.google.devtools.build.lib.vfs.FileStatus;
@@ -665,9 +669,50 @@ public final class SandboxHelpers {
   public static SandboxInputs processInputFiles(
       Map<PathFragment, ActionInput> inputMap, Path execRoot)
       throws IOException, InterruptedException {
+    return processInputFiles(
+        inputMap,
+        execRoot,
+        /* inputMetadataProvider= */ null,
+        SandboxOutputs.getEmptyInstance());
+  }
+
+  /**
+   * Returns the inputs of a Spawn as a map of PathFragments relative to an execRoot to paths in the
+   * host filesystem where the input files can be found.
+   *
+   * <p>If {@code inputMetadataProvider} is non-null, tree artifacts that {@linkplain
+   * #findCollapsibleTreeArtifacts occur in their entirety} in {@code inputMap} are represented by a
+   * single entry for the tree artifact's root directory instead of one entry per file below it.
+   * Since a sandboxed spawn materializes a directory input by symlinking (or recursively
+   * copying/hardlinking) it as a whole, this substantially reduces the number of filesystem
+   * operations needed to set up a sandbox for an action with large tree artifact inputs.
+   *
+   * @param inputMap the map of action inputs and where they should be visible in the action
+   * @param execRoot the exec root
+   * @param inputMetadataProvider the metadata provider to obtain tree artifact contents from, or
+   *     null to never represent a tree artifact by its root directory
+   * @param outputs the outputs of the spawn, which must not be placed below a tree artifact root
+   * @throws IOException if processing symlinks fails
+   */
+  @CanIgnoreReturnValue
+  public static SandboxInputs processInputFiles(
+      Map<PathFragment, ActionInput> inputMap,
+      Path execRoot,
+      @Nullable InputMetadataProvider inputMetadataProvider,
+      SandboxOutputs outputs)
+      throws IOException, InterruptedException {
     Map<PathFragment, Path> inputFiles = new TreeMap<>();
     Map<PathFragment, PathFragment> inputSymlinks = new TreeMap<>();
     Map<VirtualActionInput, byte[]> virtualInputs = new HashMap<>();
+
+    ImmutableMap<PathFragment, SpecialArtifact> treeArtifactRoots =
+        inputMetadataProvider == null
+            ? ImmutableMap.of()
+            : findCollapsibleTreeArtifacts(inputMap, inputMetadataProvider, outputs);
+
+    for (Map.Entry<PathFragment, SpecialArtifact> e : treeArtifactRoots.entrySet()) {
+      inputFiles.put(e.getKey(), execRoot.getRelative(e.getValue().getExecPath()));
+    }
 
     for (Map.Entry<PathFragment, ActionInput> e : inputMap.entrySet()) {
       if (Thread.interrupted()) {
@@ -675,6 +720,12 @@ public final class SandboxHelpers {
       }
       PathFragment pathFragment = e.getKey();
       ActionInput actionInput = e.getValue();
+      if (!treeArtifactRoots.isEmpty()
+          && actionInput instanceof TreeFileArtifact child
+          && treeArtifactRoots.containsKey(treeRootFor(pathFragment, child))) {
+        // Already covered by the entry for the tree artifact's root directory.
+        continue;
+      }
       if (actionInput instanceof VirtualActionInput input) {
         byte[] digest = input.atomicallyWriteRelativeTo(execRoot);
         virtualInputs.put(input, digest);
@@ -692,6 +743,129 @@ public final class SandboxHelpers {
       }
     }
     return new SandboxInputs(inputFiles, virtualInputs, inputSymlinks);
+  }
+
+  /**
+   * Determines which tree artifacts may be materialized in the sandbox as their root directory
+   * instead of one entry per file below it.
+   *
+   * <p>The contents of a tree artifact are, by construction, exactly the files found below its
+   * directory in the exec root (see {@link TreeArtifactValue#visitTree}). Materializing the
+   * directory as a whole therefore makes the same files visible to the spawn as materializing them
+   * one by one, as long as:
+   *
+   * <ol>
+   *   <li>the input map contains the tree artifact's full set of children, so that the spawn isn't
+   *       restricted to a subset of the tree (as is the case for the spawns generated from an
+   *       action template, which have individual tree file artifacts as their inputs); and
+   *   <li>nothing else in the input map, and none of the spawn's outputs, is mapped below the tree
+   *       artifact's root, since the sandbox can no longer create entries below a root that isn't a
+   *       real directory anymore.
+   * </ol>
+   *
+   * <p>The one observable difference is that empty directories below the tree artifact's root
+   * become visible to the spawn: {@link TreeArtifactValue} only tracks files, so they have no
+   * corresponding entry in the input map. Note that they aren't visible under remote execution
+   * either.
+   *
+   * @return a map from the root a tree artifact is mapped to in {@code inputMap} to the tree
+   *     artifact itself
+   */
+  private static ImmutableMap<PathFragment, SpecialArtifact> findCollapsibleTreeArtifacts(
+      Map<PathFragment, ActionInput> inputMap,
+      InputMetadataProvider inputMetadataProvider,
+      SandboxOutputs outputs) {
+    // The same tree artifact may be mapped to more than one root, e.g. to its canonical location as
+    // well as into one or more runfiles trees. Each occurrence is considered separately.
+    Map<PathFragment, SpecialArtifact> treeRoots = new HashMap<>();
+    Map<PathFragment, Integer> childCounts = new HashMap<>();
+    Set<PathFragment> rejectedRoots = new HashSet<>();
+
+    for (Map.Entry<PathFragment, ActionInput> entry : inputMap.entrySet()) {
+      if (!(entry.getValue() instanceof TreeFileArtifact child)) {
+        continue;
+      }
+      PathFragment root = treeRootFor(entry.getKey(), child);
+      if (root == null) {
+        continue;
+      }
+      SpecialArtifact previous = treeRoots.putIfAbsent(root, child.getParent());
+      if (previous != null && !previous.equals(child.getParent())) {
+        // Children of distinct tree artifacts are mapped to the same root.
+        rejectedRoots.add(root);
+      }
+      childCounts.merge(root, 1, Integer::sum);
+    }
+
+    // Require the input map to contain the tree artifact in its entirety.
+    treeRoots
+        .entrySet()
+        .removeIf(
+            entry -> {
+              TreeArtifactValue value = inputMetadataProvider.getTreeMetadata(entry.getValue());
+              return value == null || value.getChildren().size() != childCounts.get(entry.getKey());
+            });
+    treeRoots.keySet().removeAll(rejectedRoots);
+    if (treeRoots.isEmpty()) {
+      return ImmutableMap.of();
+    }
+
+    // Require the tree artifact to own everything that is mapped below its root. This can be
+    // violated by a runfiles tree that maps an unrelated artifact below a tree artifact, or by a
+    // spawn that declares an output below one of its input tree artifacts.
+    int minRootSegments =
+        treeRoots.keySet().stream().mapToInt(PathFragment::segmentCount).min().getAsInt();
+    for (Map.Entry<PathFragment, ActionInput> entry : inputMap.entrySet()) {
+      PathFragment owningRoot =
+          entry.getValue() instanceof TreeFileArtifact child
+              ? treeRootFor(entry.getKey(), child)
+              : null;
+      rejectEnclosingRoots(entry.getKey(), owningRoot, minRootSegments, treeRoots, rejectedRoots);
+    }
+    for (PathFragment output :
+        Iterables.concat(outputs.files().values(), outputs.dirs().values())) {
+      rejectEnclosingRoots(
+          output, /* owningRoot= */ null, minRootSegments, treeRoots, rejectedRoots);
+    }
+    treeRoots.keySet().removeAll(rejectedRoots);
+
+    return ImmutableMap.copyOf(treeRoots);
+  }
+
+  /**
+   * Adds every tree artifact root that encloses (or is equal to) {@code path} to {@code
+   * rejectedRoots}, stopping at {@code owningRoot} if it is encountered.
+   */
+  private static void rejectEnclosingRoots(
+      PathFragment path,
+      @Nullable PathFragment owningRoot,
+      int minRootSegments,
+      Map<PathFragment, SpecialArtifact> treeRoots,
+      Set<PathFragment> rejectedRoots) {
+    for (PathFragment current = path;
+        current != null && current.segmentCount() >= minRootSegments;
+        current = current.getParentDirectory()) {
+      if (current.equals(owningRoot)) {
+        return;
+      }
+      if (treeRoots.containsKey(current)) {
+        rejectedRoots.add(current);
+      }
+    }
+  }
+
+  /**
+   * Returns the path the root of {@code child}'s parent tree artifact is mapped to, given that
+   * {@code child} is mapped to {@code path}, or null if {@code path} doesn't end in {@code child}'s
+   * path relative to the tree artifact root.
+   */
+  @Nullable
+  private static PathFragment treeRootFor(PathFragment path, TreeFileArtifact child) {
+    PathFragment parentRelativePath = child.getParentRelativePath();
+    if (!path.endsWith(parentRelativePath)) {
+      return null;
+    }
+    return path.subFragment(0, path.segmentCount() - parentRelativePath.segmentCount());
   }
 
   /**

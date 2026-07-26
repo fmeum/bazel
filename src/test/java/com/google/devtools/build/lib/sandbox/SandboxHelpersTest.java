@@ -24,7 +24,10 @@ import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Iterables;
 import com.google.devtools.build.lib.actions.ActionInput;
+import com.google.devtools.build.lib.actions.Artifact.SpecialArtifact;
+import com.google.devtools.build.lib.actions.Artifact.TreeFileArtifact;
 import com.google.devtools.build.lib.actions.ArtifactRoot;
+import com.google.devtools.build.lib.actions.FileArtifactValue;
 import com.google.devtools.build.lib.actions.ParamFileActionInput;
 import com.google.devtools.build.lib.actions.ParameterFile.ParameterFileType;
 import com.google.devtools.build.lib.actions.PathMapper;
@@ -33,9 +36,11 @@ import com.google.devtools.build.lib.actions.VirtualActionInput;
 import com.google.devtools.build.lib.actions.util.ActionsTestUtil;
 import com.google.devtools.build.lib.exec.BinTools;
 import com.google.devtools.build.lib.exec.TreeDeleter;
+import com.google.devtools.build.lib.exec.util.FakeActionInputFileCache;
 import com.google.devtools.build.lib.exec.util.SpawnBuilder;
 import com.google.devtools.build.lib.sandbox.SandboxHelpers.SandboxInputs;
 import com.google.devtools.build.lib.sandbox.SandboxHelpers.SandboxOutputs;
+import com.google.devtools.build.lib.skyframe.TreeArtifactValue;
 import com.google.devtools.build.lib.testutil.Scratch;
 import com.google.devtools.build.lib.testutil.TestUtils;
 import com.google.devtools.build.lib.vfs.DigestHashFunction;
@@ -203,6 +208,147 @@ public class SandboxHelpersTest {
   private static ImmutableMap<PathFragment, ActionInput> inputMap(ActionInput... inputs) {
     return Arrays.stream(inputs)
         .collect(toImmutableMap(ActionInput::getExecPath, Function.identity()));
+  }
+
+  private ArtifactRoot outputRoot() {
+    return ArtifactRoot.asDerivedRoot(execRoot, ArtifactRoot.RootType.OUTPUT, "outputs");
+  }
+
+  private SpecialArtifact createTreeArtifact(String rootRelativePath) {
+    return ActionsTestUtil.createTreeArtifactWithGeneratingAction(outputRoot(), rootRelativePath);
+  }
+
+  /** Creates a file below the given tree artifact and registers it with the given builder. */
+  private TreeFileArtifact addTreeChild(
+      SpecialArtifact tree, TreeArtifactValue.Builder builder, String parentRelativePath)
+      throws IOException {
+    TreeFileArtifact child = TreeFileArtifact.createTreeOutput(tree, parentRelativePath);
+    scratch.file(child.getPath().getPathString(), parentRelativePath);
+    builder.putChild(child, FileArtifactValue.createForTesting(child.getPath()));
+    return child;
+  }
+
+  @Test
+  public void processInputFiles_treeArtifactFullyPresent_collapsesIntoRoot() throws Exception {
+    SpecialArtifact tree = createTreeArtifact("bin/tree");
+    TreeArtifactValue.Builder value = TreeArtifactValue.newBuilder(tree);
+    TreeFileArtifact file1 = addTreeChild(tree, value, "file1");
+    TreeFileArtifact file2 = addTreeChild(tree, value, "subdir/file2");
+    FakeActionInputFileCache metadataProvider = new FakeActionInputFileCache();
+    metadataProvider.putTreeArtifact(tree, value.build());
+
+    SandboxInputs inputs =
+        SandboxHelpers.processInputFiles(
+            inputMap(file1, file2),
+            execRoot,
+            metadataProvider,
+            SandboxOutputs.getEmptyInstance());
+
+    assertThat(inputs.getFiles())
+        .containsExactly(tree.getExecPath(), execRoot.getRelative(tree.getExecPath()));
+    assertThat(inputs.getSymlinks()).isEmpty();
+  }
+
+  @Test
+  public void processInputFiles_noMetadataProvider_doesNotCollapseTreeArtifact() throws Exception {
+    SpecialArtifact tree = createTreeArtifact("bin/tree");
+    TreeArtifactValue.Builder value = TreeArtifactValue.newBuilder(tree);
+    TreeFileArtifact file1 = addTreeChild(tree, value, "file1");
+    TreeFileArtifact file2 = addTreeChild(tree, value, "subdir/file2");
+
+    SandboxInputs inputs = SandboxHelpers.processInputFiles(inputMap(file1, file2), execRoot);
+
+    assertThat(inputs.getFiles())
+        .containsExactly(
+            file1.getExecPath(), execRoot.getRelative(file1.getExecPath()),
+            file2.getExecPath(), execRoot.getRelative(file2.getExecPath()));
+  }
+
+  @Test
+  public void processInputFiles_treeArtifactPartiallyPresent_doesNotCollapse() throws Exception {
+    SpecialArtifact tree = createTreeArtifact("bin/tree");
+    TreeArtifactValue.Builder value = TreeArtifactValue.newBuilder(tree);
+    TreeFileArtifact file1 = addTreeChild(tree, value, "file1");
+    TreeFileArtifact unused = addTreeChild(tree, value, "file2");
+    FakeActionInputFileCache metadataProvider = new FakeActionInputFileCache();
+    metadataProvider.putTreeArtifact(tree, value.build());
+
+    // Only one of the two children is an input, as is the case for the spawns generated from an
+    // action template.
+    SandboxInputs inputs =
+        SandboxHelpers.processInputFiles(
+            inputMap(file1), execRoot, metadataProvider, SandboxOutputs.getEmptyInstance());
+
+    assertThat(inputs.getFiles())
+        .containsExactly(file1.getExecPath(), execRoot.getRelative(file1.getExecPath()));
+  }
+
+  @Test
+  public void processInputFiles_otherInputBelowTreeArtifactRoot_doesNotCollapse() throws Exception {
+    SpecialArtifact tree = createTreeArtifact("bin/tree");
+    TreeArtifactValue.Builder value = TreeArtifactValue.newBuilder(tree);
+    TreeFileArtifact file1 = addTreeChild(tree, value, "file1");
+    FakeActionInputFileCache metadataProvider = new FakeActionInputFileCache();
+    metadataProvider.putTreeArtifact(tree, value.build());
+    ActionInput intruder = ActionsTestUtil.createArtifact(outputRoot(), "bin/tree/intruder");
+
+    SandboxInputs inputs =
+        SandboxHelpers.processInputFiles(
+            inputMap(file1, intruder),
+            execRoot,
+            metadataProvider,
+            SandboxOutputs.getEmptyInstance());
+
+    assertThat(inputs.getFiles())
+        .containsExactly(
+            file1.getExecPath(), execRoot.getRelative(file1.getExecPath()),
+            intruder.getExecPath(), execRoot.getRelative(intruder.getExecPath()));
+  }
+
+  @Test
+  public void processInputFiles_outputBelowTreeArtifactRoot_doesNotCollapse() throws Exception {
+    SpecialArtifact tree = createTreeArtifact("bin/tree");
+    TreeArtifactValue.Builder value = TreeArtifactValue.newBuilder(tree);
+    TreeFileArtifact file1 = addTreeChild(tree, value, "file1");
+    FakeActionInputFileCache metadataProvider = new FakeActionInputFileCache();
+    metadataProvider.putTreeArtifact(tree, value.build());
+
+    SandboxInputs inputs =
+        SandboxHelpers.processInputFiles(
+            inputMap(file1),
+            execRoot,
+            metadataProvider,
+            SandboxOutputs.create(
+                ImmutableSet.of(PathFragment.create("outputs/bin/tree/generated")),
+                ImmutableSet.of()));
+
+    assertThat(inputs.getFiles())
+        .containsExactly(file1.getExecPath(), execRoot.getRelative(file1.getExecPath()));
+  }
+
+  @Test
+  public void processInputFiles_treeArtifactMappedElsewhere_collapsesIntoMappedRoot()
+      throws Exception {
+    SpecialArtifact tree = createTreeArtifact("bin/tree");
+    TreeArtifactValue.Builder value = TreeArtifactValue.newBuilder(tree);
+    TreeFileArtifact file1 = addTreeChild(tree, value, "file1");
+    TreeFileArtifact file2 = addTreeChild(tree, value, "subdir/file2");
+    FakeActionInputFileCache metadataProvider = new FakeActionInputFileCache();
+    metadataProvider.putTreeArtifact(tree, value.build());
+    // A tree artifact that is mapped into a runfiles tree rather than to its canonical location.
+    PathFragment mappedRoot = PathFragment.create("bin/foo.runfiles/workspace/tree");
+
+    SandboxInputs inputs =
+        SandboxHelpers.processInputFiles(
+            ImmutableMap.<PathFragment, ActionInput>of(
+                mappedRoot.getRelative("file1"), file1,
+                mappedRoot.getRelative("subdir/file2"), file2),
+            execRoot,
+            metadataProvider,
+            SandboxOutputs.getEmptyInstance());
+
+    assertThat(inputs.getFiles())
+        .containsExactly(mappedRoot, execRoot.getRelative(tree.getExecPath()));
   }
 
   @Test

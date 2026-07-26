@@ -335,6 +335,21 @@ public abstract class SandboxOptions extends OptionsBase {
   public abstract boolean getExperimentalInMemorySandboxStashes();
 
   @Option(
+      name = "experimental_sandbox_symlink_tree_artifacts",
+      defaultValue = "false",
+      documentationCategory = OptionDocumentationCategory.EXECUTION_STRATEGY,
+      effectTags = {OptionEffectTag.HOST_MACHINE_RESOURCE_OPTIMIZATIONS, OptionEffectTag.EXECUTION},
+      help =
+          "If set to true, a tree artifact that an action depends on in its entirety is"
+              + " materialized in the sandbox as a single symlink to (or, for sandboxes that don't"
+              + " use symlinks, a single recursive copy of) its directory, instead of one entry per"
+              + " file below it. This speeds up sandbox creation for actions with large tree"
+              + " artifact inputs. Note that the action is then able to modify the contents of the"
+              + " tree artifact in the output tree, and that empty directories below the tree"
+              + " artifact's root become visible to it.")
+  public abstract boolean getExperimentalSandboxSymlinkTreeArtifacts();
+
+  @Option(
       name = "experimental_use_hermetic_linux_sandbox",
       defaultValue = "false",
       documentationCategory = OptionDocumentationCategory.EXECUTION_STRATEGY,
