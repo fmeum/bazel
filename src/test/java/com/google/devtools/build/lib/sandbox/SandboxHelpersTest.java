@@ -352,6 +352,49 @@ public class SandboxHelpersTest {
   }
 
   @Test
+  public void processInputFiles_emptyTreeArtifact_keepsRootEntry() throws Exception {
+    // A tree artifact without children is kept in the input map as the tree artifact itself rather
+    // than being expanded, so that the sandbox creates its (empty) directory. This is also the case
+    // for a tree artifact whose only contents are empty directories, as TreeArtifactValue doesn't
+    // track those. Either way, the entry must survive untouched.
+    SpecialArtifact tree = createTreeArtifact("bin/tree");
+    FakeActionInputFileCache metadataProvider = new FakeActionInputFileCache();
+    metadataProvider.putTreeArtifact(tree, TreeArtifactValue.empty());
+
+    SandboxInputs inputs =
+        SandboxHelpers.processInputFiles(
+            inputMap(tree), execRoot, metadataProvider, SandboxOutputs.getEmptyInstance());
+
+    assertThat(inputs.getFiles())
+        .containsExactly(tree.getExecPath(), execRoot.getRelative(tree.getExecPath()));
+    assertThat(inputs.getSymlinks()).isEmpty();
+  }
+
+  @Test
+  public void processInputFiles_emptyTreeArtifactNextToCollapsedOne_keepsBothRootEntries()
+      throws Exception {
+    SpecialArtifact emptyTree = createTreeArtifact("bin/empty_tree");
+    SpecialArtifact tree = createTreeArtifact("bin/tree");
+    TreeArtifactValue.Builder value = TreeArtifactValue.newBuilder(tree);
+    TreeFileArtifact file1 = addTreeChild(tree, value, "file1");
+    FakeActionInputFileCache metadataProvider = new FakeActionInputFileCache();
+    metadataProvider.putTreeArtifact(emptyTree, TreeArtifactValue.empty());
+    metadataProvider.putTreeArtifact(tree, value.build());
+
+    SandboxInputs inputs =
+        SandboxHelpers.processInputFiles(
+            inputMap(emptyTree, file1),
+            execRoot,
+            metadataProvider,
+            SandboxOutputs.getEmptyInstance());
+
+    assertThat(inputs.getFiles())
+        .containsExactly(
+            emptyTree.getExecPath(), execRoot.getRelative(emptyTree.getExecPath()),
+            tree.getExecPath(), execRoot.getRelative(tree.getExecPath()));
+  }
+
+  @Test
   public void atomicallyWriteVirtualInput_writesParamFile() throws Exception {
     ParamFileActionInput paramFile =
         new ParamFileActionInput(
