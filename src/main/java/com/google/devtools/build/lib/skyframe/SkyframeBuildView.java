@@ -631,6 +631,7 @@ public final class SkyframeBuildView {
       CoverageReportActionsWrapperSupplier coverageReportActionsWrapperSupplier,
       boolean keepGoing,
       boolean skipIncompatibleExplicitTargets,
+      boolean multipleTargetPlatforms,
       boolean checkForActionConflicts,
       boolean extraActionTopLevelOnly,
       QuiescingExecutors executors,
@@ -674,6 +675,7 @@ public final class SkyframeBuildView {
                         /* explicitlyRequested= */ explicitTargetPatterns.contains(
                             ctKey.getLabel()),
                         skipIncompatibleExplicitTargets,
+                        multipleTargetPlatforms,
                         extraActionTopLevelOnly,
                         keepGoing))
             .collect(ImmutableSet.toImmutableSet());
@@ -687,6 +689,7 @@ public final class SkyframeBuildView {
                         topLevelArtifactContext,
                         /* explicitlyRequested= */ explicitTargetPatterns.contains(k.getLabel()),
                         skipIncompatibleExplicitTargets,
+                        multipleTargetPlatforms,
                         extraActionTopLevelOnly,
                         keepGoing))
             .collect(ImmutableSet.toImmutableSet());

@@ -746,8 +746,13 @@ public abstract class PostAnalysisQueryEnvironment<T> extends AbstractBlazeQuery
   /** A wrapper class for the set of top-level configurations in a query. */
   public static class TopLevelConfigurations {
 
-    /** A map of non-null configured top-level targets sorted by configuration checksum. */
-    private final ImmutableMap<Label, BuildConfigurationValue> nonNulls;
+    /**
+     * The non-null configurations of each top-level target.
+     *
+     * <p>A label maps to more than one configuration when {@code --platforms} names several target
+     * platforms, in which case every top-level target is configured once per platform.
+     */
+    private final ImmutableListMultimap<Label, BuildConfigurationValue> nonNulls;
 
     /**
      * {@code nonNulls} may often have many duplicate values in its value set so we store a sorted
@@ -760,8 +765,8 @@ public abstract class PostAnalysisQueryEnvironment<T> extends AbstractBlazeQuery
 
     public TopLevelConfigurations(
         Collection<TargetAndConfiguration> topLevelTargetsAndConfigurations) {
-      ImmutableMap.Builder<Label, BuildConfigurationValue> nonNullsBuilder =
-          ImmutableMap.builderWithExpectedSize(topLevelTargetsAndConfigurations.size());
+      ImmutableListMultimap.Builder<Label, BuildConfigurationValue> nonNullsBuilder =
+          ImmutableListMultimap.builder();
       ImmutableList.Builder<Label> nullsBuilder = new ImmutableList.Builder<>();
       for (TargetAndConfiguration targetAndConfiguration : topLevelTargetsAndConfigurations) {
         if (targetAndConfiguration.getConfiguration() == null) {
@@ -771,7 +776,7 @@ public abstract class PostAnalysisQueryEnvironment<T> extends AbstractBlazeQuery
               targetAndConfiguration.getLabel(), targetAndConfiguration.getConfiguration());
         }
       }
-      nonNulls = nonNullsBuilder.buildOrThrow();
+      nonNulls = nonNullsBuilder.build();
       nonNullConfigs =
           ImmutableSortedSet.copyOf(
               Comparator.comparing(BuildConfigurationValue::checksum), nonNulls.values());
@@ -784,13 +789,16 @@ public abstract class PostAnalysisQueryEnvironment<T> extends AbstractBlazeQuery
 
     // This method returns the configuration of a top-level target if it's not null-configured and
     // otherwise returns null (signifying it is null configured).
+    // If the target was configured for several target platforms, this returns the configuration of
+    // the first one, matching the configuration the build as a whole is reported under.
     @Nullable
     public BuildConfigurationValue getConfigurationForTopLevelTarget(Label label) {
       Preconditions.checkArgument(
           isTopLevelTarget(label),
           "Attempting to get top-level configuration for non-top-level target %s.",
           label);
-      return nonNulls.get(label);
+      ImmutableList<BuildConfigurationValue> configurations = nonNulls.get(label);
+      return configurations.isEmpty() ? null : configurations.get(0);
     }
 
     public Iterable<BuildConfigurationValue> getConfigurations() {

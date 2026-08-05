@@ -129,9 +129,11 @@ public final class BuildConfigurationKeyProducer<C>
     }
 
     List<Label> targetPlatforms = platformOptions.getPlatforms();
-    if (targetPlatforms.size() == 1) {
-      // TODO: https://github.com/bazelbuild/bazel/issues/19807 - We define this flag to only use
-      //  the first value and ignore any subsequent ones. Remove this check as part of cleanup.
+    if (!targetPlatforms.isEmpty()) {
+      // A multi-valued --platforms is only meaningful for the top-level options, which BuildView
+      // splits into one single-platform configuration per entry before any configuration is
+      // created. Anything else (e.g. a transition that sets several platforms) only ever uses the
+      // first entry, matching PlatformConfiguration#getTargetPlatform.
       tasks.enqueue(
           new PlatformProducer(
               targetPlatforms.getFirst(),
@@ -140,7 +142,6 @@ public final class BuildConfigurationKeyProducer<C>
               this::checkTargetPlatformFlags));
       return runAfter;
     } else {
-      Verify.verify(targetPlatforms.isEmpty());
       return this::mergeFromPlatformMapping;
     }
   }

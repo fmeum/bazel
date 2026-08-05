@@ -738,6 +738,7 @@ java_test(
     srcs = ["PlatformOptionsTest.java"],
     deps = [
         "//src/main/java/com/google/devtools/build/lib/analysis:platform_options",
+        "//src/main/java/com/google/devtools/build/lib/analysis/config:build_options",
         "//src/main/java/com/google/devtools/build/lib/cmdline",
         "//src/main/java/com/google/devtools/build/lib/skyframe/config:platform_mapping_key",
         "//src/main/java/com/google/devtools/build/lib/vfs:pathfragment",

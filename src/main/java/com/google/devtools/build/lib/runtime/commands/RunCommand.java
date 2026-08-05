@@ -17,6 +17,7 @@ package com.google.devtools.build.lib.runtime.commands;
 import static com.google.common.collect.ImmutableList.toImmutableList;
 import static com.google.devtools.build.lib.runtime.Command.BuildPhase.EXECUTES;
 import static java.nio.charset.StandardCharsets.ISO_8859_1;
+import static java.util.stream.Collectors.joining;
 
 import com.google.common.base.Joiner;
 import com.google.common.base.Preconditions;
@@ -34,6 +35,7 @@ import com.google.devtools.build.lib.actions.ExecException;
 import com.google.devtools.build.lib.analysis.AliasProvider;
 import com.google.devtools.build.lib.analysis.ConfiguredTarget;
 import com.google.devtools.build.lib.analysis.FilesToRunProvider;
+import com.google.devtools.build.lib.analysis.PlatformOptions;
 import com.google.devtools.build.lib.analysis.RunfilesSupport;
 import com.google.devtools.build.lib.analysis.ShToolchain;
 import com.google.devtools.build.lib.analysis.config.BuildConfigurationValue;
@@ -54,6 +56,7 @@ import com.google.devtools.build.lib.buildtool.BuildTool;
 import com.google.devtools.build.lib.buildtool.PathPrettyPrinter;
 import com.google.devtools.build.lib.buildtool.buildevent.ExecRequestEvent;
 import com.google.devtools.build.lib.buildtool.buildevent.RunBuildCompleteEvent;
+import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.cmdline.RepositoryName;
 import com.google.devtools.build.lib.events.Event;
 import com.google.devtools.build.lib.events.Reporter;
@@ -263,6 +266,21 @@ public class RunCommand implements BlazeCommand {
       return reportAndCreateFailureResult(
           env, "Must specify a target to run", Code.NO_TARGET_SPECIFIED);
     }
+    // `run` has to pick a single executable, so a multi-valued --platforms (which configures every
+    // top-level target once per target platform) is ambiguous.
+    PlatformOptions platformOptions = options.getOptions(PlatformOptions.class);
+    if (platformOptions != null && platformOptions.getPlatforms().size() > 1) {
+      env.getReporter()
+          .post(
+              new RunBuildCompleteEvent(
+                  ExitCode.COMMAND_LINE_ERROR, env.getRuntime().getClock().currentTimeMillis()));
+      return reportAndCreateFailureResult(
+          env,
+          "'run' only supports a single target platform, but --platforms was set to "
+              + platformOptions.getPlatforms().stream().map(Label::toString).collect(joining(", ")),
+          Code.TOO_MANY_TARGETS_SPECIFIED);
+    }
+
     String targetString = targetAndArgs.get(0);
     RunUnder runUnder = options.getOptions(CoreOptions.class).getRunUnder();
 

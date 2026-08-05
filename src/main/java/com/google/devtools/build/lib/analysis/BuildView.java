@@ -257,6 +257,7 @@ public class BuildView {
     eventBus.post(new AnalysisPhaseStartedEvent(labelToTargetMap.values()));
 
     // Prepare the analysis phase
+    ImmutableList<BuildConfigurationValue> topLevelConfigs;
     BuildConfigurationValue topLevelConfig;
     BuildOptions topLevelConfigurationTrimmedOfTestOptions;
     boolean shouldDiscardAnalysisCache;
@@ -281,8 +282,27 @@ public class BuildView {
               viewOptions.getMaxConfigChangesToShow(),
               viewOptions.getAllowAnalysisCacheDiscards(),
               additionalConfigurationChangeEvent);
-      skyframeExecutor.setBaselineConfiguration(targetOptions, eventHandler);
-      topLevelConfig = skyframeExecutor.createConfiguration(eventHandler, targetOptions, keepGoing);
+      // --platforms may name more than one target platform. In that case every top-level target is
+      // analyzed once per platform, each time in a configuration whose --platforms holds exactly
+      // that one platform. This keeps downstream transitions (which assume a single target
+      // platform) working unchanged.
+      ImmutableList<BuildOptions> topLevelOptions =
+          PlatformOptions.splitByTargetPlatform(targetOptions);
+      // The baseline is the first target platform's options rather than the multi-platform options
+      // so that this platform's output paths - and therefore its analysis and action cache hits -
+      // match a build that only requested that one platform. The remaining platforms differ from
+      // the baseline in --platforms and so land in their own output directories.
+      skyframeExecutor.setBaselineConfiguration(topLevelOptions.get(0), eventHandler);
+      ImmutableList.Builder<BuildConfigurationValue> topLevelConfigsBuilder =
+          ImmutableList.builderWithExpectedSize(topLevelOptions.size());
+      for (BuildOptions options : topLevelOptions) {
+        topLevelConfigsBuilder.add(
+            skyframeExecutor.createConfiguration(eventHandler, options, keepGoing));
+      }
+      topLevelConfigs = topLevelConfigsBuilder.build();
+      // The first target platform's configuration represents the build wherever a single
+      // configuration is needed (convenience symlinks, `bazel run`, the BEP's build metadata).
+      topLevelConfig = topLevelConfigs.get(0);
     }
 
     if (remoteAnalysisCachingDependenciesProvider.mode() == RemoteAnalysisCacheMode.DOWNLOAD) {
@@ -350,7 +370,10 @@ public class BuildView {
     skyframeBuildView.setConfiguration(topLevelConfig, targetOptions, shouldDiscardAnalysisCache);
 
     eventBus.post(new MakeEnvironmentEvent(topLevelConfig.getMakeEnvironment()));
-    eventBus.post(topLevelConfig.toBuildEvent());
+    // Every top-level configuration must be announced: top-level targets reference all of them.
+    for (BuildConfigurationValue config : topLevelConfigs) {
+      eventBus.post(config.toBuildEvent());
+    }
 
     // Lightly chastize the user for disabling visibility checking. (Previously, we spammed them for
     // every visibility failure; #16767.)
@@ -361,20 +384,22 @@ public class BuildView {
                   + " (--nocheck_visibility)."));
     }
 
-    var configurationKey = topLevelConfig.getKey();
     ImmutableList<ConfiguredTargetKey> topLevelCtKeys =
-        labelToTargetMap.keySet().stream()
-            .map(
-                label ->
-                    ConfiguredTargetKey.builder()
-                        .setLabel(label)
-                        .setConfigurationKey(configurationKey)
-                        .build())
+        topLevelConfigs.stream()
+            .flatMap(
+                config ->
+                    labelToTargetMap.keySet().stream()
+                        .map(
+                            label ->
+                                ConfiguredTargetKey.builder()
+                                    .setLabel(label)
+                                    .setConfigurationKey(config.getKey())
+                                    .build()))
             .collect(toImmutableList());
 
     ImmutableList<TopLevelAspectsKey> aspectKeys =
         createTopLevelAspectKeys(
-            aspects, aspectsParameters, labelToTargetMap, topLevelConfig, eventHandler);
+            aspects, aspectsParameters, labelToTargetMap, topLevelConfigs, eventHandler);
 
     skyframeExecutor.setRemoteAnalysisCachingDependenciesProvider(
         remoteAnalysisCachingDependenciesProvider, remoteAnalysisCacheReaderDeps);
@@ -424,6 +449,7 @@ public class BuildView {
                         configuredTargets, allTargetsToTest, eventHandler, eventBus),
                 keepGoing,
                 skipIncompatibleExplicitTargets,
+                /* multipleTargetPlatforms= */ topLevelConfigs.size() > 1,
                 checkForActionConflicts,
                 viewOptions.getExtraActionTopLevelOnly(),
                 executors,
@@ -498,7 +524,8 @@ public class BuildView {
                 skyframeAnalysisResult.getConfiguredTargets(),
                 explicitTargetPatterns,
                 keepGoing,
-                skipIncompatibleExplicitTargets);
+                skipIncompatibleExplicitTargets,
+                /* multipleTargetPlatforms= */ topLevelConfigs.size() > 1);
 
         if (!platformRestrictions.targetsWithErrors().isEmpty()) {
           // If there are any errored targets (e.g. incompatible targets that are explicitly
@@ -551,7 +578,7 @@ public class BuildView {
       List<String> aspects,
       ImmutableMap<String, String> aspectsParameters,
       ImmutableMap<Label, Target> topLevelTargets,
-      BuildConfigurationValue configuration,
+      ImmutableList<BuildConfigurationValue> configurations,
       ExtendedEventHandler eventHandler)
       throws InterruptedException, ViewCreationFailedException {
     RepositoryMapping mainRepoMapping;
@@ -631,15 +658,22 @@ public class BuildView {
       return ImmutableList.of();
     }
 
-    return topLevelTargets.entrySet().stream()
-        // Do not run aspects on materializer targets since registering actions is not allowed in
-        // materializer rules (and thus aspects that run on them) and many aspects do register
-        // actions, and there isn't much for an aspect to do on a materializer target anyway.
-        .filter(entry -> !entry.getValue().isMaterializerRule())
-        .map(
-            target ->
-                AspectKeyCreator.createTopLevelAspectsKey(
-                    aspectClasses, target.getKey(), configuration, aspectsParameters))
+    return configurations.stream()
+        .flatMap(
+            configuration ->
+                topLevelTargets.entrySet().stream()
+                    // Do not run aspects on materializer targets since registering actions is not
+                    // allowed in materializer rules (and thus aspects that run on them) and many
+                    // aspects do register actions, and there isn't much for an aspect to do on a
+                    // materializer target anyway.
+                    .filter(entry -> !entry.getValue().isMaterializerRule())
+                    .map(
+                        target ->
+                            AspectKeyCreator.createTopLevelAspectsKey(
+                                aspectClasses,
+                                target.getKey(),
+                                configuration,
+                                aspectsParameters)))
         .collect(toImmutableList());
   }
 
