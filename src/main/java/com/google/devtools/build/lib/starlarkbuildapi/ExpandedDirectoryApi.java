@@ -23,8 +23,7 @@ import net.starlark.java.eval.StarlarkValue;
 @StarlarkBuiltin(
     name = "ExpandedDirectory",
     category = DocCategory.BUILTIN,
-    doc =
-        "Represents an expanded directory that makes the files within the it directly accessible.")
+    doc = "Represents an expanded directory that makes the files within it directly accessible.")
 public interface ExpandedDirectoryApi extends StarlarkValue {
 
   @StarlarkMethod(

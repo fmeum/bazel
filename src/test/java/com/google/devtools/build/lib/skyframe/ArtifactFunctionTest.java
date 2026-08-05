@@ -246,6 +246,7 @@ public class ArtifactFunctionTest extends ArtifactFunctionTestCase {
           public ImmutableList<DummyAction> generateActionsForInputArtifacts(
               ImmutableList<TreeFileArtifact> inputTreeFileArtifacts,
               ActionLookupKey artifactOwner,
+              InputFileReader inputFileReader,
               EventHandler eventHandler) {
             ImmutableList.Builder<DummyAction> actions = ImmutableList.builder();
             for (SpecialArtifact outputTree : ImmutableSet.of(outputTree1, outputTree2)) {
@@ -288,6 +289,7 @@ public class ArtifactFunctionTest extends ArtifactFunctionTestCase {
           public ImmutableList<DummyAction> generateActionsForInputArtifacts(
               ImmutableList<TreeFileArtifact> inputTreeFileArtifacts,
               ActionLookupKey artifactOwner,
+              InputFileReader inputFileReader,
               EventHandler eventHandler) {
             ImmutableList.Builder<DummyAction> actions = ImmutableList.builder();
             actions.add(

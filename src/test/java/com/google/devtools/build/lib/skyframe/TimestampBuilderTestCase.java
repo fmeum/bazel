@@ -42,6 +42,7 @@ import com.google.devtools.build.lib.actions.ActionResult;
 import com.google.devtools.build.lib.actions.Actions;
 import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.actions.Artifact.DerivedArtifact;
+import com.google.devtools.build.lib.actions.ArtifactPathResolver;
 import com.google.devtools.build.lib.actions.ArtifactRoot;
 import com.google.devtools.build.lib.actions.ArtifactRoot.RootType;
 import com.google.devtools.build.lib.actions.BasicActionLookupValue;
@@ -169,7 +170,6 @@ public abstract class TimestampBuilderTestCase extends FoundationTestCase {
     inMemoryCache = new InMemoryActionCache();
     tsgm = new TimestampGranularityMonitor(clock);
     actions = new LinkedHashSet<>();
-    actionTemplateExpansionFunction = new ActionTemplateExpansionFunction(actionKeyContext);
   }
 
   protected void clearActions() {
@@ -251,6 +251,18 @@ public abstract class TimestampBuilderTestCase extends FoundationTestCase {
         /* actionExecutionSalt= */ "",
         /* maxStdoutErrBytes= */ Integer.MAX_VALUE);
 
+    ActionRewindStrategy actionRewindStrategy =
+        new ActionRewindStrategy(
+            skyframeActionExecutor,
+            BugReporter.defaultInstance(),
+            () -> RemoteAnalysisCacheDeps.createDisabled());
+    actionTemplateExpansionFunction =
+        new ActionTemplateExpansionFunction(
+            actionKeyContext,
+            actionInputMap -> ArtifactPathResolver.IDENTITY,
+            skyframeActionExecutor,
+            actionRewindStrategy);
+
     InMemoryMemoizingEvaluator evaluator =
         new InMemoryMemoizingEvaluator(
             ImmutableMap.<SkyFunctionName, SkyFunction>builder()
@@ -269,10 +281,7 @@ public abstract class TimestampBuilderTestCase extends FoundationTestCase {
                 .put(
                     SkyFunctions.ACTION_EXECUTION,
                     new ActionExecutionFunction(
-                        new ActionRewindStrategy(
-                            skyframeActionExecutor,
-                            BugReporter.defaultInstance(),
-                            () -> RemoteAnalysisCacheDeps.createDisabled()),
+                        actionRewindStrategy,
                         skyframeActionExecutor,
                         evaluatorRef::get,
                         directories,

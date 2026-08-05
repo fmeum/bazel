@@ -207,6 +207,7 @@ public final class StarlarkMapActionTemplate extends ActionKeyComputer
   public ImmutableList<AbstractAction> generateActionsForInputArtifacts(
       ImmutableList<TreeFileArtifact> inputTreeFileArtifacts,
       ActionLookupKey artifactOwner,
+      InputFileReader inputFileReader,
       EventHandler eventHandler)
       throws ActionConflictException, ActionExecutionException, InterruptedException {
 
@@ -220,8 +221,10 @@ public final class StarlarkMapActionTemplate extends ActionKeyComputer
             artifactOwner,
             spawnActionBuilder,
             () -> repoMapping,
+            ImmutableSet.copyOf(inputDirectories.values()),
             ImmutableSet.copyOf(outputDirectories.values()),
-            getExecutionInfo());
+            getExecutionInfo(),
+            inputFileReader);
 
     ImmutableMap.Builder<String, ExpandedDirectory> expandedDirectories = ImmutableMap.builder();
     for (Entry<String, SpecialArtifact> entry : inputDirectories.entrySet()) {

@@ -39,6 +39,7 @@ import com.google.devtools.build.lib.actions.Artifact.SpecialArtifact;
 import com.google.devtools.build.lib.actions.Artifact.SpecialArtifactType;
 import com.google.devtools.build.lib.actions.Artifact.TreeFileArtifact;
 import com.google.devtools.build.lib.actions.ArtifactOwner;
+import com.google.devtools.build.lib.actions.ArtifactPathResolver;
 import com.google.devtools.build.lib.actions.ArtifactRoot;
 import com.google.devtools.build.lib.actions.ArtifactRoot.RootType;
 import com.google.devtools.build.lib.actions.BasicActionLookupValue;
@@ -93,7 +94,12 @@ public final class ActionTemplateExpansionFunctionTest extends FoundationTestCas
               Artifact.ARTIFACT,
               new DummyArtifactFunction(artifactValueMap),
               SkyFunctions.ACTION_TEMPLATE_EXPANSION,
-              new ActionTemplateExpansionFunction(new ActionKeyContext())),
+              new ActionTemplateExpansionFunction(
+                  new ActionKeyContext(),
+                  actionInputMap -> ArtifactPathResolver.IDENTITY,
+                  // Only used to recover from lost inputs read by an action template.
+                  /* skyframeActionExecutor= */ null,
+                  /* actionRewindStrategy= */ null)),
           differencer);
 
   @Before
@@ -198,6 +204,7 @@ public final class ActionTemplateExpansionFunctionTest extends FoundationTestCas
           public ImmutableList<DummyAction> generateActionsForInputArtifacts(
               ImmutableList<TreeFileArtifact> inputTreeFileArtifacts,
               ActionLookupKey artifactOwner,
+              InputFileReader inputFileReader,
               EventHandler eventHandler) {
             return ImmutableList.of();
           }
@@ -232,6 +239,7 @@ public final class ActionTemplateExpansionFunctionTest extends FoundationTestCas
           public ImmutableList<DummyAction> generateActionsForInputArtifacts(
               ImmutableList<TreeFileArtifact> inputTreeFileArtifacts,
               ActionLookupKey artifactOwner,
+              InputFileReader inputFileReader,
               EventHandler eventHandler) {
             TreeFileArtifact input = Iterables.getOnlyElement(inputTreeFileArtifacts);
             TreeFileArtifact outputWithWrongOwner =
@@ -261,6 +269,7 @@ public final class ActionTemplateExpansionFunctionTest extends FoundationTestCas
           public ImmutableList<DummyAction> generateActionsForInputArtifacts(
               ImmutableList<TreeFileArtifact> inputTreeFileArtifacts,
               ActionLookupKey artifactOwner,
+              InputFileReader inputFileReader,
               EventHandler eventHandler) {
             TreeFileArtifact input = Iterables.getOnlyElement(inputTreeFileArtifacts);
             Artifact notTreeFileArtifact =
@@ -292,6 +301,7 @@ public final class ActionTemplateExpansionFunctionTest extends FoundationTestCas
           public ImmutableList<DummyAction> generateActionsForInputArtifacts(
               ImmutableList<TreeFileArtifact> inputTreeFileArtifacts,
               ActionLookupKey artifactOwner,
+              InputFileReader inputFileReader,
               EventHandler eventHandler) {
             TreeFileArtifact input = Iterables.getOnlyElement(inputTreeFileArtifacts);
             TreeFileArtifact outputUnderWrongTree =
@@ -324,6 +334,7 @@ public final class ActionTemplateExpansionFunctionTest extends FoundationTestCas
           public ImmutableList<DummyAction> generateActionsForInputArtifacts(
               ImmutableList<TreeFileArtifact> inputTreeFileArtifacts,
               ActionLookupKey artifactOwner,
+              InputFileReader inputFileReader,
               EventHandler eventHandler) {
             TreeFileArtifact input = Iterables.getOnlyElement(inputTreeFileArtifacts);
             return ImmutableList.of(
@@ -358,6 +369,7 @@ public final class ActionTemplateExpansionFunctionTest extends FoundationTestCas
           public ImmutableList<DummyAction> generateActionsForInputArtifacts(
               ImmutableList<TreeFileArtifact> inputTreeFileArtifacts,
               ActionLookupKey artifactOwner,
+              InputFileReader inputFileReader,
               EventHandler eventHandler) {
             ImmutableList.Builder<DummyAction> actions = ImmutableList.builder();
             ImmutableListMultimap<SpecialArtifact, TreeFileArtifact> inputTreeArtifactsToChildren =

@@ -56,6 +56,7 @@ import com.google.devtools.build.lib.profiler.ProfilerTask;
 import com.google.devtools.build.lib.remote.common.LostInputsEvent;
 import com.google.devtools.build.lib.server.FailureDetails.ActionRewinding;
 import com.google.devtools.build.lib.server.FailureDetails.ActionRewinding.Code;
+import com.google.devtools.build.lib.skyframe.ActionTemplateExpansionValue.ActionTemplateExpansionKey;
 import com.google.devtools.build.lib.skyframe.ActionUtils;
 import com.google.devtools.build.lib.skyframe.ArtifactFunction;
 import com.google.devtools.build.lib.skyframe.ArtifactFunction.ArtifactDependencies;
@@ -269,6 +270,70 @@ public final class ActionRewindStrategy {
           .post(new ActionRewoundEvent(actionStartTimeNanos, BlazeClock.nanoTime(), failedAction));
     }
     skyframeActionExecutor.prepareForRewinding(failedKey, failedAction, depsToRewind.build());
+
+    return rewindPlanResult;
+  }
+
+  /**
+   * Returns a {@link RewindPlanResult} specifying the Skyframe nodes to rewind to recreate the
+   * inputs that {@code failedTemplate} lost while reading them during its expansion.
+   *
+   * <p>If {@code #allowSkyframeRestarts} is true, the returned {@link RewindPlanResult} may return
+   * null for {@link RewindPlanResult#toNullIfMissingDependenciesElseReset} if some dependencies are
+   * not yet done. Otherwise, the returned {@link
+   * RewindPlanResult#toNullIfMissingDependenciesElseReset} always returns a {@link Reset}.
+   *
+   * <p>Also prepares {@link SkyframeActionExecutor} for the rewind plan.
+   *
+   * @throws ActionRewindException if rewinding is disabled, or if any lost inputs have been seen by
+   *     {@code failedKey} as lost before too many times
+   */
+  public RewindPlanResult prepareRewindPlanForLostTemplateExpansionInputs(
+      ActionTemplateExpansionKey failedKey,
+      ActionTemplate<?> failedTemplate,
+      Set<SkyKey> failedKeyDeps,
+      ImmutableSetMultimap<String, ActionInput> lostInputsByDigest,
+      InputMetadataProvider metadataProvider,
+      Environment env)
+      throws ActionRewindException, InterruptedException {
+    checkRewindingEnabled(lostInputsByDigest, LostType.INPUT, env.getListener());
+
+    ImmutableList<LostInputRecord> lostInputRecords = createLostInputRecords(lostInputsByDigest);
+
+    SetMultimap<ActionInput, Artifact> owners =
+        calculateLostInputOwners(lostInputsByDigest.values(), metadataProvider);
+
+    ImmutableList.Builder<ActionAnalysisMetadata> depsToRewind = ImmutableList.builder();
+    RewindPlanResult rewindPlanResult;
+    try (var ignored =
+        AutoProfiler.profiled(
+            "Preparing rewind plan for %d lost inputs of %s"
+                .formatted(lostInputRecords.size(), failedTemplate.prettyPrint()),
+            ProfilerTask.ACTION_REWINDING)) {
+      rewindPlanResult =
+          prepareRewindPlan(
+              failedKey, failedKeyDeps, lostInputsByDigest, owners, env, depsToRewind);
+    }
+    Reset rewindPlan = rewindPlanResult.reset;
+    if (rewindPlan == null) {
+      // Skips steps that manipulate persistent state, structures retained by this class and
+      // information tracked by SkyframeActionExecutor, if a restart is needed.
+      //
+      // This includes counting if an input has been lost too many times.
+      return rewindPlanResult;
+    }
+
+    checkIfTemplateExpansionLostInputTooManyTimes(
+        failedKey, failedTemplate, lostInputRecords, lostInputsByDigest);
+
+    if (shouldRecordRewindEventSample()) {
+      rewindEventSamples.add(
+          createLostInputRewindEvent(failedTemplate, rewindPlan, lostInputRecords));
+    }
+
+    for (ActionAnalysisMetadata dep : depsToRewind.build()) {
+      skyframeActionExecutor.prepareDepForRewinding(failedKey, dep);
+    }
 
     return rewindPlanResult;
   }
@@ -607,6 +672,54 @@ public final class ActionRewindStrategy {
             "lost input again (#%s) for the same action. lostInput: %s, "
                 + "lostInput digest: %s, failedAction: %.10000s",
             losses, lostInputsByDigest.get(digest), digest, failedAction);
+      }
+    }
+  }
+
+  /**
+   * Checks if the template expansion identified by {@code failedKey} has lost any of the inputs in
+   * {@code currentAttemptLostInputRecords} too many times.
+   *
+   * @throws ActionRewindException if any lost input has been seen by {@code failedKey} as lost
+   *     before too many times
+   */
+  private void checkIfTemplateExpansionLostInputTooManyTimes(
+      ActionTemplateExpansionKey failedKey,
+      ActionTemplate<?> failedTemplate,
+      ImmutableList<LostInputRecord> currentAttemptLostInputRecords,
+      ImmutableSetMultimap<String, ActionInput> lostInputsByDigest)
+      throws ActionRewindException {
+    lostInputsCount.addAndGet(currentAttemptLostInputRecords.size());
+
+    Multiset<LostInputRecord> historyForThisTemplate =
+        currentBuildLostInputRecords.computeIfAbsent(
+            failedKey, k -> ConcurrentHashMultiset.create());
+    if (!historyForThisTemplate.isEmpty()) {
+      sameActionLostInputsCount.incrementAndGet();
+    }
+
+    for (LostInputRecord lostInputRecord : currentAttemptLostInputRecords) {
+      String digest = lostInputRecord.lostInputDigest();
+      int losses = historyForThisTemplate.add(lostInputRecord, /* occurrences= */ 1) + 1;
+      if (losses > skyframeActionExecutor.maxRepeatedLostInputs()) {
+        ActionInput lostInput =
+            Iterables.find(
+                lostInputsByDigest.get(digest),
+                lost -> lost.getExecPathString().equals(lostInputRecord.lostInputPath));
+        ActionRewindException e =
+            new GenericActionRewindException(
+                String.format(
+                    "lost input too many times (#%s) for the same action template. lostInput: %s,"
+                        + " lostInput digest: %s, failedTemplate: %.10000s",
+                    losses, lostInput, digest, failedTemplate.prettyPrint()),
+                ActionRewinding.Code.LOST_INPUT_TOO_MANY_TIMES);
+        bugReporter.sendBugReport(e);
+        throw e;
+      } else if (losses > 1) {
+        logger.atInfo().log(
+            "lost input again (#%s) for the same action template. lostInput: %s, "
+                + "lostInput digest: %s, failedTemplate: %.10000s",
+            losses, lostInputsByDigest.get(digest), digest, failedTemplate.prettyPrint());
       }
     }
   }
@@ -1026,7 +1139,9 @@ public final class ActionRewindStrategy {
   }
 
   private static ActionRewindEvent createLostInputRewindEvent(
-      Action failedAction, Reset rewindPlan, ImmutableList<LostInputRecord> lostInputRecords) {
+      ActionAnalysisMetadata failedAction,
+      Reset rewindPlan,
+      ImmutableList<LostInputRecord> lostInputRecords) {
     return createRewindEventBuilder(rewindPlan, lostInputRecords)
         .setActionDescription(
             ActionDescription.newBuilder()
