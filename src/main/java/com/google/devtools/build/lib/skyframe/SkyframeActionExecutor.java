@@ -69,6 +69,7 @@ import com.google.devtools.build.lib.actions.FileArtifactValue;
 import com.google.devtools.build.lib.actions.FilesetOutputTree;
 import com.google.devtools.build.lib.actions.ImportantOutputHandler;
 import com.google.devtools.build.lib.actions.ImportantOutputHandler.ImportantOutputException;
+import com.google.devtools.build.lib.actions.ImportantOutputHandler.LostArtifacts;
 import com.google.devtools.build.lib.actions.InputMetadataProvider;
 import com.google.devtools.build.lib.actions.LostInputsActionExecutionException;
 import com.google.devtools.build.lib.actions.NotifyOnActionCacheHit;
@@ -486,6 +487,14 @@ public final class SkyframeActionExecutor {
         inputArtifactData,
         outputArtifacts,
         rewindingEnabled);
+  }
+
+  /**
+   * Returns the artifacts that were found to be lost while reading through the given filesystem,
+   * which must have been created by the {@link OutputService}.
+   */
+  LostArtifacts getLostArtifacts(FileSystem actionFileSystem) {
+    return outputService.getLostArtifacts(actionFileSystem);
   }
 
   private void updateActionFileSystemContext(

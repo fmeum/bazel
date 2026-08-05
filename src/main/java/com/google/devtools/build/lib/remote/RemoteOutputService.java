@@ -23,6 +23,7 @@ import com.google.devtools.build.lib.actions.ActionExecutionMetadata;
 import com.google.devtools.build.lib.actions.ActionInputMap;
 import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.actions.ArtifactPathResolver;
+import com.google.devtools.build.lib.actions.ImportantOutputHandler.LostArtifacts;
 import com.google.devtools.build.lib.actions.InputMetadataProvider;
 import com.google.devtools.build.lib.actions.LostInputsActionExecutionException;
 import com.google.devtools.build.lib.actions.OutputChecker;
@@ -233,6 +234,13 @@ public class RemoteOutputService implements OutputService {
     if (actionFileSystem instanceof RemoteActionFileSystem remoteFileSystem) {
       remoteFileSystem.checkForLostInputs(action);
     }
+  }
+
+  @Override
+  public LostArtifacts getLostArtifacts(FileSystem actionFileSystem) {
+    return actionFileSystem instanceof RemoteActionFileSystem remoteFileSystem
+        ? remoteFileSystem.getLostInputs()
+        : LostArtifacts.EMPTY;
   }
 
   @Override

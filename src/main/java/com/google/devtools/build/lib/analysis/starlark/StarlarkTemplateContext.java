@@ -13,12 +13,15 @@
 // limitations under the License.
 package com.google.devtools.build.lib.analysis.starlark;
 
+import static java.nio.charset.StandardCharsets.ISO_8859_1;
+
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.devtools.build.lib.actions.AbstractAction;
 import com.google.devtools.build.lib.actions.ActionLookupKey;
 import com.google.devtools.build.lib.actions.ActionOwner;
+import com.google.devtools.build.lib.actions.ActionTemplate.InputFileReader;
 import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.actions.Artifact.SpecialArtifact;
 import com.google.devtools.build.lib.actions.Artifact.SpecialArtifactType;
@@ -32,6 +35,7 @@ import com.google.devtools.build.lib.starlarkbuildapi.FileApi;
 import com.google.devtools.build.lib.starlarkbuildapi.StarlarkTemplateContextApi;
 import com.google.devtools.build.lib.supplier.InterruptibleSupplier;
 import com.google.devtools.build.lib.vfs.PathFragment;
+import java.io.IOException;
 import java.util.List;
 import net.starlark.java.eval.EvalException;
 import net.starlark.java.eval.Sequence;
@@ -47,8 +51,10 @@ public final class StarlarkTemplateContext implements StarlarkTemplateContextApi
   private final ActionLookupKey artifactOwner;
   private final SpawnAction.Builder spawnActionBuilder;
   private final InterruptibleSupplier<RepositoryMapping> repoMappingSupplier;
+  private final ImmutableSet<SpecialArtifact> inputDirectories;
   private final ImmutableSet<SpecialArtifact> outputDirectories;
   private final ImmutableMap<String, String> executionInfo;
+  private final InputFileReader inputFileReader;
   private ImmutableList.Builder<AbstractAction> actions = ImmutableList.builder();
 
   public StarlarkTemplateContext(
@@ -57,15 +63,19 @@ public final class StarlarkTemplateContext implements StarlarkTemplateContextApi
       ActionLookupKey artifactOwner,
       SpawnAction.Builder spawnActionBuilder,
       InterruptibleSupplier<RepositoryMapping> repoMappingSupplier,
+      ImmutableSet<SpecialArtifact> inputDirectories,
       ImmutableSet<SpecialArtifact> outputDirectories,
-      ImmutableMap<String, String> executionInfo) {
+      ImmutableMap<String, String> executionInfo,
+      InputFileReader inputFileReader) {
     this.semantics = semantics;
     this.actionOwner = actionOwner;
     this.artifactOwner = artifactOwner;
     this.spawnActionBuilder = spawnActionBuilder;
     this.repoMappingSupplier = repoMappingSupplier;
+    this.inputDirectories = inputDirectories;
     this.outputDirectories = outputDirectories;
     this.executionInfo = executionInfo;
+    this.inputFileReader = inputFileReader;
   }
 
   @Override
@@ -191,6 +201,29 @@ public final class StarlarkTemplateContext implements StarlarkTemplateContextApi
   @Override
   public Args args(StarlarkThread thread) {
     return Args.newArgs(thread.mutability(), semantics);
+  }
+
+  @Override
+  public String read(FileApi file) throws EvalException, InterruptedException {
+    if (!(file instanceof TreeFileArtifact treeFileArtifact)
+        || !inputDirectories.contains(treeFileArtifact.getParent())) {
+      throw Starlark.errorf(
+          "Cannot read %s, which is not a file in one of the input directories", file);
+    }
+    byte[] content;
+    try {
+      content = inputFileReader.read(treeFileArtifact);
+    } catch (IOException e) {
+      // A download of the contents that is interrupted surfaces as an IOException with the
+      // interrupt flag still set.
+      if (Thread.interrupted()) {
+        throw new InterruptedException();
+      }
+      throw Starlark.errorf("Failed to read %s: %s", file, e.getMessage());
+    }
+    // Bazel's internal string encoding represents every raw byte as a single char, just like
+    // repository_ctx.read().
+    return new String(content, ISO_8859_1);
   }
 
   public ImmutableList<AbstractAction> getActions() {

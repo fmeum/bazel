@@ -20,6 +20,7 @@ import com.google.devtools.build.lib.actions.ActionAnalysisMetadata;
 import com.google.devtools.build.lib.actions.ActionKeyContext;
 import com.google.devtools.build.lib.actions.ActionLookupKey;
 import com.google.devtools.build.lib.actions.Artifact;
+import com.google.devtools.build.lib.actions.ArtifactPathResolver;
 import com.google.devtools.build.lib.actions.util.InjectedActionLookupKey;
 import com.google.devtools.build.lib.analysis.BlazeDirectories;
 import com.google.devtools.build.lib.analysis.ServerDirectories;
@@ -118,7 +119,12 @@ abstract class ArtifactFunctionTestCase {
                         BazelSkyframeExecutorConstants.BUILD_FILES_BY_PRIORITY))
                 .put(
                     SkyFunctions.ACTION_TEMPLATE_EXPANSION,
-                    new ActionTemplateExpansionFunction(actionKeyContext))
+                    new ActionTemplateExpansionFunction(
+                        actionKeyContext,
+                        actionInputMap -> ArtifactPathResolver.IDENTITY,
+                        // Only used to recover from lost inputs read by an action template.
+                        /* skyframeActionExecutor= */ null,
+                        /* actionRewindStrategy= */ null))
                 .build(),
             differencer);
     PrecomputedValue.BUILD_ID.set(differencer, UUID.randomUUID());

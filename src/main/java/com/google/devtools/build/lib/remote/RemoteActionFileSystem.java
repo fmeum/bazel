@@ -23,6 +23,7 @@ import static com.google.devtools.build.lib.remote.util.Utils.getFromFuture;
 
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableSetMultimap;
 import com.google.common.collect.ImmutableSortedSet;
 import com.google.common.collect.Iterables;
 import com.google.common.util.concurrent.ListenableFuture;
@@ -915,14 +916,19 @@ public class RemoteActionFileSystem extends FileSystem implements PathCanonicali
     localFs.getPath(linkPath).createHardLink(getPath(originalPath));
   }
 
+  /** Returns the artifacts whose contents were found to be lost while reading them. */
+  public LostArtifacts getLostInputs() {
+    var byDigest = ImmutableSetMultimap.<String, ActionInput>builder();
+    lostInputs.forEach(lostArtifacts -> byDigest.putAll(lostArtifacts.byDigest()));
+    return new LostArtifacts(byDigest.build());
+  }
+
   public void checkForLostInputs(Action action) throws LostInputsActionExecutionException {
-    var mergedException =
-        lostInputs.stream()
-            .map(lostArtifacts -> new LostInputsExecException(lostArtifacts.byDigest()))
-            .reduce(LostInputsExecException::combine);
-    if (mergedException.isPresent()) {
+    try {
+      getLostInputs().throwIfNotEmpty();
+    } catch (LostInputsExecException e) {
       throw (LostInputsActionExecutionException)
-          ActionExecutionException.fromExecException(mergedException.get(), action);
+          ActionExecutionException.fromExecException(e, action);
     }
   }
 

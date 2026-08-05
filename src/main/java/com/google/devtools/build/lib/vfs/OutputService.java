@@ -23,6 +23,7 @@ import com.google.devtools.build.lib.actions.ArtifactPathResolver;
 import com.google.devtools.build.lib.actions.BuildFailedException;
 import com.google.devtools.build.lib.actions.EnvironmentalExecException;
 import com.google.devtools.build.lib.actions.ExecException;
+import com.google.devtools.build.lib.actions.ImportantOutputHandler.LostArtifacts;
 import com.google.devtools.build.lib.actions.InputMetadataProvider;
 import com.google.devtools.build.lib.actions.LostInputsActionExecutionException;
 import com.google.devtools.build.lib.actions.OutputChecker;
@@ -242,6 +243,18 @@ public interface OutputService {
    */
   default void checkActionFileSystemForLostInputs(FileSystem actionFileSystem, Action action)
       throws LostInputsActionExecutionException {}
+
+  /**
+   * Returns the artifacts that were found to be lost while reading through the given filesystem,
+   * which must have been created by {@link #createActionFileSystem} or {@link
+   * #createPathResolverForArtifactValues}.
+   *
+   * <p>Unlike {@link #checkActionFileSystemForLostInputs}, this can be used outside of action
+   * execution, where there is no {@link Action} to attribute the loss to.
+   */
+  default LostArtifacts getLostArtifacts(FileSystem actionFileSystem) {
+    return LostArtifacts.EMPTY;
+  }
 
   default boolean supportsPathResolverForArtifactValues() {
     return false;
