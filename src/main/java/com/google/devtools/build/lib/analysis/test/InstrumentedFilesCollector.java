@@ -34,6 +34,7 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
 import javax.annotation.Nullable;
+import net.starlark.java.eval.CoverageRecorder;
 import net.starlark.java.eval.Tuple;
 
 /** A helper class for collecting instrumented files and metadata for a target. */
@@ -246,6 +247,7 @@ public final class InstrumentedFilesCollector {
     final NestedSetBuilder<Artifact> baselineCoverageArtifactsBuilder;
     final NestedSetBuilder<Artifact> coverageSupportFilesBuilder;
     final ImmutableMap.Builder<String, String> coverageEnvironmentBuilder;
+    final NestedSetBuilder<CoverageRecorder.FileCoverage> starlarkCoverageBuilder;
     final NestedSet<Tuple> reportedToActualSources;
     private NestedSet<Artifact> localSources;
     @Nullable private List<Artifact> localBaselineCoverageArtifacts;
@@ -261,6 +263,7 @@ public final class InstrumentedFilesCollector {
       coverageSupportFilesBuilder =
           NestedSetBuilder.<Artifact>stableOrder().addTransitive(coverageSupportFiles);
       coverageEnvironmentBuilder = ImmutableMap.builder();
+      starlarkCoverageBuilder = NestedSetBuilder.stableOrder();
       this.reportedToActualSources = reportedToActualSources;
     }
 
@@ -279,6 +282,7 @@ public final class InstrumentedFilesCollector {
         baselineCoverageArtifactsBuilder.addTransitive(provider.getBaselineCoverageArtifacts());
         coverageSupportFilesBuilder.addTransitive(provider.getCoverageSupportFiles());
         coverageEnvironmentBuilder.putAll(provider.getCoverageEnvironment());
+        starlarkCoverageBuilder.addTransitive(provider.getStarlarkCoverage());
       }
     }
 
@@ -301,6 +305,20 @@ public final class InstrumentedFilesCollector {
     }
 
     InstrumentedFilesInfo build() {
+      // The Starlark that ran to analyse *this* target, on top of what the dependencies reported.
+      starlarkCoverageBuilder.addAll(ruleContext.getStarlarkCoverage());
+      NestedSet<CoverageRecorder.FileCoverage> starlarkCoverage = starlarkCoverageBuilder.build();
+
+      if (!starlarkCoverage.isEmpty()) {
+        // Emitted alongside baseline coverage, and reported through the same artifact set, because
+        // it is the same kind of thing: an lcov tracefile whose contents are fully determined at
+        // analysis time. That means no changes are needed in CoverageReportActionFactory or in the
+        // test pipeline to have .bzl coverage show up in --combined_report.
+        var starlarkCoverageAction = StarlarkCoverageAction.create(ruleContext, starlarkCoverage);
+        ruleContext.registerAction(starlarkCoverageAction);
+        baselineCoverageArtifactsBuilder.add(starlarkCoverageAction.getPrimaryOutput());
+      }
+
       if (localSources != null && !localSources.isEmpty()) {
         if (localBaselineCoverageArtifacts != null) {
           baselineCoverageArtifactsBuilder.addAll(localBaselineCoverageArtifacts);
@@ -317,7 +335,8 @@ public final class InstrumentedFilesCollector {
           baselineCoverageArtifactsBuilder.build(),
           coverageSupportFilesBuilder.build(),
           coverageEnvironmentBuilder.buildKeepingLast(),
-          reportedToActualSources);
+          reportedToActualSources,
+          starlarkCoverage);
     }
   }
 

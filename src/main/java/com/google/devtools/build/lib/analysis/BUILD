@@ -118,6 +118,7 @@ java_library(
         "starlark/UnresolvedSymlinkAction.java",
         "test/AnalysisTestActionBuilder.java",
         "test/BaselineCoverageAction.java",
+        "test/StarlarkCoverageAction.java",
         "test/StarlarkCoverageLcov.java",
         "test/CoverageCommon.java",
         "test/InstrumentedFileManifestAction.java",

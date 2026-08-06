@@ -23,6 +23,7 @@ import com.google.devtools.build.lib.packages.BuiltinProvider;
 import com.google.devtools.build.lib.packages.BuiltinRestriction;
 import com.google.devtools.build.lib.packages.NativeInfo;
 import com.google.devtools.build.lib.starlarkbuildapi.test.InstrumentedFilesInfoApi;
+import net.starlark.java.eval.CoverageRecorder;
 import net.starlark.java.eval.EvalException;
 import net.starlark.java.eval.StarlarkThread;
 import net.starlark.java.eval.Tuple;
@@ -40,6 +41,7 @@ public final class InstrumentedFilesInfo extends NativeInfo implements Instrumen
           NestedSetBuilder.emptySet(Order.STABLE_ORDER),
           NestedSetBuilder.emptySet(Order.STABLE_ORDER),
           ImmutableMap.of(),
+          NestedSetBuilder.emptySet(Order.STABLE_ORDER),
           NestedSetBuilder.emptySet(Order.STABLE_ORDER));
 
   private final NestedSet<Artifact> instrumentedFiles;
@@ -48,6 +50,10 @@ public final class InstrumentedFilesInfo extends NativeInfo implements Instrumen
   private final NestedSet<Artifact> coverageSupportFiles;
   private final ImmutableMap<String, String> coverageEnvironment;
   private final NestedSet<Tuple> reportedToActualSources;
+  // Starlark coverage recorded while analysing this target and its dependencies. Empty unless
+  // --experimental_starlark_instrumentation_filter is set. Not exposed to Starlark: it is consumed
+  // by StarlarkCoverageAction, not by rules.
+  private final NestedSet<CoverageRecorder.FileCoverage> starlarkCoverage;
 
   InstrumentedFilesInfo(
       NestedSet<Artifact> instrumentedFiles,
@@ -55,13 +61,27 @@ public final class InstrumentedFilesInfo extends NativeInfo implements Instrumen
       NestedSet<Artifact> baselineCoverageArtifacts,
       NestedSet<Artifact> coverageSupportFiles,
       ImmutableMap<String, String> coverageEnvironment,
-      NestedSet<Tuple> reportedToActualSources) {
+      NestedSet<Tuple> reportedToActualSources,
+      NestedSet<CoverageRecorder.FileCoverage> starlarkCoverage) {
     this.instrumentedFiles = instrumentedFiles;
     this.instrumentationMetadataFiles = instrumentationMetadataFiles;
     this.baselineCoverageArtifacts = baselineCoverageArtifacts;
     this.coverageSupportFiles = coverageSupportFiles;
     this.coverageEnvironment = coverageEnvironment;
     this.reportedToActualSources = reportedToActualSources;
+    this.starlarkCoverage = starlarkCoverage;
+  }
+
+  /**
+   * Returns the Starlark coverage recorded while analysing this target and its dependencies, and
+   * while loading the .bzl files they came from.
+   *
+   * <p>Unlike the artifact-valued fields above, this is data rather than a reference to a file: it
+   * is produced during analysis, not by an action, so {@link StarlarkCoverageAction} materialises it
+   * as an lcov tracefile at execution time.
+   */
+  public NestedSet<CoverageRecorder.FileCoverage> getStarlarkCoverage() {
+    return starlarkCoverage;
   }
 
   @Override

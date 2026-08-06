@@ -104,6 +104,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
 import javax.annotation.Nullable;
+import net.starlark.java.eval.CoverageRecorder;
 import net.starlark.java.eval.EvalException;
 import net.starlark.java.eval.Mutability;
 import net.starlark.java.eval.Starlark;
@@ -963,11 +964,29 @@ public class RuleContext extends TargetContext
             mutability, env.getStarlarkSemantics(), getLabel().toString(), getSymbolGenerator());
     thread.setPrintHandler(Event.makeDebugPrintHandler(env.getEventHandler()));
     new BazelRuleAnalysisThreadContext(this).storeInThread(thread);
+    if (BuildLanguageOptions.getStarlarkInstrumentationFilter(env.getStarlarkSemantics()) != null) {
+      thread.setCoverageRecorder(new CoverageRecorder());
+    }
     return thread;
   }
 
   public StarlarkThread getStarlarkThread() {
     return starlarkThread;
+  }
+
+  /**
+   * Returns the Starlark coverage recorded so far while analysing this target -- principally the
+   * execution of its rule implementation function.
+   *
+   * <p>Note the "so far": this is a snapshot, and providers are built from within the
+   * implementation function, so a caller during analysis sees only what has run up to that point.
+   * That is a known gap; closing it means deferring the snapshot until after the implementation
+   * returns, which in turn means building the tracefile action outside
+   * {@link InstrumentedFilesCollector}.
+   */
+  public ImmutableList<CoverageRecorder.FileCoverage> getStarlarkCoverage() {
+    CoverageRecorder recorder = starlarkThread.getCoverageRecorder();
+    return recorder == null ? ImmutableList.of() : recorder.snapshot();
   }
 
   /**
