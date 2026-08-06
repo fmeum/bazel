@@ -24,6 +24,7 @@ java_library(
         "CastExpression.java",
         "Comment.java",
         "Comprehension.java",
+        "Coverage.java",
         "ConditionalExpression.java",
         "DefStatement.java",
         "DictExpression.java",

@@ -23,6 +23,9 @@ import com.google.common.collect.ImmutableTable;
 import com.google.devtools.build.lib.cmdline.BazelModuleKey;
 import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.cmdline.RepositoryName;
+import com.google.devtools.build.lib.collect.nestedset.NestedSet;
+import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
+import com.google.devtools.build.lib.collect.nestedset.Order;
 import com.google.devtools.build.lib.concurrent.ThreadSafety.Immutable;
 import com.google.devtools.build.lib.packages.BzlVisibility;
 import com.google.devtools.build.lib.skyframe.serialization.LeafDeserializationContext;
@@ -39,6 +42,7 @@ import com.google.errorprone.annotations.Keep;
 import com.google.protobuf.CodedInputStream;
 import com.google.protobuf.CodedOutputStream;
 import java.io.IOException;
+import net.starlark.java.eval.CoverageRecorder;
 import net.starlark.java.eval.Module;
 
 /**
@@ -63,16 +67,52 @@ public class BzlLoadValue implements SkyValue {
   private final BzlVisibility bzlVisibility;
   private final ImmutableTable<RepositoryName, String, RepositoryName> recordedRepoMappings;
 
+  // The Starlark coverage recorded while evaluating this .bzl's top level, unioned with that of
+  // every .bzl it loads. Empty unless --experimental_starlark_instrumentation_filter is set.
+  //
+  // This belongs in the value, not in a side channel accumulated over the command: for a given key
+  // and StarlarkSemantics the set of lines executed by a .bzl's top level is deterministic, so it
+  // is a legitimate part of the result. Keeping it here is what makes coverage correct on a warm
+  // server -- a cached node returns its coverage along with its module, instead of contributing
+  // nothing because it did not re-execute.
+  private final NestedSet<CoverageRecorder.FileCoverage> transitiveStarlarkCoverage;
+
   @VisibleForTesting
   public BzlLoadValue(
       Module module,
       byte[] transitiveDigest,
       BzlVisibility bzlVisibility,
       ImmutableTable<RepositoryName, String, RepositoryName> recordedRepoMappings) {
+    this(
+        module,
+        transitiveDigest,
+        bzlVisibility,
+        recordedRepoMappings,
+        NestedSetBuilder.emptySet(Order.STABLE_ORDER));
+  }
+
+  public BzlLoadValue(
+      Module module,
+      byte[] transitiveDigest,
+      BzlVisibility bzlVisibility,
+      ImmutableTable<RepositoryName, String, RepositoryName> recordedRepoMappings,
+      NestedSet<CoverageRecorder.FileCoverage> transitiveStarlarkCoverage) {
     this.module = checkNotNull(module);
     this.transitiveDigest = checkNotNull(transitiveDigest);
     this.bzlVisibility = checkNotNull(bzlVisibility);
     this.recordedRepoMappings = checkNotNull(recordedRepoMappings);
+    this.transitiveStarlarkCoverage = checkNotNull(transitiveStarlarkCoverage);
+  }
+
+  /**
+   * Returns the Starlark coverage of this .bzl's top level and of every .bzl it transitively loads.
+   *
+   * <p>Empty unless Starlark coverage is enabled. Coverage of a function defined here but called
+   * during the evaluation of some other node is attributed to that node, not to this one; the union
+   * over all nodes evaluated for a target is what makes the report complete.
+   */
+  public NestedSet<CoverageRecorder.FileCoverage> getTransitiveStarlarkCoverage() {
+    return transitiveStarlarkCoverage;
   }
 
   /** Returns the .bzl module. */

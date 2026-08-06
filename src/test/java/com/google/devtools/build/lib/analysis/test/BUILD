@@ -14,6 +14,19 @@ filegroup(
 )
 
 java_test(
+    name = "StarlarkCoverageLcovTest",
+    srcs = ["StarlarkCoverageLcovTest.java"],
+    deps = [
+        "//src/main/java/com/google/devtools/build/lib/analysis:analysis_cluster",
+        "//src/main/java/net/starlark/java/eval",
+        "//src/main/java/net/starlark/java/syntax",
+        "//third_party:guava",
+        "//third_party:junit4",
+        "//third_party:truth",
+    ],
+)
+
+java_test(
     name = "InstrumentedFileManifestActionTest",
     srcs = ["InstrumentedFileManifestActionTest.java"],
     deps = [

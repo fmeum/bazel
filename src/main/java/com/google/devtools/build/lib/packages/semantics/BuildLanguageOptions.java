@@ -22,7 +22,9 @@ import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Interner;
 import com.google.devtools.build.lib.concurrent.BlazeInterners;
 import com.google.devtools.build.lib.util.Fingerprint;
+import com.google.devtools.build.lib.util.RegexFilter;
 import com.google.devtools.common.options.BoolOrEnumConverter;
+import com.google.devtools.common.options.Converter;
 import com.google.devtools.common.options.Converters.CommaSeparatedNonEmptyOptionListConverter;
 import com.google.devtools.common.options.Converters.CommaSeparatedOptionListConverter;
 import com.google.devtools.common.options.Converters.CommaSeparatedOptionSetConverter;
@@ -33,10 +35,12 @@ import com.google.devtools.common.options.OptionMetadataTag;
 import com.google.devtools.common.options.Options;
 import com.google.devtools.common.options.OptionsBase;
 import com.google.devtools.common.options.OptionsClass;
+import com.google.devtools.common.options.OptionsParsingException;
 import com.google.protobuf.ByteString;
 import java.util.List;
 import java.util.TreeMap;
 import java.util.TreeSet;
+import javax.annotation.Nullable;
 import net.starlark.java.eval.StarlarkSemantics;
 
 /**
@@ -71,6 +75,25 @@ import net.starlark.java.eval.StarlarkSemantics;
 @OptionsClass
 public abstract class BuildLanguageOptions extends OptionsBase {
   // TODO(#11437): Delete the special empty string value so that it's on unconditionally.
+  @Option(
+      name = "experimental_starlark_instrumentation_filter",
+      converter = StarlarkInstrumentationFilterConverter.class,
+      defaultValue = "",
+      documentationCategory = OptionDocumentationCategory.OUTPUT_PARAMETERS,
+      effectTags = {OptionEffectTag.LOSES_INCREMENTAL_STATE, OptionEffectTag.BUILD_FILE_SEMANTICS},
+      metadataTags = {OptionMetadataTag.EXPERIMENTAL},
+      help =
+          "Selects the .bzl files to instrument for Starlark code coverage, as a comma-separated"
+              + " list of regular expressions matched against the file's label; expressions"
+              + " prefixed with '-' exclude instead. The empty default disables Starlark coverage"
+              + " entirely, and instrumentation is decided when a .bzl file is compiled, so"
+              + " excluded files run at full speed even during a coverage build. The `coverage`"
+              + " command sets this from --instrumentation_filter; setting it directly is only"
+              + " useful for collecting coverage outside that command.")
+  public abstract String getExperimentalStarlarkInstrumentationFilter();
+
+  public abstract void setExperimentalStarlarkInstrumentationFilter(String value);
+
   @Option(
       name = "experimental_builtins_bzl_path",
       defaultValue = "%bundled%",
@@ -858,6 +881,9 @@ public abstract class BuildLanguageOptions extends OptionsBase {
         consumer
             .setBool(INCOMPATIBLE_ALLOW_TAGS_PROPAGATION, getExperimentalAllowTagsPropagation())
             .set(EXPERIMENTAL_BUILTINS_BZL_PATH, getExperimentalBuiltinsBzlPath())
+            .set(
+                EXPERIMENTAL_STARLARK_INSTRUMENTATION_FILTER,
+                getExperimentalStarlarkInstrumentationFilter())
             .setBool(EXPERIMENTAL_BUILTINS_DUMMY, getExperimentalBuiltinsDummy())
             .set(
                 EXPERIMENTAL_BUILTINS_INJECTION_OVERRIDE,
@@ -1005,6 +1031,59 @@ public abstract class BuildLanguageOptions extends OptionsBase {
   }
 
   // See the comment on INTERNER above, this cache should be very small.
+  /**
+   * Validates a {@code --experimental_starlark_instrumentation_filter} spec at flag-parse time
+   * while keeping the raw string as the option's value.
+   *
+   * <p>The raw string is what goes into {@link StarlarkSemantics}, whose values are compared to
+   * decide whether the Starlark caches must be invalidated; a string compares exactly, whereas two
+   * equivalent {@link RegexFilter}s built from different specs would not. Parsing is deferred to
+   * {@link #getStarlarkInstrumentationFilter} and memoized.
+   */
+  public static final class StarlarkInstrumentationFilterConverter
+      extends Converter.Contextless<String> {
+    @Override
+    public String convert(String input) throws OptionsParsingException {
+      Object unused = new RegexFilter.RegexFilterConverter().convert(input);
+      return input;
+    }
+
+    @Override
+    public String getTypeDescription() {
+      return "a comma-separated list of regex expressions with prefix '-' specifying excluded paths";
+    }
+  }
+
+  private static final LoadingCache<String, RegexFilter> STARLARK_INSTRUMENTATION_FILTER_CACHE =
+      CacheBuilder.newBuilder()
+          .maximumSize(4) // the spec is fixed for a build; a couple of entries covers switching
+          .build(
+              new CacheLoader<String, RegexFilter>() {
+                @Override
+                public RegexFilter load(String spec) throws OptionsParsingException {
+                  return new RegexFilter.RegexFilterConverter().convert(spec);
+                }
+              });
+
+  /**
+   * Returns the filter selecting which .bzl files to instrument for Starlark coverage, or null if
+   * Starlark coverage is disabled.
+   *
+   * <p>Whether a .bzl file is instrumented is decided when it is compiled, and the spec is part of
+   * {@link StarlarkSemantics}, so changing it invalidates the compiled-program and loaded-module
+   * nodes that depend on it. That is what makes a warm server produce correct coverage rather than
+   * silently reusing uninstrumented programs.
+   */
+  @Nullable
+  public static RegexFilter getStarlarkInstrumentationFilter(StarlarkSemantics semantics) {
+    String spec = semantics.get(EXPERIMENTAL_STARLARK_INSTRUMENTATION_FILTER);
+    if (spec.isEmpty()) {
+      return null;
+    }
+    // The spec was validated by StarlarkInstrumentationFilterConverter when the flag was parsed.
+    return STARLARK_INSTRUMENTATION_FILTER_CACHE.getUnchecked(spec);
+  }
+
   private static final LoadingCache<StarlarkSemantics, ByteString> FINGERPRINT_CACHE =
       CacheBuilder.newBuilder()
           .weakKeys()
@@ -1151,6 +1230,19 @@ public abstract class BuildLanguageOptions extends OptionsBase {
       new StarlarkSemantics.Key<>("incompatible_disable_transitions_on", ImmutableList.of());
   public static final StarlarkSemantics.Key<String> EXPERIMENTAL_BUILTINS_BZL_PATH =
       new StarlarkSemantics.Key<>("experimental_builtins_bzl_path", "%bundled%");
+
+  /**
+   * The raw {@code --experimental_starlark_instrumentation_filter} spec; empty means Starlark
+   * coverage is off.
+   *
+   * <p>The raw string rather than a parsed {@link
+   * com.google.devtools.build.lib.util.RegexFilter} is what belongs in the semantics: semantics
+   * objects are interned and compared, and a string compares exactly. Parsing is memoized by {@link
+   * com.google.devtools.build.lib.packages.StarlarkCoverageFilter}.
+   */
+  public static final StarlarkSemantics.Key<String>
+      EXPERIMENTAL_STARLARK_INSTRUMENTATION_FILTER =
+          new StarlarkSemantics.Key<>("experimental_starlark_instrumentation_filter", "");
   public static final StarlarkSemantics.Key<List<String>> EXPERIMENTAL_BUILTINS_INJECTION_OVERRIDE =
       new StarlarkSemantics.Key<>("experimental_builtins_injection_override", ImmutableList.of());
   public static final StarlarkSemantics.Key<Utf8EnforcementMode>

@@ -240,6 +240,7 @@ final class Eval {
     return new StarlarkFunction(
         rfn,
         fn.getTypeTable(),
+        fn.getCoverage(),
         fn.getModule(),
         fn.globalIndex,
         Tuple.wrap(defaults),
@@ -320,6 +321,15 @@ final class Eval {
       Location loc = st.getStartLocation(); // not very precise
       fr.setLocation(loc);
       fr.dbg.before(fr.thread, loc); // location is now redundant since it's in the thread
+    }
+
+    // Coverage probe. fr.cov is null unless this frame's function came from a program that was
+    // compiled with instrumentation, so for ordinary execution this is a load of a final field and
+    // a not-taken branch, both of which the JIT hoists out of the loop in execStatements. The
+    // start offset is already an int field of the node; deriving a line from it is deferred to
+    // CoverageRecorder.snapshot so that nothing is allocated here.
+    if (fr.cov != null) {
+      fr.cov.set(st.getStartOffset());
     }
 
     if (++fr.thread.steps >= fr.thread.stepLimit) {

@@ -19,6 +19,7 @@ java_library(
         "BuiltinFunction.java",
         "CallUtils.java",
         "CompactImmutableDict.java",
+        "CoverageRecorder.java",
         "Compactable.java",
         "CpuProfiler.java",
         "Debug.java",

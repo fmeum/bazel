@@ -36,6 +36,8 @@ public final class Program {
   private final ImmutableList<Comment> unusedDocCommentLines;
   // Set by withTypeTable()
   @Nullable private final TypeTable typeTable;
+  // Non-null iff this program was compiled with coverage instrumentation; see compileFile.
+  @Nullable private final Coverage coverage;
 
   private Program(
       FileOptions options,
@@ -44,7 +46,8 @@ public final class Program {
       ImmutableList<Location> loadLocations,
       ImmutableMap<String, DocComments> docCommentsMap,
       ImmutableList<Comment> unusedDocCommentLines,
-      @Nullable TypeTable typeTable) {
+      @Nullable TypeTable typeTable,
+      @Nullable Coverage coverage) {
     Preconditions.checkArgument(
         loads.size() == loadLocations.size(), "each load must have a corresponding location");
 
@@ -56,6 +59,7 @@ public final class Program {
     this.docCommentsMap = docCommentsMap;
     this.unusedDocCommentLines = unusedDocCommentLines;
     this.typeTable = typeTable;
+    this.coverage = coverage;
   }
 
   /** Returns a copy of this program with the specified type table. */
@@ -67,7 +71,20 @@ public final class Program {
         this.loadLocations,
         this.docCommentsMap,
         this.unusedDocCommentLines,
-        typeTable);
+        typeTable,
+        this.coverage);
+  }
+
+  /**
+   * Returns this program's coverage instrumentation table, or null if it was compiled without
+   * instrumentation.
+   *
+   * <p>Whether a program is instrumented is fixed at compile time, so an uninstrumented program
+   * imposes no cost at all on the evaluator. See {@link Coverage}.
+   */
+  @Nullable
+  public Coverage getCoverage() {
+    return coverage;
   }
 
   /** Returns the file options under which this program was parsed and compiled. */
@@ -148,6 +165,25 @@ public final class Program {
   public static Program compileFile(
       StarlarkFile file, Resolver.Module env, @Nullable TypeTagger.Loader loader)
       throws SyntaxError.Exception {
+    return compileFile(file, env, loader, /* instrumentForCoverage= */ false);
+  }
+
+  /**
+   * Resolves and compiles a file as {@link #compileFile(StarlarkFile, Resolver.Module,
+   * TypeTagger.Loader)} does, additionally instrumenting the program for coverage if {@code
+   * instrumentForCoverage} is set.
+   *
+   * <p>Instrumentation is a compile-time decision so that the evaluator need not test for it on
+   * every statement, and so that files excluded by the caller's instrumentation filter run at full
+   * speed even during a coverage build. Callers that cache compiled programs must include the
+   * instrumentation decision in the cache key.
+   */
+  public static Program compileFile(
+      StarlarkFile file,
+      Resolver.Module env,
+      @Nullable TypeTagger.Loader loader,
+      boolean instrumentForCoverage)
+      throws SyntaxError.Exception {
     Resolver.resolveFile(file, env);
     if (!file.ok()) {
       throw new SyntaxError.Exception(file.errors());
@@ -182,7 +218,8 @@ public final class Program {
         loadLocations.build(),
         docCommentsMap,
         unusedDocCommentLines,
-        /* typeTable= */ null);
+        /* typeTable= */ null,
+        instrumentForCoverage ? Coverage.instrument(file) : null);
   }
 
   public static Program compileFile(StarlarkFile file, Resolver.Module env)
@@ -207,6 +244,7 @@ public final class Program {
         /* loadLocations= */ ImmutableList.of(),
         /* docCommentsMap= */ ImmutableMap.of(),
         /* unusedDocCommentLines= */ ImmutableList.of(),
-        /* typeTable= */ null);
+        /* typeTable= */ null,
+        /* coverage= */ null);
   }
 }

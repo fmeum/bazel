@@ -24,6 +24,7 @@ import net.starlark.java.annot.StarlarkBuiltin;
 import net.starlark.java.eval.StarlarkThread.Frame;
 import net.starlark.java.spelling.SpellChecker;
 import net.starlark.java.syntax.Location;
+import net.starlark.java.syntax.Coverage;
 import net.starlark.java.syntax.Resolver;
 import net.starlark.java.syntax.StarlarkType;
 import net.starlark.java.syntax.TypeTable;
@@ -40,6 +41,10 @@ public final class StarlarkFunction implements StarlarkCallable {
   // TODO: #27370 - at eval time, we need only types of functions and globals; we could save some
   // memory by skipping the other types.
   @Nullable private final TypeTable typeTable;
+  // The instrumentation table of the program this function was compiled from, or null if that
+  // program was compiled without coverage instrumentation (the usual case). Like typeTable, nested
+  // functions inherit it from their enclosing function, since both come from the same Program.
+  @Nullable private final Coverage coverage;
   private final Module module; // a function closes over its defining module
 
   // Index in Module.globals of ith Program global (Resolver.Binding(GLOBAL).index).
@@ -64,6 +69,7 @@ public final class StarlarkFunction implements StarlarkCallable {
   StarlarkFunction(
       Resolver.Function rfn,
       @Nullable TypeTable typeTable,
+      @Nullable Coverage coverage,
       Module module,
       int[] globalIndex,
       Tuple defaultValues,
@@ -71,6 +77,7 @@ public final class StarlarkFunction implements StarlarkCallable {
       SymbolGenerator.Symbol<?> token) {
     this.rfn = rfn;
     this.typeTable = typeTable;
+    this.coverage = coverage;
     this.module = module;
     this.globalIndex = globalIndex;
     this.defaultValues = defaultValues;
@@ -109,6 +116,11 @@ public final class StarlarkFunction implements StarlarkCallable {
     }
     @Nullable StarlarkType functionType = typeTable.getType(rfn);
     return functionType != null ? functionType : Types.ANY;
+  }
+
+  @Nullable
+  Coverage getCoverage() {
+    return coverage;
   }
 
   @Nullable

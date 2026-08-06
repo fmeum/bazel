@@ -25,6 +25,7 @@ import com.google.devtools.build.lib.packages.BazelStarlarkEnvironment;
 import com.google.devtools.build.lib.packages.PackageLoadingListener;
 import com.google.devtools.build.lib.packages.semantics.BuildLanguageOptions;
 import com.google.devtools.build.lib.skyframe.BzlCompileValue.TypeOptions;
+import com.google.devtools.build.lib.util.RegexFilter;
 import com.google.devtools.build.lib.vfs.FileSystemUtils;
 import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.build.lib.vfs.RootedPath;
@@ -224,8 +225,19 @@ public class BzlCompileFunction implements SkyFunction {
           BazelCompileContext.create(key.label, file.getName());
       module = Module.withPredeclaredAndData(semantics, predeclared, bazelCompileContext);
     }
+    // Whether to instrument for Starlark coverage is decided here, once per compiled program,
+    // rather than on every statement at run time. The spec is part of StarlarkSemantics, which this
+    // function already depends on, so toggling it invalidates every BzlCompileValue and the
+    // programs get recompiled -- which is what makes coverage correct on a warm server instead of
+    // silently reusing uninstrumented programs. Files the filter excludes are compiled exactly as
+    // they are today and run at full speed even during a coverage build.
+    RegexFilter coverageFilter = BuildLanguageOptions.getStarlarkInstrumentationFilter(semantics);
+    boolean instrumentForCoverage =
+        coverageFilter != null && key.label != null && coverageFilter.isIncluded(key.label.toString());
+
     try {
-      Program prog = Program.compileFile(file, module);
+      Program prog =
+          Program.compileFile(file, module, /* loader= */ null, instrumentForCoverage);
       if (key.kind == BzlCompileValue.Kind.NORMAL) {
         packageLoadingListener.onBzlCompileCompleteAndSuccessful(rootedPath, bytes.length);
       }

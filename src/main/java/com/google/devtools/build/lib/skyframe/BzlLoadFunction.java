@@ -33,6 +33,9 @@ import com.google.devtools.build.lib.cmdline.LabelSyntaxException;
 import com.google.devtools.build.lib.cmdline.PackageIdentifier;
 import com.google.devtools.build.lib.cmdline.RepositoryMapping;
 import com.google.devtools.build.lib.cmdline.RepositoryName;
+import com.google.devtools.build.lib.collect.nestedset.NestedSet;
+import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
+import com.google.devtools.build.lib.collect.nestedset.Order;
 import com.google.devtools.build.lib.concurrent.BlazeInterners;
 import com.google.devtools.build.lib.events.Event;
 import com.google.devtools.build.lib.events.EventHandler;
@@ -73,6 +76,7 @@ import java.util.function.Consumer;
 import java.util.function.Predicate;
 import javax.annotation.Nullable;
 import net.starlark.java.eval.EvalException;
+import net.starlark.java.eval.CoverageRecorder;
 import net.starlark.java.eval.Module;
 import net.starlark.java.eval.Mutability;
 import net.starlark.java.eval.Starlark;
@@ -905,15 +909,16 @@ public class BzlLoadFunction implements SkyFunction {
     // executeBzlFile may post events to the Environment's handler, but events do not matter when
     // caching BzlLoadValues. Note that executing the code mutates the Module and
     // BzlInitThreadContext.
-    executeBzlFile(
-        prog,
-        key,
-        module,
-        loadMap,
-        context,
-        builtins.starlarkSemantics,
-        env.getListener(),
-        repoMappingRecorder);
+    ImmutableList<CoverageRecorder.FileCoverage> ownCoverage =
+        executeBzlFile(
+            prog,
+            key,
+            module,
+            loadMap,
+            context,
+            builtins.starlarkSemantics,
+            env.getListener(),
+            repoMappingRecorder);
 
     BzlVisibility bzlVisibility = context.getBzlVisibility();
     if (bzlVisibility == null) {
@@ -922,8 +927,29 @@ public class BzlLoadFunction implements SkyFunction {
     // We save load visibility in the BzlLoadValue rather than the BazelModuleContext because
     // visibility doesn't need to be introspected by any Starlark builtin methods, and because the
     // alternative would mean mutating or overwriting the BazelModuleContext after evaluation.
+    // Union along load edges, so that a consumer of any .bzl gets the coverage of its whole load
+    // DAG in one step, the same way transitiveDigest already summarises the DAG's contents.
+    NestedSet<CoverageRecorder.FileCoverage> transitiveStarlarkCoverage;
+    if (ownCoverage.isEmpty() && loadValues.stream().allMatch(
+        v -> v.getTransitiveStarlarkCoverage().isEmpty())) {
+      // Overwhelmingly the common case: coverage is off, so share the empty singleton.
+      transitiveStarlarkCoverage = NestedSetBuilder.emptySet(Order.STABLE_ORDER);
+    } else {
+      NestedSetBuilder<CoverageRecorder.FileCoverage> builder =
+          NestedSetBuilder.stableOrder();
+      builder.addAll(ownCoverage);
+      for (BzlLoadValue v : loadValues) {
+        builder.addTransitive(v.getTransitiveStarlarkCoverage());
+      }
+      transitiveStarlarkCoverage = builder.build();
+    }
+
     return new BzlLoadValue(
-        module, transitiveDigest, bzlVisibility, repoMappingRecorder.recordedEntries());
+        module,
+        transitiveDigest,
+        bzlVisibility,
+        repoMappingRecorder.recordedEntries(),
+        transitiveStarlarkCoverage);
   }
 
   @Nullable
@@ -1392,8 +1418,11 @@ public class BzlLoadFunction implements SkyFunction {
     }
   }
 
-  /** Executes the compiled .bzl file defining the module to be loaded. */
-  private static void executeBzlFile(
+  /**
+   * Executes the compiled .bzl file defining the module to be loaded, returning the Starlark
+   * coverage recorded during that execution (empty unless the program was instrumented).
+   */
+  private static ImmutableList<CoverageRecorder.FileCoverage> executeBzlFile(
       Program prog,
       BzlLoadValue.Key key,
       Module module,
@@ -1428,10 +1457,17 @@ public class BzlLoadFunction implements SkyFunction {
       thread.setPrintHandler(Event.makeDebugPrintHandler(starlarkEventHandler));
       context.storeInThread(thread);
 
+      // A fresh recorder per attempt: this function may run several times for one node because of
+      // Skyframe restarts, and only the attempt that produces the value should contribute.
+      CoverageRecorder recorder =
+          prog.getCoverage() == null ? null : new CoverageRecorder();
+      thread.setCoverageRecorder(recorder);
+
       execAndExport(prog, label, starlarkEventHandler, module, thread);
       if (sawStarlarkError.get()) {
         throw executionFailed(label);
       }
+      return recorder == null ? ImmutableList.of() : recorder.snapshot();
     }
   }
 

@@ -21,6 +21,7 @@ import org.junit.runners.Suite;
 @Suite.SuiteClasses({
   DynamicTypeCheckTest.class,
   CompactImmutableDictTest.class,
+  CoverageTest.class,
   EvaluationTest.class,
   EvalUtilsTest.class,
   FunctionTest.class,

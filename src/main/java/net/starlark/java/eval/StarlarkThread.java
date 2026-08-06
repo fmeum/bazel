@@ -18,6 +18,7 @@ import com.google.common.base.Preconditions;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import java.util.ArrayList;
+import java.util.BitSet;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -151,6 +152,12 @@ public final class StarlarkThread {
     @Nullable
     final Debug.Debugger dbg = Debug.debugger.get(); // the debugger, if active for this frame
 
+    // The set in which to mark executed statements, by start offset, or null if this frame's
+    // function belongs to a program that was not compiled with coverage instrumentation -- which
+    // is always the case unless a recorder was installed on the thread. Final, like dbg, so that
+    // the test in Eval.exec is loop-invariant across a block of statements.
+    @Nullable final BitSet cov;
+
     Object result = Starlark.NONE; // the operand of a Starlark return statement
 
     // Current PC location. Initially fn.getLocation(); for Starlark functions,
@@ -171,6 +178,8 @@ public final class StarlarkThread {
     private Frame(StarlarkThread thread, StarlarkCallable fn) {
       this.thread = thread;
       this.fn = fn;
+      CoverageRecorder recorder = thread.coverageRecorder;
+      this.cov = recorder == null ? null : recorder.enter(fn);
     }
 
     // Updates the PC location in this frame.
@@ -261,6 +270,9 @@ public final class StarlarkThread {
   /** A hook for notifications of assignments at top level. */
   PostAssignHook postAssignHook;
 
+  /** Accumulates coverage of instrumented programs executed by this thread, if enabled. */
+  @Nullable CoverageRecorder coverageRecorder;
+
   /** Pushes a function onto the call stack. */
   void push(StarlarkCallable fn) {
     // Poll for newly installed CPU profiler.
@@ -339,6 +351,23 @@ public final class StarlarkThread {
     if (last == 0 && Debug.threadHook != null) {
       Debug.threadHook.onPopLast(this);
     }
+  }
+
+  /**
+   * Installs a recorder that accumulates coverage of the instrumented programs this thread
+   * executes. Must be called before execution starts; frames created earlier do not record.
+   *
+   * <p>Only programs compiled with instrumentation are recorded, so installing a recorder does not
+   * by itself slow down execution of uninstrumented code.
+   */
+  public void setCoverageRecorder(@Nullable CoverageRecorder recorder) {
+    this.coverageRecorder = recorder;
+  }
+
+  /** Returns the coverage recorder installed by {@link #setCoverageRecorder}, if any. */
+  @Nullable
+  public CoverageRecorder getCoverageRecorder() {
+    return coverageRecorder;
   }
 
   /** Returns the mutability for values created by this thread. */

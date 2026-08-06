@@ -1240,6 +1240,7 @@ public final class Starlark {
         new StarlarkFunction(
             rfn,
             prog.getTypeTable(),
+            prog.getCoverage(),
             module,
             globalIndex,
             /* defaultValues= */ Tuple.empty(),
@@ -1325,6 +1326,7 @@ public final class Starlark {
     return new StarlarkFunction(
         rfn,
         prog.getTypeTable(),
+        prog.getCoverage(),
         module,
         globalIndex,
         /* defaultValues= */ Tuple.empty(),

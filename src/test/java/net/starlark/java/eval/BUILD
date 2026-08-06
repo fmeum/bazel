@@ -14,6 +14,7 @@ java_test(
     name = "EvalTests",
     srcs = [
         "CompactImmutableDictTest.java",
+        "CoverageTest.java",
         "DynamicTypeCheckTest.java",
         "EvalTests.java",  # (suite)
         "EvalUtilsTest.java",
