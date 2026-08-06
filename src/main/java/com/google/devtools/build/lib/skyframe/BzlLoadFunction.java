@@ -1459,8 +1459,15 @@ public class BzlLoadFunction implements SkyFunction {
 
       // A fresh recorder per attempt: this function may run several times for one node because of
       // Skyframe restarts, and only the attempt that produces the value should contribute.
+      //
+      // The condition is whether coverage is enabled at all, not whether *this* program is
+      // instrumented: an uninstrumented .bzl may call a function defined by an instrumented one it
+      // loads, and that execution belongs to this node. A recorder observing only uninstrumented
+      // code costs nothing and snapshots to the empty list.
       CoverageRecorder recorder =
-          prog.getCoverage() == null ? null : new CoverageRecorder();
+          BuildLanguageOptions.getStarlarkInstrumentationFilter(starlarkSemantics) == null
+              ? null
+              : new CoverageRecorder();
       thread.setCoverageRecorder(recorder);
 
       execAndExport(prog, label, starlarkEventHandler, module, thread);
