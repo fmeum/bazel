@@ -213,6 +213,7 @@ public final class RemoteRepoContentsCacheImpl implements RemoteRepoContentsCach
                   action,
                   COMMAND,
                   ImmutableList.of(fetchedRepoMarkerFile, fetchedRepoDir),
+                  /* metadataOnlyOutputs= */ ImmutableSet.of(),
                   /* outErr= */ null,
                   /* exitCode= */ 0,
                   /* startTime= */ Instant.now(),

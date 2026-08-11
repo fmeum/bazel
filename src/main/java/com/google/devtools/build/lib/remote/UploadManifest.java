@@ -108,6 +108,7 @@ public class UploadManifest {
       Action action,
       Command command,
       Collection<Path> outputFiles,
+      ImmutableSet<Path> metadataOnlyOutputs,
       @Nullable FileOutErr outErr,
       int exitCode,
       Instant startTime,
@@ -126,7 +127,7 @@ public class UploadManifest {
                 .getSymlinkAbsolutePathStrategy()
                 .equals(SymlinkAbsolutePathStrategy.Value.ALLOWED),
             preserveExecutableBit);
-    manifest.addFiles(outputFiles);
+    manifest.addFiles(outputFiles, metadataOnlyOutputs);
     if (outErr != null) {
       manifest.setStdoutStderr(outErr);
     }
@@ -233,7 +234,30 @@ public class UploadManifest {
    */
   @VisibleForTesting
   void addFiles(Collection<Path> files) throws ExecException, IOException, InterruptedException {
+    addFiles(files, /* metadataOnlyOutputs= */ ImmutableSet.of());
+  }
+
+  /**
+   * Add a collection of files, directories or symlinks to the manifest, omitting the contents of
+   * the outputs in {@code metadataOnlyOutputs} from the upload.
+   *
+   * <p>A metadata-only output is described by the action result exactly as it would be otherwise,
+   * including the digests of the files it consists of, but its contents are not uploaded to the
+   * CAS. Whoever consumes the action result must therefore be prepared for the digests it
+   * references to be absent, which is the same situation as an output whose contents have been
+   * evicted.
+   *
+   * <p>Selected by the {@code internal-metadata-only-outputs} execution requirement.
+   *
+   * @see #addFiles(Collection)
+   */
+  @VisibleForTesting
+  void addFiles(Collection<Path> files, ImmutableSet<Path> metadataOnlyOutputs)
+      throws ExecException, IOException, InterruptedException {
     for (Path file : files) {
+      // Whether to upload the contents of this output, as opposed to just describing it in the
+      // action result. Note that a digest is still uploaded if some other output shares it.
+      boolean uploadContents = !metadataOnlyOutputs.contains(file);
       // TODO(ulfjack): Maybe pass in a SpawnResult here, add a list of output files to that, and
       // rely on the local spawn runner to stat the files, instead of statting here.
       FileStatus statNoFollow = file.statIfFound(Symlinks.NOFOLLOW);
@@ -245,11 +269,11 @@ public class UploadManifest {
       }
       if (statNoFollow.isFile() && !statNoFollow.isSpecialFile()) {
         Digest digest = digestUtil.compute(file, statNoFollow);
-        addFile(digest, file, statNoFollow);
+        addFile(digest, file, statNoFollow, uploadContents);
         continue;
       }
       if (statNoFollow.isDirectory()) {
-        addDirectory(file);
+        addDirectory(file, uploadContents);
         continue;
       }
       if (statNoFollow.isSymbolicLink()) {
@@ -272,7 +296,7 @@ public class UploadManifest {
         if (statFollow.isFile() && !statFollow.isSpecialFile()) {
           if (target.isAbsolute()) {
             // Symlink to file uploaded as a file.
-            addFile(digestUtil.compute(file, statFollow), file, statNoFollow);
+            addFile(digestUtil.compute(file, statFollow), file, statNoFollow, uploadContents);
           } else {
             // Symlink to file uploaded as a symlink.
             addFileSymbolicLink(file, target);
@@ -282,7 +306,7 @@ public class UploadManifest {
         if (statFollow.isDirectory()) {
           if (target.isAbsolute()) {
             // Symlink to directory uploaded as a directory.
-            addDirectory(file);
+            addDirectory(file, uploadContents);
           } else {
             // Symlink to directory uploaded as a symlink.
             addDirectorySymbolicLink(file, target);
@@ -342,14 +366,16 @@ public class UploadManifest {
     result.addOutputSymlinks(outputSymlink);
   }
 
-  private void addFile(Digest digest, Path file, FileStatus statNoFollow) {
+  private void addFile(Digest digest, Path file, FileStatus statNoFollow, boolean uploadContents) {
     result
         .addOutputFilesBuilder()
         .setPath(internalToUnicode(remotePathResolver.localPathToOutputPath(file)))
         .setDigest(digest)
         .setIsExecutable(!preserveExecutableBit || (statNoFollow.getPermissions() & 0100) != 0);
 
-    digestToFile.put(digest, file);
+    if (uploadContents) {
+      digestToFile.put(digest, file);
+    }
   }
 
   private static final class WrappedException extends RuntimeException {
@@ -376,6 +402,7 @@ public class UploadManifest {
    */
   private class DirectoryBuilder extends AbstractQueueVisitor {
     private final Path rootDir;
+    private final boolean uploadContents;
 
     // Directories found during the traversal, including the root.
     // Sorted in reverse so that children iterate before parents.
@@ -397,13 +424,14 @@ public class UploadManifest {
             TreeMultimap.<Path, SymlinkNode>create(
                 naturalOrder(), comparing(SymlinkNode::getName)));
 
-    DirectoryBuilder(Path rootDir) {
+    DirectoryBuilder(Path rootDir, boolean uploadContents) {
       super(
           VISITOR_POOL,
           ExecutorOwnership.SHARED,
           ExceptionHandlingMode.FAIL_FAST,
           ErrorClassifier.DEFAULT);
       this.rootDir = checkNotNull(rootDir);
+      this.uploadContents = uploadContents;
     }
 
     /**
@@ -530,7 +558,9 @@ public class UploadManifest {
               .setDigest(digest)
               .setIsExecutable(!preserveExecutableBit || (stat.getPermissions() & 0100) != 0)
               .build();
-      digestToFile.put(digest, path);
+      if (uploadContents) {
+        digestToFile.put(digest, path);
+      }
       dirToFiles.put(parentPath, node);
     }
 
@@ -551,8 +581,10 @@ public class UploadManifest {
   private static final int TREE_CHILDREN_FIELD_NUMBER =
       Tree.getDescriptor().findFieldByName("children").getNumber();
 
-  private void addDirectory(Path dir) throws ExecException, IOException, InterruptedException {
-    ByteString treeBlob = new DirectoryBuilder(dir).build();
+  private void addDirectory(Path dir, boolean uploadContents)
+      throws ExecException, IOException, InterruptedException {
+    // The Tree proto is always uploaded: without it the action result cannot be interpreted at all.
+    ByteString treeBlob = new DirectoryBuilder(dir, uploadContents).build();
     Digest treeDigest = digestUtil.compute(treeBlob);
 
     result

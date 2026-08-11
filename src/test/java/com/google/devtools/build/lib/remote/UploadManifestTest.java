@@ -28,6 +28,7 @@ import build.bazel.remote.execution.v2.FileNode;
 import build.bazel.remote.execution.v2.SymlinkNode;
 import build.bazel.remote.execution.v2.Tree;
 import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableSet;
 import com.google.devtools.build.lib.actions.UserExecException;
 import com.google.devtools.build.lib.clock.JavaClock;
 import com.google.devtools.build.lib.remote.common.RemotePathResolver;
@@ -196,6 +197,66 @@ public class UploadManifestTest {
     execRoot.createDirectoryAndParents();
 
     remotePathResolver = new RemotePathResolver.DefaultRemotePathResolver(execRoot);
+  }
+
+  @Test
+  public void actionResult_metadataOnlyFile_describedButNotUploaded() throws Exception {
+    ActionResult.Builder result = ActionResult.newBuilder();
+    Path file = execRoot.getRelative("file");
+    FileSystemUtils.writeContent(file, new byte[] {1, 2, 3, 4, 5});
+
+    UploadManifest um =
+        new UploadManifest(
+            digestUtil, remotePathResolver, result, /* allowAbsoluteSymlinks= */ false);
+    um.addFiles(ImmutableList.of(file), /* metadataOnlyOutputs= */ ImmutableSet.of(file));
+
+    // The output is described exactly as it would be otherwise, but its contents aren't uploaded.
+    ActionResult.Builder expectedResult = ActionResult.newBuilder();
+    expectedResult
+        .addOutputFilesBuilder()
+        .setPath("file")
+        .setDigest(digestUtil.compute(file))
+        .setIsExecutable(true);
+    assertThat(result.build()).isEqualTo(expectedResult.build());
+    assertThat(um.getDigestToFile()).isEmpty();
+  }
+
+  @Test
+  public void actionResult_metadataOnlyDirectory_describedButNotUploaded() throws Exception {
+    ActionResult.Builder result = ActionResult.newBuilder();
+    Path dir = execRoot.getRelative("dir");
+    dir.createDirectory();
+    FileSystemUtils.writeContent(dir.getRelative("foo"), new byte[] {1, 2, 3, 4, 5});
+
+    UploadManifest um =
+        new UploadManifest(
+            digestUtil, remotePathResolver, result, /* allowAbsoluteSymlinks= */ false);
+    um.addFiles(ImmutableList.of(dir), /* metadataOnlyOutputs= */ ImmutableSet.of(dir));
+
+    // The Tree proto is still uploaded, otherwise the action result couldn't be interpreted.
+    assertThat(result.build().getOutputDirectoriesList()).hasSize(1);
+    assertThat(result.build().getOutputDirectories(0).getPath()).isEqualTo("dir");
+    assertThat(um.getDigestToFile()).isEmpty();
+  }
+
+  @Test
+  public void actionResult_metadataOnlyOutputSharingDigest_uploadedForOtherOutput()
+      throws Exception {
+    ActionResult.Builder result = ActionResult.newBuilder();
+    Path metadataOnly = execRoot.getRelative("metadata_only");
+    Path regular = execRoot.getRelative("regular");
+    FileSystemUtils.writeContent(metadataOnly, new byte[] {1, 2, 3, 4, 5});
+    FileSystemUtils.writeContent(regular, new byte[] {1, 2, 3, 4, 5});
+
+    UploadManifest um =
+        new UploadManifest(
+            digestUtil, remotePathResolver, result, /* allowAbsoluteSymlinks= */ false);
+    um.addFiles(
+        ImmutableList.of(metadataOnly, regular),
+        /* metadataOnlyOutputs= */ ImmutableSet.of(metadataOnly));
+
+    // The other output needs the contents, so the shared digest is still uploaded.
+    assertThat(um.getDigestToFile()).containsExactly(digestUtil.compute(regular), regular);
   }
 
   @Test

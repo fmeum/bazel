@@ -195,6 +195,83 @@ EOF
   expect_not_log "START.*: \[.*\] Executing genrule //a:foobar"
 }
 
+function test_metadata_only_outputs() {
+  # Tests that an action whose outputs are recorded in the cache as metadata only doesn't have to
+  # run when its consumer hits the cache, and is re-run through lost input recovery when it doesn't.
+  mkdir -p a
+  cat > a/defs.bzl <<'EOF'
+SUFFIX = ""
+
+def _consume_impl(ctx):
+    out = ctx.actions.declare_file(ctx.label.name + ".txt")
+    ctx.actions.run_shell(
+        inputs = [ctx.file.src],
+        outputs = [out],
+        command = "cat %s > %s%s" % (ctx.file.src.path, out.path, SUFFIX),
+        mnemonic = "Consume",
+    )
+    return [DefaultInfo(files = depset([out]))]
+
+consume = rule(
+    implementation = _consume_impl,
+    attrs = {"src": attr.label(allow_single_file = True)},
+)
+EOF
+  cat > a/BUILD <<'EOF'
+load(":defs.bzl", "consume")
+
+genrule(
+  name = "producer",
+  srcs = [],
+  outs = ["producer.txt"],
+  cmd = "echo \"produced\" > \"$@\"",
+)
+
+consume(
+  name = "consumer",
+  src = ":producer",
+)
+EOF
+
+  local flags=(
+    --experimental_ui_debug_all_events
+    --remote_cache=grpc://localhost:${worker_port}
+    --remote_download_minimal
+    --rewind_lost_inputs
+    --experimental_remote_cache_eviction_retries=0
+    # Record the digests of the genrule's outputs in the cache, but not their contents.
+    --modify_execution_info=Genrule=+internal-metadata-only-outputs
+  )
+
+  bazel build "${flags[@]}" //a:consumer >& $TEST_log \
+    || fail "Failed to build //a:consumer"
+
+  expect_log "START.*: \[.*\] Executing genrule //a:producer"
+
+  bazel clean >& $TEST_log || fail "Failed to clean"
+
+  bazel build "${flags[@]}" //a:consumer >& $TEST_log \
+    || fail "Failed to build //a:consumer from the cache"
+
+  # The consumer's action key only needs the digest of the producer's output, so the consumer hits
+  # the cache and the producer never has to run, even though its contents are nowhere to be found.
+  expect_not_log "START.*: \[.*\] Executing genrule //a:producer"
+
+  # Make the consumer miss the cache without changing the producer's action key.
+  sed -i'' -e 's/^SUFFIX = ""$/SUFFIX = " \&\& true"/' a/defs.bzl
+
+  bazel clean >& $TEST_log || fail "Failed to clean"
+
+  bazel build "${flags[@]}" //a:consumer >& $TEST_log \
+    || fail "Failed to build //a:consumer after changing the consumer"
+
+  # Now the consumer does need the bytes. Fetching them fails, which makes the producer's output a
+  # lost input, and rewinding re-runs the producer to recreate it. The cache entry that provided the
+  # metadata is not consulted a second time, so this converges instead of looping.
+  expect_log "START.*: \[.*\] Executing genrule //a:producer"
+  expect_not_log "Exec failed due to IOException"
+}
+
 function setup_genrule_with_dep() {
   mkdir -p a
   cat > a/BUILD <<'EOF'

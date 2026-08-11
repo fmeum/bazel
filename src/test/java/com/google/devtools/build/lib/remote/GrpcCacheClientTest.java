@@ -837,6 +837,7 @@ public class GrpcCacheClientTest {
             action,
             command,
             outputs,
+            /* metadataOnlyOutputs= */ ImmutableSet.of(),
             outErr,
             /* exitCode= */ 0,
             /* startTime= */ null,

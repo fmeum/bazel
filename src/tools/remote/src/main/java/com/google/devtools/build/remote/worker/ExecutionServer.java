@@ -417,6 +417,7 @@ final class ExecutionServer extends ExecutionImplBase {
                 action,
                 command,
                 outputs,
+                /* metadataOnlyOutputs= */ ImmutableSet.of(),
                 outErr,
                 exitCode,
                 startTime,

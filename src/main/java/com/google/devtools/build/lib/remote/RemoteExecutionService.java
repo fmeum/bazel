@@ -17,6 +17,7 @@ import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.base.Preconditions.checkState;
 import static com.google.common.collect.ImmutableMap.toImmutableMap;
+import static com.google.common.collect.ImmutableSet.toImmutableSet;
 import static com.google.common.util.concurrent.Futures.immediateFailedFuture;
 import static com.google.common.util.concurrent.Futures.immediateFuture;
 import static com.google.common.util.concurrent.Futures.transform;
@@ -53,6 +54,7 @@ import build.bazel.remote.execution.v2.SymlinkNode;
 import build.bazel.remote.execution.v2.Tree;
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Preconditions;
+import com.google.common.base.Splitter;
 import com.google.common.base.Throwables;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
@@ -158,6 +160,7 @@ import java.util.concurrent.Phaser;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Predicate;
 import java.util.stream.Stream;
 import javax.annotation.Nullable;
 
@@ -168,6 +171,7 @@ import javax.annotation.Nullable;
 public class RemoteExecutionService {
   private static final Comparator<String> PROTO_STRING_COMPARATOR =
       comparing(StringEncoding::unicodeToInternal);
+  private static final Splitter COMMA_SPLITTER = Splitter.on(',').omitEmptyStrings();
 
   private final Reporter reporter;
   private final boolean verboseFailures;
@@ -832,6 +836,27 @@ public class RemoteExecutionService {
       return PathFragment.create(outputPath);
     }
     return null;
+  }
+
+  /**
+   * Returns a predicate matching the spawn outputs whose contents should be omitted from the upload
+   * of the action result, so that the cache records their metadata only.
+   *
+   * @see ExecutionRequirements#REMOTE_CACHE_METADATA_ONLY_OUTPUTS
+   */
+  private static Predicate<ActionInput> getMetadataOnlyOutputFilter(Spawn spawn) {
+    String value =
+        spawn.getExecutionInfo().get(ExecutionRequirements.REMOTE_CACHE_METADATA_ONLY_OUTPUTS);
+    if (value == null) {
+      return output -> false;
+    }
+    if (value.isEmpty()) {
+      // Every output of the spawn, which is what --modify_execution_info can express.
+      return output -> true;
+    }
+    ImmutableSet<PathFragment> execPaths =
+        COMMA_SPLITTER.splitToStream(value).map(PathFragment::create).collect(toImmutableSet());
+    return output -> execPaths.contains(output.getExecPath());
   }
 
   /**
@@ -1752,6 +1777,8 @@ public class RemoteExecutionService {
       throws IOException, ExecException, InterruptedException {
     try (SilentCloseable c = Profiler.instance().profile("build upload manifest")) {
       ImmutableList.Builder<Path> outputFiles = ImmutableList.builder();
+      ImmutableSet.Builder<Path> metadataOnlyOutputs = ImmutableSet.builder();
+      Predicate<ActionInput> isMetadataOnly = getMetadataOnlyOutputFilter(action.getSpawn());
       // Check that all mandatory outputs are created.
       for (ActionInput outputFile : action.getSpawn().getOutputFiles()) {
         Symlinks followSymlinks = outputFile.isSymlink() ? Symlinks.NOFOLLOW : Symlinks.FOLLOW;
@@ -1761,6 +1788,9 @@ public class RemoteExecutionService {
               "Expected output " + prettyPrint(outputFile) + " was not created locally.");
         }
         outputFiles.add(localPath);
+        if (isMetadataOnly.test(outputFile)) {
+          metadataOnlyOutputs.add(localPath);
+        }
       }
 
       return UploadManifest.create(
@@ -1771,6 +1801,7 @@ public class RemoteExecutionService {
           action.getAction(),
           action.getCommand(),
           outputFiles.build(),
+          metadataOnlyOutputs.build(),
           action.getSpawnExecutionContext().getFileOutErr(),
           spawnResult.exitCode(),
           spawnResult.getStartTime(),

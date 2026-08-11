@@ -372,6 +372,23 @@ public class ExecutionRequirements {
   /** Use this to request eager fetching of a single remote output into local memory. */
   public static final String REMOTE_EXECUTION_INLINE_OUTPUTS = "internal-inline-outputs";
 
+  /**
+   * Use this to request that the contents of some outputs be omitted when uploading the action
+   * result to a remote or disk cache, so that the cache records their metadata only.
+   *
+   * <p>The value is a comma-separated list of exec paths, or empty to select every output of the
+   * spawn.
+   *
+   * <p>An action result that only carries metadata is enough for a downstream action to compute its
+   * own cache key and be looked up in the cache, which is the point: a consumer that hits the cache
+   * never needs the bytes, so an expensive-to-store intermediate output doesn't have to be produced
+   * or stored at all. A consumer that misses the cache does need the bytes, and gets them by way of
+   * the same lost input recovery that handles cache eviction, which re-executes the action that
+   * generated them. This is therefore only useful for outputs that are cheaper to recompute than to
+   * store, and only takes effect when action rewinding is enabled.
+   */
+  public static final String REMOTE_CACHE_METADATA_ONLY_OUTPUTS = "internal-metadata-only-outputs";
+
   /** Tag for Google internal use. Indicates a memory estimate in bytes. */
   public static final String MEMORY_ESTIMATE = "internal-memory-estimate";
 
