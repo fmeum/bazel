@@ -240,7 +240,7 @@ EOF
     --rewind_lost_inputs
     --experimental_remote_cache_eviction_retries=0
     # Record the digests of the genrule's outputs in the cache, but not their contents.
-    --modify_execution_info=Genrule=+internal-metadata-only-outputs
+    --modify_execution_info=Genrule=+no-cache-upload-contents
   )
 
   bazel build "${flags[@]}" //a:consumer >& $TEST_log \
@@ -270,6 +270,40 @@ EOF
   # metadata is not consulted a second time, so this converges instead of looping.
   expect_log "START.*: \[.*\] Executing genrule //a:producer"
   expect_not_log "Exec failed due to IOException"
+}
+
+function test_metadata_only_outputs_requires_rewinding() {
+  # Tests that the contents are uploaded anyway, with a warning, when rewinding is disabled and
+  # could therefore not recover them.
+  mkdir -p a
+  cat > a/BUILD <<'EOF'
+genrule(
+  name = "producer",
+  srcs = [],
+  outs = ["producer.txt"],
+  cmd = "echo \"produced\" > \"$@\"",
+  tags = ["no-cache-upload-contents"],
+)
+EOF
+
+  local flags=(
+    --remote_cache=grpc://localhost:${worker_port}
+    --remote_download_minimal
+    --norewind_lost_inputs
+  )
+
+  bazel build "${flags[@]}" //a:producer >& $TEST_log \
+    || fail "Failed to build //a:producer"
+
+  expect_log "Ignoring the no-cache-upload-contents execution requirement"
+
+  bazel clean >& $TEST_log || fail "Failed to clean"
+
+  # The contents made it into the cache, so they can be fetched back without running the producer.
+  bazel build "${flags[@]}" --remote_download_toplevel //a:producer >& $TEST_log \
+    || fail "Failed to build //a:producer from the cache"
+
+  assert_contains "produced" bazel-bin/a/producer.txt
 }
 
 function setup_genrule_with_dep() {

@@ -247,7 +247,7 @@ public class UploadManifest {
    * references to be absent, which is the same situation as an output whose contents have been
    * evicted.
    *
-   * <p>Selected by the {@code internal-metadata-only-outputs} execution requirement.
+   * <p>Selected by the {@code no-cache-upload-contents} execution requirement.
    *
    * @see #addFiles(Collection)
    */

@@ -840,18 +840,30 @@ public class RemoteExecutionService {
 
   /**
    * Returns a predicate matching the spawn outputs whose contents should be omitted from the upload
-   * of the action result, so that the cache records their metadata only.
+   * of the action result, so that the cache describes them without holding them.
    *
-   * @see ExecutionRequirements#REMOTE_CACHE_METADATA_ONLY_OUTPUTS
+   * @see ExecutionRequirements#NO_CACHE_UPLOAD_CONTENTS
    */
-  private static Predicate<ActionInput> getMetadataOnlyOutputFilter(Spawn spawn) {
+  private Predicate<ActionInput> getNoUploadContentsFilter(RemoteAction action) {
     String value =
-        spawn.getExecutionInfo().get(ExecutionRequirements.REMOTE_CACHE_METADATA_ONLY_OUTPUTS);
+        action.getSpawn().getExecutionInfo().get(ExecutionRequirements.NO_CACHE_UPLOAD_CONTENTS);
     if (value == null) {
       return output -> false;
     }
+    if (!action.getSpawnExecutionContext().isRewindingEnabled()) {
+      // Omitting the contents is only safe if a consumer that needs them can recover them, which
+      // is what rewinding does. Uploading them anyway is the conservative choice; report()
+      // deduplicates by message, so this is warned about once per build.
+      report(
+          Event.warn(
+              String.format(
+                  "Ignoring the %s execution requirement because action rewinding is disabled."
+                      + " Pass --rewind_lost_inputs to enable it.",
+                  ExecutionRequirements.NO_CACHE_UPLOAD_CONTENTS)));
+      return output -> false;
+    }
     if (value.isEmpty()) {
-      // Every output of the spawn, which is what --modify_execution_info can express.
+      // Every output of the spawn, which is what a tag or --modify_execution_info can express.
       return output -> true;
     }
     ImmutableSet<PathFragment> execPaths =
@@ -1778,7 +1790,7 @@ public class RemoteExecutionService {
     try (SilentCloseable c = Profiler.instance().profile("build upload manifest")) {
       ImmutableList.Builder<Path> outputFiles = ImmutableList.builder();
       ImmutableSet.Builder<Path> metadataOnlyOutputs = ImmutableSet.builder();
-      Predicate<ActionInput> isMetadataOnly = getMetadataOnlyOutputFilter(action.getSpawn());
+      Predicate<ActionInput> isMetadataOnly = getNoUploadContentsFilter(action);
       // Check that all mandatory outputs are created.
       for (ActionInput outputFile : action.getSpawn().getOutputFiles()) {
         Symlinks followSymlinks = outputFile.isSymlink() ? Symlinks.NOFOLLOW : Symlinks.FOLLOW;
