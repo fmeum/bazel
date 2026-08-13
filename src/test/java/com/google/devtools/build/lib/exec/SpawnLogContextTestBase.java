@@ -2089,7 +2089,12 @@ public abstract class SpawnLogContextTestBase {
         createInputMap(),
         fs,
         defaultTimeout(),
-        defaultSpawnResultBuilder().setSpawnMetrics(metrics).setStartTime(now).build());
+        defaultSpawnResultBuilder()
+            .setSpawnMetrics(metrics)
+            .setStartTime(now)
+            .setUserTimeInMs(1500)
+            .setSystemTimeInMs(500)
+            .build());
 
     closeAndAssertLog(
         context,
@@ -2097,6 +2102,8 @@ public abstract class SpawnLogContextTestBase {
             .setMetrics(
                 Protos.SpawnMetrics.newBuilder()
                     .setTotalTime(millisToProto(1))
+                    .setUserTime(millisToProto(1500))
+                    .setSystemTime(millisToProto(500))
                     .setMeasuredMemoryPeakBytes(42L)
                     .setStartTime(Timestamps.fromDate(Date.from(now))))
             .build());

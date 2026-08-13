@@ -259,6 +259,14 @@ public abstract class SpawnLogContext implements ActionContext {
     if (metrics.retryTimeInMs() != 0L) {
       builder.setRetryTime(millisToProto(metrics.retryTimeInMs()));
     }
+    // The CPU times are only reported for locally executed spawns, whose resource usage is
+    // collected by the process wrapper.
+    if (result.getUserTimeInMs() != 0) {
+      builder.setUserTime(millisToProto(result.getUserTimeInMs()));
+    }
+    if (result.getSystemTimeInMs() != 0) {
+      builder.setSystemTime(millisToProto(result.getSystemTimeInMs()));
+    }
     builder.setInputBytes(metrics.inputBytes());
     builder.setInputFiles(metrics.inputFiles());
     builder.setMemoryEstimateBytes(metrics.memoryEstimate());

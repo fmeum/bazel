@@ -116,6 +116,14 @@ message SpawnMetrics {
   google.protobuf.Timestamp start_time = 20;
   // Measured peak memory usage in bytes, or 0 if unavailable.
   int64 measured_memory_peak_bytes = 21;
+  // CPU time spent by the spawn in user mode, or 0 if unavailable.
+  // Divide the sum of user_time and system_time by execution_wall_time to
+  // obtain the average number of CPU cores the spawn kept busy while running.
+  // Only available for locally executed spawns.
+  google.protobuf.Duration user_time = 22;
+  // CPU time spent by the spawn in kernel mode, or 0 if unavailable.
+  // See user_time.
+  google.protobuf.Duration system_time = 23;
 }
 
 // Details of an executed spawn.
