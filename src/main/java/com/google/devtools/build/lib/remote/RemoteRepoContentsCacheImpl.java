@@ -197,6 +197,9 @@ public final class RemoteRepoContentsCacheImpl implements RemoteRepoContentsCach
                   .formatted(repoName, maybeGetStackTrace(e))));
       return;
     }
+    // Read before the upload inspects the repo: it only repairs the cache entry for the blobs it
+    // finds missing, so a loss recorded after this point may be left unrepaired.
+    Long lostFilesToken = remoteFs.lostFilesToken(repoName);
     try {
       // TODO: Consider uploading asynchronously.
       var finalHash =
@@ -219,7 +222,7 @@ public final class RemoteRepoContentsCacheImpl implements RemoteRepoContentsCach
                   /* wallTimeInMs= */ 0,
                   /* preserveExecutableBit= */ true)
               .upload(context, cache, reporter);
-      remoteFs.repoContentsUploaded(repoName);
+      remoteFs.repoContentsUploaded(repoName, lostFilesToken);
     } catch (ExecException | IOException e) {
       reporter.handle(
           Event.warn(

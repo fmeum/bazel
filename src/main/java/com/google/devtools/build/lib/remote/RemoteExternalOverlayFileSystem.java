@@ -101,7 +101,11 @@ public final class RemoteExternalOverlayFileSystem extends FileSystem
   // As long as a repo name appears as a key in this map, the repo contents are available in
   // externalFs.
   private final ConcurrentHashMap<String, String> markerFileContents = new ConcurrentHashMap<>();
-  private final Set<String> reposWithLostFiles = ConcurrentHashMap.newKeySet();
+  // Maps the name of a repo with files that the remote cache has lost to the number of losses
+  // recorded for it so far. The count itself is only a change token: it lets an upload that has
+  // repaired the repo's cache entry recognize losses recorded after it started reading the repo,
+  // which it cannot have repaired.
+  private final ConcurrentHashMap<String, Long> lostFileCounts = new ConcurrentHashMap<>();
   private final RewindingSynchronizer rewindingSynchronizer = new RewindingSynchronizer();
 
   // Per-build information that is set in beforeCommand and cleared in afterCommand.
@@ -179,6 +183,7 @@ public final class RemoteExternalOverlayFileSystem extends FileSystem
     // eagerly as ongoing repo rule evaluations may still refer to the in-memory content and
     // refetching is not atomic.
     materializedRepos.forEach(this::evictInMemoryRepo);
+    Set<String> reposWithLostFiles = lostFileCounts.keySet();
     reposWithLostFiles.forEach(this::evictInMemoryRepo);
     invalidateRepoDirectories(evaluator, reposWithLostFiles);
     this.evaluator = null;
@@ -398,10 +403,14 @@ public final class RemoteExternalOverlayFileSystem extends FileSystem
       // The repo contents are served from the remote cache. Make the next cache lookup report a
       // miss so that rewinding the repo fetch executes the repo rule again locally, which also
       // uploads the fresh contents to the remote cache and thus repairs the cache entry.
-      reposWithLostFiles.add(repo.getName());
+      recordLostRepoFile(repo.getName());
     }
     // If the repo has been materialized or refetched in the meantime, rewinding the repo fetch
     // still recovers the file by re-reading the on-disk state.
+  }
+
+  private void recordLostRepoFile(String repoName) {
+    lostFileCounts.merge(repoName, 1L, Long::sum);
   }
 
   /**
@@ -416,12 +425,35 @@ public final class RemoteExternalOverlayFileSystem extends FileSystem
    * have actually been uploaded anew.
    */
   public boolean shouldRefetch(RepositoryName repo) {
-    return reposWithLostFiles.contains(repo.getName());
+    return lostFileCounts.containsKey(repo.getName());
   }
 
-  /** Must be called once the given repo's contents have been uploaded to the remote cache. */
-  public void repoContentsUploaded(RepositoryName repo) {
-    reposWithLostFiles.remove(repo.getName());
+  /**
+   * Returns an opaque token describing the losses recorded for the given repo so far, to be passed
+   * to {@link #repoContentsUploaded} after the repo's contents have been uploaded, or null if no
+   * loss has been recorded.
+   *
+   * <p>Must be read before the upload starts to inspect the repo, since only losses that predate
+   * that inspection are repaired by it.
+   */
+  @Nullable
+  public Long lostFilesToken(RepositoryName repo) {
+    return lostFileCounts.get(repo.getName());
+  }
+
+  /**
+   * Must be called once the given repo's contents have been uploaded to the remote cache, with the
+   * token {@link #lostFilesToken} returned before the upload started.
+   *
+   * <p>The upload only repairs the cache entry for the blobs it found missing. A loss recorded
+   * while it was running is thus left unrepaired, either because the remote cache evicted a blob
+   * the upload had already seen or because a consumer only then reached a blob evicted earlier, and
+   * the repo has to keep reporting a cache miss. A differing token reveals exactly that case.
+   */
+  public void repoContentsUploaded(RepositoryName repo, @Nullable Long lostFilesToken) {
+    if (lostFilesToken != null) {
+      lostFileCounts.remove(repo.getName(), lostFilesToken);
+    }
   }
 
   /**
@@ -475,7 +507,7 @@ public final class RemoteExternalOverlayFileSystem extends FileSystem
   private IOException lostRemoteFile(
       PathFragment relativePath, Digest digest, BulkTransferException cause) {
     String repoName = relativePath.getSegment(0);
-    reposWithLostFiles.add(repoName);
+    recordLostRepoFile(repoName);
     String message =
         "%s/%s with digest %s is no longer available in the remote cache"
             .formatted(externalDirectory.getBaseName(), relativePath, DigestUtil.toString(digest));
