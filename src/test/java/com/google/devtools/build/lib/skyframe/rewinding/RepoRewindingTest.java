@@ -134,6 +134,46 @@ public final class RepoRewindingTest extends BuildIntegrationTestCase {
         """);
   }
 
+  /**
+   * Writes a repo rule whose repos contain two files, {@code src_1.txt} and {@code src_2.txt}, each
+   * with the contents of its own workspace file, which are intentionally not watched so that they
+   * can be modified mid-build to observe refetches.
+   *
+   * <p>Two files of the same repo are what a single repo fetch has to recover at once: the remote
+   * repo contents cache loses blobs individually, but the repo rule that produced them can only be
+   * run again as a whole.
+   */
+  private void writeTwoFileRepoRule() throws Exception {
+    write("repo/BUILD");
+    write(
+        "repo/two_file_repo.bzl",
+        """
+        def _read_workspace_file(rctx, name):
+            return rctx.read(rctx.workspace_root.get_child("repo", name), watch = "no")
+
+        def _two_file_repo_impl(rctx):
+            rctx.file("BUILD", "exports_files(['src_1.txt', 'src_2.txt'])")
+            rctx.file("src_1.txt", _read_workspace_file(rctx, rctx.attr.content_file_1))
+            rctx.file("src_2.txt", _read_workspace_file(rctx, rctx.attr.content_file_2))
+
+        two_file_repo = repository_rule(
+            implementation = _two_file_repo_impl,
+            attrs = {
+                "content_file_1": attr.string(),
+                "content_file_2": attr.string(),
+            },
+        )
+        """);
+  }
+
+  /** Declares a {@code two_file_repo} named {@code repo_a} backed by the given workspace files. */
+  private void useTwoFileRepo(String contentFile1, String contentFile2) throws Exception {
+    appendToModuleFile(
+        "two_file_repo = use_repo_rule('//repo:two_file_repo.bzl', 'two_file_repo')",
+        "two_file_repo(name = 'repo_a', content_file_1 = '%s', content_file_2 = '%s')"
+            .formatted(contentFile1, contentFile2));
+  }
+
   private void appendToModuleFile(String... lines) throws Exception {
     FileSystemUtils.appendIsoLatin1(getWorkspace().getRelative("MODULE.bazel"), lines);
   }
@@ -428,6 +468,133 @@ public final class RepoRewindingTest extends BuildIntegrationTestCase {
     assertThat(lostInput2.get()).isSameInstanceAs(lostInput1.get());
     ImmutableList<SkyKey> chain = expectedRewoundChain(lostInput1.get());
     assertThat(ImmutableSet.copyOf(rewoundKeys)).containsExactlyElementsIn(chain);
+    actionEventRecorder.assertTotalLostInputCountsFromStats(ImmutableList.of(2));
+  }
+
+  @Test
+  public void multipleLostFilesFromSameRepo_oneAction_repoRewoundOnce() throws Exception {
+    writeTwoFileRepoRule();
+    write("repo/content_1.txt", "old_1");
+    write("repo/content_2.txt", "old_2");
+    useTwoFileRepo("content_1.txt", "content_2.txt");
+    write(
+        "test/BUILD",
+        """
+        genrule(
+            name = "consume",
+            srcs = [
+                "@repo_a//:src_1.txt",
+                "@repo_a//:src_2.txt",
+            ],
+            outs = ["out.txt"],
+            cmd = "cat $(SRCS) > $@",
+        )
+        """);
+
+    AtomicReference<Artifact> lostInput1 = new AtomicReference<>();
+    AtomicReference<Artifact> lostInput2 = new AtomicReference<>();
+    helper.addSpawnShim(
+        "Executing genrule //test:consume",
+        (spawn, context) -> {
+          Artifact input1 = (Artifact) SpawnInputUtils.getInputWithName(spawn, "src_1.txt");
+          Artifact input2 = (Artifact) SpawnInputUtils.getInputWithName(spawn, "src_2.txt");
+          lostInput1.set(input1);
+          lostInput2.set(input2);
+          write("repo/content_1.txt", "new_1");
+          write("repo/content_2.txt", "new_2");
+          Path markerFile = markerFileForRepoOf(input1);
+          checkState(markerFile.delete(), "marker file %s did not exist", markerFile);
+          return helper.createLostInputsExecException(context, ImmutableList.of(input1, input2));
+        });
+
+    rewindableFs.setExternalDir(getOutputBase().getRelative("external").asFragment());
+    List<SkyKey> rewoundKeys = helper.collectOrderedRewoundKeys();
+    buildTarget("//test:consume");
+
+    helper.verifyAllSpawnShimsConsumed();
+    // Both lost files carry the new contents, so the single refetch of their repo recovered both.
+    assertContents("new_1\nnew_2", "//test:consume");
+    // The action ran twice: once failing with both lost inputs and once after rewinding.
+    assertThat(helper.getExecutedSpawnDescriptions())
+        .containsExactly("Executing genrule //test:consume", "Executing genrule //test:consume");
+    // The repo is marked as having lost files once per lost file, which is idempotent in
+    // production because the file system tracks lost repos in a set.
+    assertThat(ImmutableSet.copyOf(rewindableFs.lostRepos))
+        .containsExactly(repoOf(lostInput1.get()));
+    // Each lost file is rewound along its own chain of metadata nodes, but the two chains share
+    // the repo fetch at their end. Comparing against the union of both chains asserts that the
+    // shared node was rewound exactly once: a second rewind would leave a duplicate key behind.
+    ImmutableList<SkyKey> chain1 = expectedRewoundChain(lostInput1.get());
+    ImmutableList<SkyKey> chain2 = expectedRewoundChain(lostInput2.get());
+    assertThat(rewoundKeys)
+        .containsExactlyElementsIn(
+            ImmutableSet.<SkyKey>builder().addAll(chain1).addAll(chain2).build());
+    assertRewoundInOrder(rewoundKeys, chain1);
+    assertRewoundInOrder(rewoundKeys, chain2);
+    actionEventRecorder.assertTotalLostInputCountsFromStats(ImmutableList.of(2));
+  }
+
+  @Test
+  public void multipleLostFilesFromSameRepo_separateActions_repoRewoundConcurrently()
+      throws Exception {
+    writeTwoFileRepoRule();
+    write("repo/content_1.txt", "old_1");
+    write("repo/content_2.txt", "old_2");
+    useTwoFileRepo("content_1.txt", "content_2.txt");
+    write(
+        "test/BUILD",
+        """
+        genrule(
+            name = "consume_1",
+            srcs = ["@repo_a//:src_1.txt"],
+            outs = ["out_1.txt"],
+            cmd = "cp $< $@",
+        )
+
+        genrule(
+            name = "consume_2",
+            srcs = ["@repo_a//:src_2.txt"],
+            outs = ["out_2.txt"],
+            cmd = "cp $< $@",
+        )
+        """);
+
+    CountDownLatch allSpawnsObservedLostInputs = new CountDownLatch(2);
+    AtomicReference<Artifact> lostInput1 = new AtomicReference<>();
+    AtomicReference<Artifact> lostInput2 = new AtomicReference<>();
+    helper.addSpawnShim(
+        "Executing genrule //test:consume_1",
+        lostRepoFileShim(
+            "src_1.txt", "content_1.txt", "new_1", allSpawnsObservedLostInputs, lostInput1));
+    helper.addSpawnShim(
+        "Executing genrule //test:consume_2",
+        lostRepoFileShim(
+            "src_2.txt", "content_2.txt", "new_2", allSpawnsObservedLostInputs, lostInput2));
+
+    rewindableFs.setExternalDir(getOutputBase().getRelative("external").asFragment());
+    List<SkyKey> rewoundKeys = helper.collectOrderedRewoundKeys();
+    buildTarget("//test:consume_1", "//test:consume_2");
+
+    helper.verifyAllSpawnShimsConsumed();
+    assertContents("new_1", "//test:consume_1");
+    assertContents("new_2", "//test:consume_2");
+    assertThat(helper.getExecutedSpawnDescriptions())
+        .containsExactly(
+            "Executing genrule //test:consume_1",
+            "Executing genrule //test:consume_2",
+            "Executing genrule //test:consume_1",
+            "Executing genrule //test:consume_2");
+    assertThat(lostInput2.get()).isNotSameInstanceAs(lostInput1.get());
+    assertThat(ImmutableSet.copyOf(rewindableFs.lostRepos))
+        .containsExactly(repoOf(lostInput1.get()));
+    // The two actions lost different files of the same repo, so their chains of rewound nodes are
+    // disjoint except for the repo fetch they share. Since the two rewinds are independent, that
+    // shared node may be rewound by each of them and thus be reported more than once.
+    ImmutableList<SkyKey> chain1 = expectedRewoundChain(lostInput1.get());
+    ImmutableList<SkyKey> chain2 = expectedRewoundChain(lostInput2.get());
+    assertThat(ImmutableSet.copyOf(rewoundKeys))
+        .containsExactlyElementsIn(
+            ImmutableSet.<SkyKey>builder().addAll(chain1).addAll(chain2).build());
     actionEventRecorder.assertTotalLostInputCountsFromStats(ImmutableList.of(2));
   }
 

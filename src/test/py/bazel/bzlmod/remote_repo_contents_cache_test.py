@@ -2101,6 +2101,91 @@ class RemoteRepoContentsCacheTest(test_base.TestBase):
     with open(self.Path('bazel-bin/main/out.txt')) as f:
       self.assertEqual(f.read().strip(), 'hello')
 
+  def testLostRemoteFile_actionInputs_multipleFilesFromSameRepo(self):
+    # Two files of the same cached repo are lost from the remote cache and
+    # consumed by a single action. The repo rule cannot produce one of its
+    # files without the other, so both lost inputs have to be recovered by a
+    # single refetch of the repo containing them.
+    self.ScratchFile(
+        'MODULE.bazel',
+        [
+            'repo = use_repo_rule("//:repo.bzl", "repo")',
+            'repo(name = "my_repo")',
+        ],
+    )
+    self.ScratchFile('BUILD.bazel')
+    self.ScratchFile(
+        'repo.bzl',
+        [
+            'def _repo_impl(rctx):',
+            (
+                '  rctx.file("BUILD",'
+                ' "exports_files([\'data_1.txt\', \'data_2.txt\'])")'
+            ),
+            '  rctx.file("data_1.txt", "unique-contents-1\\n")',
+            '  rctx.file("data_2.txt", "unique-contents-2\\n")',
+            '  print("JUST FETCHED")',
+            '  return rctx.repo_metadata(reproducible=True)',
+            'repo = repository_rule(_repo_impl)',
+        ],
+    )
+    self.ScratchFile(
+        'main/BUILD.bazel',
+        [
+            'genrule(',
+            '  name = "use_both",',
+            '  srcs = [',
+            '    "@my_repo//:data_1.txt",',
+            '    "@my_repo//:data_2.txt",',
+            '  ],',
+            '  outs = ["out.txt"],',
+            '  cmd = "cat $(SRCS) > $@",',
+            ')',
+        ],
+    )
+
+    repo_dir = self.RepoDir('my_repo')
+
+    # First fetch: not cached. Analyze (but do not execute) the genrule so
+    # that all loading and analysis state is in Skyframe for the builds below.
+    _, _, stderr = self.RunBazel(['build', '--nobuild', '//main:use_both'])
+    self.assertIn('JUST FETCHED', '\n'.join(stderr))
+
+    # After expunging: cached, with the contents of both data files staying
+    # remote.
+    self.RunBazel(['clean', '--expunge'])
+    _, _, stderr = self.RunBazel(['build', '--nobuild', '//main:use_both'])
+    self.assertNotIn('JUST FETCHED', '\n'.join(stderr))
+    self.assertFalse(os.path.exists(os.path.join(repo_dir, 'data_1.txt')))
+    self.assertFalse(os.path.exists(os.path.join(repo_dir, 'data_2.txt')))
+
+    # Lose the blobs of both data files while keeping the repo's action result
+    # and Tree, so that the loss is only discovered when the action's inputs
+    # are materialized.
+    self.DeleteCasEntry(b'unique-contents-1\n')
+    self.DeleteCasEntry(b'unique-contents-2\n')
+
+    _, _, stderr = self.RunBazel(
+        ['build', '--rewind_lost_inputs', '//main:use_both']
+    )
+    stderr = '\n'.join(stderr)
+    # A single refetch recovered both lost files.
+    self.assertEqual(stderr.count('JUST FETCHED'), 1)
+    self.assertTrue(os.path.exists(os.path.join(repo_dir, 'data_1.txt')))
+    self.assertTrue(os.path.exists(os.path.join(repo_dir, 'data_2.txt')))
+    with open(self.Path('bazel-bin/main/out.txt')) as f:
+      self.assertEqual(f.read(), 'unique-contents-1\nunique-contents-2\n')
+
+    # The refetch uploaded the repo contents anew, which healed the cache
+    # entry for both lost blobs, not just the one that surfaced first.
+    self.RunBazel(['clean', '--expunge'])
+    _, _, stderr = self.RunBazel(['build', '//main:use_both'])
+    self.assertNotIn('JUST FETCHED', '\n'.join(stderr))
+    self.assertFalse(os.path.exists(os.path.join(repo_dir, 'data_1.txt')))
+    self.assertFalse(os.path.exists(os.path.join(repo_dir, 'data_2.txt')))
+    with open(self.Path('bazel-bin/main/out.txt')) as f:
+      self.assertEqual(f.read(), 'unique-contents-1\nunique-contents-2\n')
+
   def SetUpRemoteOnlyDataRepo(self):
     """Caches @my_repo and restores it with data.txt remaining remote-only."""
     self.ScratchFile('BUILD.bazel')
