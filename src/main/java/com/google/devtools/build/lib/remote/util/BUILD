@@ -87,6 +87,7 @@ java_library(
     deps = [
         ":digest_output_stream",
         "//src/main/java/com/google/devtools/build/lib/remote/common:action_key",
+        "//src/main/java/com/google/devtools/build/lib/unsafe:string",
         "//src/main/java/com/google/devtools/build/lib/util:deterministic_writer",
         "//src/main/java/com/google/devtools/build/lib/vfs",
         "//src/main/protobuf:spawn_java_proto",

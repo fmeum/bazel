@@ -26,8 +26,8 @@ import com.google.common.collect.ImmutableSet;
 import com.google.common.hash.HashCode;
 import com.google.common.hash.HashFunction;
 import com.google.common.hash.Hasher;
-import com.google.common.io.BaseEncoding;
 import com.google.devtools.build.lib.remote.common.ActionKey;
+import com.google.devtools.build.lib.unsafe.StringUnsafe;
 import com.google.devtools.build.lib.util.DeterministicWriter;
 import com.google.devtools.build.lib.vfs.DigestHashFunction;
 import com.google.devtools.build.lib.vfs.DigestUtils;
@@ -178,7 +178,7 @@ public class DigestUtil {
   }
 
   public static Digest buildDigest(byte[] hash, long size) {
-    return buildDigest(HashCode.fromBytes(hash).toString(), size);
+    return buildDigest(toLowerCaseHex(hash), size);
   }
 
   public static Digest buildDigest(String hexHash, long size) {
@@ -186,7 +186,31 @@ public class DigestUtil {
   }
 
   public static String hashCodeToString(HashCode hash) {
-    return BaseEncoding.base16().lowerCase().encode(hash.asBytes());
+    return toLowerCaseHex(hash.asBytes());
+  }
+
+  private static final byte[] LOWER_CASE_HEX_DIGITS = {
+    '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'a', 'b', 'c', 'd', 'e', 'f'
+  };
+
+  /**
+   * Returns the lower-case hexadecimal representation of the given bytes.
+   *
+   * <p>Equivalent to {@code BaseEncoding.base16().lowerCase().encode(bytes)} and {@code
+   * HashCode#toString}, but only allocates the byte array backing the returned string.
+   *
+   * <p>This is called at least once per file in a Merkle tree as well as once per blob when
+   * querying the remote cache for missing blobs, so it is worth optimizing.
+   */
+  private static String toLowerCaseHex(byte[] bytes) {
+    byte[] hex = new byte[2 * bytes.length];
+    for (int i = 0; i < bytes.length; i++) {
+      int b = bytes[i] & 0xFF;
+      hex[2 * i] = LOWER_CASE_HEX_DIGITS[b >>> 4];
+      hex[2 * i + 1] = LOWER_CASE_HEX_DIGITS[b & 0x0F];
+    }
+    // The array contains ASCII characters only and isn't referenced anywhere else.
+    return StringUnsafe.newInstance(hex, StringUnsafe.LATIN1);
   }
 
   public DigestOutputStream newDigestOutputStream(OutputStream out) {
