@@ -32,8 +32,11 @@ import static java.util.Map.entry;
 import build.bazel.remote.execution.v2.Action;
 import build.bazel.remote.execution.v2.Digest;
 import build.bazel.remote.execution.v2.Directory;
+import build.bazel.remote.execution.v2.DirectoryNode;
+import build.bazel.remote.execution.v2.FileNode;
 import build.bazel.remote.execution.v2.NodeProperties;
 import build.bazel.remote.execution.v2.NodeProperty;
+import build.bazel.remote.execution.v2.SymlinkNode;
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
 import com.google.common.base.Preconditions;
@@ -593,10 +596,7 @@ public final class MerkleTreeComputer {
                   blobs);
             }
           }
-          topDirectory
-              .addDirectoriesBuilder()
-              .setName(internalToUnicode(dirToPop))
-              .setDigest(directoryBlobDigest);
+          addDirectory(topDirectory, internalToUnicode(dirToPop), directoryBlobDigest);
         }
         for (int i = 0; i < newParent.segmentCount() - commonPrefix.segmentCount(); i++) {
           directoryStack.push(Directory.newBuilder());
@@ -613,7 +613,7 @@ public final class MerkleTreeComputer {
             when specialArtifact.isTreeArtifact() || specialArtifact.isRunfilesTree() -> {
           var subTreeRoot =
               Preconditions.checkNotNull(subTreeRoots.get(entry), "missing subtree for %s", input);
-          currentDirectory.addDirectoriesBuilder().setName(name).setDigest(subTreeRoot.digest());
+          addDirectory(currentDirectory, name, subTreeRoot.digest());
           inputFiles += subTreeRoot.inputFiles();
           inputBytes += subTreeRoot.inputBytes();
         }
@@ -621,14 +621,14 @@ public final class MerkleTreeComputer {
           var metadata =
               checkNotNull(
                   metadataProvider.getInputMetadata(symlink), "missing metadata: %s", symlink);
-          var builder =
-              currentDirectory
-                  .addSymlinksBuilder()
+          var symlinkNode =
+              SymlinkNode.newBuilder()
                   .setName(name)
                   .setTarget(internalToUnicode(metadata.getUnresolvedSymlinkTarget()));
           if (nodeProperties != null) {
-            builder.setNodeProperties(nodeProperties);
+            symlinkNode.setNodeProperties(nodeProperties);
           }
+          currentDirectory.addSymlinks(symlinkNode.build());
           inputFiles++;
         }
         case Artifact fileOrSourceDirectory -> {
@@ -641,7 +641,7 @@ public final class MerkleTreeComputer {
             var subTreeRoot =
                 Preconditions.checkNotNull(
                     subTreeRoots.get(entry), "missing subtree for %s", input);
-            currentDirectory.addDirectoriesBuilder().setName(name).setDigest(subTreeRoot.digest());
+            addDirectory(currentDirectory, name, subTreeRoot.digest());
             inputFiles += subTreeRoot.inputFiles();
             inputBytes += subTreeRoot.inputBytes();
             // The source directory subsumes all children paths, which may be staged separately as
@@ -686,8 +686,7 @@ public final class MerkleTreeComputer {
           inputFiles++;
           inputBytes += digest.getSizeBytes();
         }
-        case EmptyInputDirectory ignored ->
-            currentDirectory.addDirectoriesBuilder().setName(name).setDigest(emptyDigest);
+        case EmptyInputDirectory ignored -> addDirectory(currentDirectory, name, emptyDigest);
         case null -> {
           // This is a sentinel value for an empty file. This case only occurs when this method is
           // called from computeForRunfilesTreeIfAbsent.
@@ -1038,14 +1037,19 @@ public final class MerkleTreeComputer {
     }
   }
 
+  // Note: The nodes below are added via addFoo(Foo) rather than addFooBuilder(). The latter forces
+  // the repeated field into protobuf's builder-backed representation, which wraps every element in
+  // an additional SingleFieldBuilder and rebuilds all of them one by one when the Directory is
+  // built. Since node contents are never revised after they have been added, the message-backed
+  // representation is both smaller and cheaper.
+
   private static void addFile(
       Directory.Builder directory,
       String name,
       Digest digest,
       @Nullable NodeProperties nodeProperties) {
-    var builder =
-        directory
-            .addFilesBuilder()
+    var file =
+        FileNode.newBuilder()
             .setName(name)
             .setDigest(digest)
             // We always treat files as executable since Bazel will `chmod 555` on the output
@@ -1055,8 +1059,13 @@ public final class MerkleTreeComputer {
             // https://github.com/bazelbuild/bazel/issues/13262 for more details.
             .setIsExecutable(true);
     if (nodeProperties != null) {
-      builder.setNodeProperties(nodeProperties);
+      file.setNodeProperties(nodeProperties);
     }
+    directory.addFiles(file.build());
+  }
+
+  private static void addDirectory(Directory.Builder directory, String name, Digest digest) {
+    directory.addDirectories(DirectoryNode.newBuilder().setName(name).setDigest(digest).build());
   }
 
   private static PathFragment findCommonPrefix(PathFragment path1, PathFragment path2) {
