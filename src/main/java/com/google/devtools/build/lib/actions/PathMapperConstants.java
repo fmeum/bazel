@@ -17,6 +17,7 @@ package com.google.devtools.build.lib.actions;
 import com.github.benmanes.caffeine.cache.Caffeine;
 import com.github.benmanes.caffeine.cache.LoadingCache;
 import com.google.devtools.build.lib.vfs.PathFragment;
+import java.util.regex.Pattern;
 import net.starlark.java.eval.StarlarkSemantics;
 
 /** Holder class for symbols used by the PathMapper interface that shouldn't be public. */
@@ -31,6 +32,19 @@ final class PathMapperConstants {
 
   private static final PathFragment BAZEL_OUT = PathFragment.create("bazel-out");
   private static final PathFragment BLAZE_OUT = PathFragment.create("blaze-out");
+
+  /**
+   * Matches the output root and configuration segment of every output path embedded in an arbitrary
+   * string, e.g. {@code bazel-out/k8-fastbuild/} in {@code -Lbazel-out/k8-fastbuild/bin/pkg}.
+   *
+   * <p>This must accept exactly the paths that the string stripper in {@link
+   * com.google.devtools.build.lib.analysis.actions.StrippingPathMapper} rewrites at execution time
+   * so that a string is fingerprinted as mapped if and only if it really is mapped when the action
+   * runs. In particular, paths that would not exist without a configuration segment (e.g. {@code
+   * bazel-out/k8-fastbuild}) are left alone by both. Keep the two in sync.
+   */
+  private static final Pattern OUTPUT_PATH_IN_STRING =
+      Pattern.compile("(bazel-out|blaze-out)/((?::archived_tree_artifacts/)?[\\w_.-]+/)");
 
   /**
    * A special instance for use in {@link AbstractAction#computeKey} when path mapping is generally
@@ -59,22 +73,39 @@ final class PathMapperConstants {
    * between the original config segments, but prepends a fixed string to distinguish hard-coded
    * path strings from mapped paths. This relies on actions using path mapping to be "root
    * agnostic": they must not contain logic that depends on any particular (output) root path.
+   *
+   * <p>The marker is applied both to paths obtained from {@link ActionInput}s via {@link
+   * PathMapper#map} and to output paths embedded in arbitrary strings via {@link
+   * PathMapper#mapHeuristically}, which is what e.g. C++ toolchain variables are expanded with. A
+   * given path thus contributes the same value to the action key no matter which of the two routes
+   * it takes into the command line.
    */
   static final PathMapper FOR_FINGERPRINTING =
-      execPath -> {
-        if (!execPath.startsWith(BAZEL_OUT) && !execPath.startsWith(BLAZE_OUT)) {
-          // This is not an output path.
-          return execPath;
+      new PathMapper() {
+        @Override
+        public PathFragment map(PathFragment execPath) {
+          if (!execPath.startsWith(BAZEL_OUT) && !execPath.startsWith(BLAZE_OUT)) {
+            // This is not an output path.
+            return execPath;
+          }
+          String execPathString = execPath.getPathString();
+          int startOfConfigSegment = execPathString.indexOf('/') + 1;
+          if (startOfConfigSegment == 0) {
+            return execPath;
+          }
+          return PathFragment.createAlreadyNormalized(
+              execPathString.substring(0, startOfConfigSegment)
+                  + "pm-"
+                  + execPathString.substring(startOfConfigSegment));
         }
-        String execPathString = execPath.getPathString();
-        int startOfConfigSegment = execPathString.indexOf('/') + 1;
-        if (startOfConfigSegment == 0) {
-          return execPath;
+
+        @Override
+        public String mapHeuristically(String arg) {
+          // Insert the marker in the same position as map() does so that a path contributes the
+          // same value to the action key whether it reaches the command line as a File or as a
+          // string that is heuristically mapped at execution time.
+          return OUTPUT_PATH_IN_STRING.matcher(arg).replaceAll("$1/pm-$2");
         }
-        return PathFragment.createAlreadyNormalized(
-            execPathString.substring(0, startOfConfigSegment)
-                + "pm-"
-                + execPathString.substring(startOfConfigSegment));
       };
 
   private PathMapperConstants() {}

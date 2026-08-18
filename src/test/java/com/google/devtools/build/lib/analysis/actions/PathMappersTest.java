@@ -296,6 +296,50 @@ public class PathMappersTest extends BuildViewTestCase {
   }
 
   @Test
+  public void forActionKey_mapHeuristically() {
+    var pathMapper = PathMapper.forActionKey(CoreOptions.OutputPathsMode.STRIP);
+
+    // Strings that are heuristically mapped at execution time are marked in the same way as paths
+    // obtained from an Artifact, and in particular are not left untouched.
+    assertThat(pathMapper.mapHeuristically("bazel-out/k8-fastbuild-ST-12345/bin/pkg/file"))
+        .isEqualTo(
+            pathMapper
+                .map(PathFragment.create("bazel-out/k8-fastbuild-ST-12345/bin/pkg/file"))
+                .getPathString());
+    assertThat(pathMapper.mapHeuristically("blaze-out/k8-opt/bin/pkg/file"))
+        .isEqualTo("blaze-out/pm-k8-opt/bin/pkg/file");
+
+    // Output paths are recognized wherever they appear in the string, matching the behavior of the
+    // string stripper used at execution time.
+    assertThat(pathMapper.mapHeuristically("-Lbazel-out/k8-fastbuild/bin/pkg"))
+        .isEqualTo("-Lbazel-out/pm-k8-fastbuild/bin/pkg");
+    assertThat(
+            pathMapper.mapHeuristically(
+                "bazel-out/k8-fastbuild/bin/a bazel-out/k8-opt/bin/b src/source.file"))
+        .isEqualTo("bazel-out/pm-k8-fastbuild/bin/a bazel-out/pm-k8-opt/bin/b src/source.file");
+
+    // Archived tree artifact paths keep their virtual segment.
+    assertThat(
+            pathMapper.mapHeuristically(
+                "bazel-out/:archived_tree_artifacts/k8-fastbuild/bin/pkg/tree.zip"))
+        .isEqualTo("bazel-out/pm-:archived_tree_artifacts/k8-fastbuild/bin/pkg/tree.zip");
+
+    // Strings that the execution-time stripper leaves alone are left alone here as well.
+    assertThat(pathMapper.mapHeuristically("pkg/file")).isEqualTo("pkg/file");
+    assertThat(pathMapper.mapHeuristically("bazel-out/k8-fastbuild"))
+        .isEqualTo("bazel-out/k8-fastbuild");
+    assertThat(pathMapper.mapHeuristically("bazel-out;foo")).isEqualTo("bazel-out;foo");
+  }
+
+  @Test
+  public void forActionKey_off_mapHeuristically() {
+    var pathMapper = PathMapper.forActionKey(CoreOptions.OutputPathsMode.OFF);
+    assertThat(pathMapper.isNoop()).isTrue();
+    assertThat(pathMapper.mapHeuristically("bazel-out/k8-fastbuild/bin/pkg/file"))
+        .isEqualTo("bazel-out/k8-fastbuild/bin/pkg/file");
+  }
+
+  @Test
   public void starlarkRule_archivedTreePaths() throws Exception {
     String outDir = analysisMock.getProductName() + "-out";
     scratch.file("defs/BUILD");
