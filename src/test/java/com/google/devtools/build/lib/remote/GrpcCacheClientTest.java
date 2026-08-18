@@ -1300,6 +1300,67 @@ public class GrpcCacheClientTest {
   }
 
   @Test
+  public void downloadBlobIsNotRetriedForeverWithoutProgress() throws IOException {
+    // A server that keeps accepting the read and answering with keepalive-style responses that
+    // carry no data, then failing with a retriable error, must not be retried indefinitely: the
+    // backoff may only be reset when the read actually advanced. Otherwise the download future
+    // never becomes terminal and every thread waiting on it hangs for the rest of the build.
+    RemoteOptions remoteOptions = Options.getDefaults(RemoteOptions.class);
+    remoteOptions.setRemoteMaxRetryAttempts(2);
+    GrpcCacheClient client = newClient(remoteOptions);
+    Digest digest = DIGEST_UTIL.computeAsUtf8("abcdefg");
+    AtomicInteger readCalls = new AtomicInteger();
+    serviceRegistry.addService(
+        new ByteStreamImplBase() {
+          @Override
+          public void read(ReadRequest request, StreamObserver<ReadResponse> responseObserver) {
+            assertThat(request.getReadOffset()).isEqualTo(0);
+            readCalls.incrementAndGet();
+            responseObserver.onNext(ReadResponse.getDefaultInstance());
+            responseObserver.onError(Status.UNAVAILABLE.asException());
+          }
+        });
+
+    assertThrows(IOException.class, () -> downloadBlob(context, client, digest));
+    // The initial attempt plus exactly --remote_max_retry_attempts retries.
+    assertThat(readCalls.get()).isEqualTo(3);
+  }
+
+  @Test
+  public void downloadBlobFailsWhenServerIgnoresReadOffset() throws IOException {
+    // A server that restarts the stream from the beginning instead of honoring the read offset
+    // would otherwise make the client buffer the blob over and over without ever completing.
+    RemoteOptions remoteOptions = Options.getDefaults(RemoteOptions.class);
+    remoteOptions.setRemoteMaxRetryAttempts(2);
+    GrpcCacheClient client = newClient(remoteOptions);
+    Digest digest = DIGEST_UTIL.computeAsUtf8("abcdefg");
+    ByteString data = ByteString.copyFromUtf8("abcdefg");
+    AtomicInteger readCalls = new AtomicInteger();
+    serviceRegistry.addService(
+        new ByteStreamImplBase() {
+          @Override
+          public void read(ReadRequest request, StreamObserver<ReadResponse> responseObserver) {
+            if (readCalls.getAndIncrement() == 0) {
+              // Deliver a prefix so that the client retries from a non-zero read offset.
+              responseObserver.onNext(
+                  ReadResponse.newBuilder().setData(data.substring(0, 1)).build());
+              responseObserver.onError(Status.UNAVAILABLE.asException());
+              return;
+            }
+            // Restart from the beginning instead of honoring the requested offset.
+            assertThat(request.getReadOffset()).isEqualTo(1);
+            responseObserver.onNext(ReadResponse.newBuilder().setData(data).build());
+            responseObserver.onCompleted();
+          }
+        });
+
+    IOException e = assertThrows(IOException.class, () -> downloadBlob(context, client, digest));
+    assertThat(e).hasMessageThat().contains("more than the expected");
+    // The over-read is a permanent failure, so the client gives up instead of retrying.
+    assertThat(readCalls.get()).isEqualTo(2);
+  }
+
+  @Test
   public void downloadBlobIdleTimeoutIsRetriedWithProgress()
       throws IOException, InterruptedException {
     // Unexpected failures without progress should stop immediately. The idle-timeout retry below

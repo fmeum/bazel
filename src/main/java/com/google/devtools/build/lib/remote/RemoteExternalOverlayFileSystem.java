@@ -842,8 +842,15 @@ public final class RemoteExternalOverlayFileSystem extends FileSystem
       return FileArtifactValue.createForUnresolvedSymlink(externalFs.getPath(path));
     }
 
+    // Deliberately not synchronized, unlike the InMemoryFileSystem method it overrides: this
+    // method blocks on a remote download, while the monitor it would acquire guards *every* other
+    // operation on this file system. Holding it across remote I/O turns a single slow or stuck
+    // download into a build-wide deadlock, with all other Skyframe threads parked on monitor entry
+    // and thus not even interruptible. Nothing below needs the monitor to be held across the
+    // download: the in-memory lookups (shouldPrefetch, resolveSymbolicLinks, stat) acquire it
+    // individually, and two threads racing to read the same path merely download it twice.
     @Override
-    public synchronized InputStream getInputStream(PathFragment path) throws IOException {
+    public InputStream getInputStream(PathFragment path) throws IOException {
       // Symlinks are never prefetched to the native file system themselves, only the regular file
       // they resolve to, so follow them before reading a prefetched file. Either end of the chain
       // can be what makes the read eligible: a symlink named `helper.bzl` pointing at `helper.txt`

@@ -479,11 +479,14 @@ public class GrpcCacheClient extends RemoteCacheClient implements MissingDigests
     } catch (IOException e) {
       return Futures.immediateFailedFuture(e);
     }
+    // The offset this attempt resumes the read at. Bytes written past it are forward progress that
+    // no earlier attempt made, which is what earns this attempt a fresh deck of retries.
+    long readOffset = rawOut.getCount();
     bsAsyncStub(context, channel)
         .read(
             ReadRequest.newBuilder()
                 .setResourceName(resourceName)
-                .setReadOffset(rawOut.getCount())
+                .setReadOffset(readOffset)
                 .build(),
             new ClientResponseObserver<ReadRequest, ReadResponse>() {
               private volatile ClientCallStreamObserver<ReadRequest> requestStream;
@@ -508,14 +511,27 @@ public class GrpcCacheClient extends RemoteCacheClient implements MissingDigests
                 } catch (IOException e) {
                   // The output stream was likely closed due to cancellation (e.g. dynamic execution
                   // choosing the local branch).
-                  if (requestStream != null) {
-                    requestStream.cancel("output stream closed", e);
-                  }
-                  future.setException(e);
+                  failAndCancel(e, "output stream closed");
+                  return;
+                } catch (RuntimeException e) {
+                  // Nothing may escape from a callback into gRPC: if this listener throws, neither
+                  // onError nor onCompleted is guaranteed to be delivered, and the future would
+                  // stay pending forever, hanging every thread waiting on this download.
+                  logger.atWarning().withCause(e).log("Unexpected exception while reading blob");
+                  failAndCancel(e, "unexpected exception");
                   return;
                 }
-                // reset the stall backoff because we've made progress or been kept alive
-                progressiveBackoff.reset();
+                if (rawOut.getCount() > digest.getSizeBytes()) {
+                  // The server sent more data than the blob is long, which typically means that it
+                  // ignored the read offset and restarted the stream from the beginning after a
+                  // retry. Retrying can't fix that and would keep buffering data indefinitely, so
+                  // fail with a non-retriable error instead.
+                  failAndCancel(
+                      new IOException(
+                          "Remote cache sent more than the expected %d bytes for %s"
+                              .formatted(digest.getSizeBytes(), DigestUtil.toString(digest))),
+                      "too many bytes received");
+                }
               }
 
               @Override
@@ -530,6 +546,16 @@ public class GrpcCacheClient extends RemoteCacheClient implements MissingDigests
                   return;
                 }
                 releaseOut();
+                if (rawOut.getCount() > readOffset) {
+                  // This attempt advanced the read past where it resumed, so the next one starts
+                  // from further along and deserves a full deck of retries. An attempt that
+                  // received no data at all deliberately does not reset the backoff: otherwise a
+                  // server that keeps accepting the read but never delivers any of the blob --
+                  // e.g. one that only ever sends headers or keepalives before the deadline or the
+                  // idle timeout kicks in -- would be retried forever and this future would never
+                  // become terminal, hanging every thread waiting on the download.
+                  progressiveBackoff.reset();
+                }
                 Status status = Status.fromThrowable(t);
                 if (status.getCode() == Status.Code.NOT_FOUND) {
                   future.setException(new CacheNotFoundException(digest));
@@ -556,6 +582,20 @@ public class GrpcCacheClient extends RemoteCacheClient implements MissingDigests
                   future.setException(e);
                 }
                 future.set(rawOut.getCount());
+              }
+
+              /**
+               * Cancels the call and fails the download, making the future terminal even if the
+               * cancellation fails or gRPC never delivers a terminal callback for it.
+               */
+              private void failAndCancel(Throwable t, String cancelMessage) {
+                try {
+                  if (requestStream != null) {
+                    requestStream.cancel(cancelMessage, t);
+                  }
+                } finally {
+                  future.setException(t);
+                }
               }
 
               private void releaseOut() {
