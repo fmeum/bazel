@@ -21,7 +21,6 @@ import static java.nio.charset.StandardCharsets.ISO_8859_1;
 import com.google.common.base.Preconditions;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.Lists;
-import com.google.common.io.ByteSource;
 import com.google.common.io.CharStreams;
 import com.google.devtools.build.lib.concurrent.ThreadSafety.ThreadSafe;
 import java.io.File;
@@ -38,6 +37,7 @@ import java.nio.file.FileSystemException;
 import java.nio.file.NoSuchFileException;
 import java.nio.file.NotDirectoryException;
 import java.nio.file.NotLinkException;
+import java.security.MessageDigest;
 import java.security.SecureRandom;
 import java.util.Collection;
 import java.util.Iterator;
@@ -366,12 +366,22 @@ public abstract class FileSystem {
    * @throws IOException if the digest could not be computed for any reason
    */
   public byte[] getDigest(PathFragment path) throws IOException {
-    return new ByteSource() {
-      @Override
-      public InputStream openStream() throws IOException {
-        return getInputStream(path);
+    // Deliberately avoids ByteSource#hash, which transfers the file through a freshly allocated
+    // 8 KiB buffer. That buffer is what costs: 8 KiB is small enough that read() syscalls dominate
+    // any file needing more than one of them, and allocating per file rules out simply making it
+    // bigger, since the JVM zeroes every array and for a small file that outweighs the syscalls
+    // saved. Reading into a recycled buffer is what makes a large one affordable.
+    MessageDigest digest = digestFunction.newMessageDigest();
+    byte[] buffer = DigestScratchBuffers.acquire();
+    try (InputStream stream = getInputStream(path)) {
+      int read;
+      while ((read = stream.read(buffer)) != -1) {
+        digest.update(buffer, 0, read);
       }
-    }.hash(digestFunction.getHashFunction()).asBytes();
+    } finally {
+      DigestScratchBuffers.release(buffer);
+    }
+    return digest.digest();
   }
 
   /**
