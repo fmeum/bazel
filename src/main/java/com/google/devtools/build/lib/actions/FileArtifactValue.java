@@ -354,7 +354,12 @@ public abstract class FileArtifactValue implements SkyValue, FileArtifactMetadat
       return new DirectoryArtifactValue(path.getLastModifiedTime());
     }
     if (digest == null) {
-      digest = DigestUtils.getDigestWithManualFallback(path, xattrProvider);
+      // The proxy holds exactly the metadata the digest cache keys on, so passing it along spares
+      // the cache a stat() of its own - which, for a file whose digest is cached, would otherwise
+      // dominate the lookup.
+      digest =
+          DigestUtils.getDigestWithManualFallback(
+              path, xattrProvider, proxy != null ? proxy.toFileIdentity(size) : null);
     }
     checkState(digest != null, path);
     return createForNormalFile(digest, proxy, size);
