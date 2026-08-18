@@ -50,6 +50,21 @@ public final class FileContentsProxy {
         stat.getLastChangeTime(), stat.getLastModifiedTime(), stat.getNodeId());
   }
 
+  /** Returns the file's last change time, or its last modification time on some filesystems. */
+  public long getCtime() {
+    return ctime;
+  }
+
+  /** Returns the file's last modification time. */
+  public long getMtime() {
+    return mtime;
+  }
+
+  /** Returns the file's node id (typically its inode number). */
+  public long getNodeId() {
+    return nodeId;
+  }
+
   @Override
   public boolean equals(Object other) {
     if (other == this) {

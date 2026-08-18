@@ -54,6 +54,7 @@ import com.google.devtools.build.lib.profiler.Profiler;
 import com.google.devtools.build.lib.profiler.ProfilerTask;
 import com.google.devtools.build.lib.remote.util.AsyncTaskCache;
 import com.google.devtools.build.lib.util.TempPathGenerator;
+import com.google.devtools.build.lib.vfs.DigestUtils;
 import com.google.devtools.build.lib.vfs.FileStatus;
 import com.google.devtools.build.lib.vfs.FileSymlinkLoopException;
 import com.google.devtools.build.lib.vfs.FileSystem;
@@ -275,7 +276,9 @@ public abstract class AbstractActionInputPrefetcher implements ActionInputPrefet
 
     byte[] digest = path.getFastDigest();
     if (digest == null) {
-      digest = path.getDigest();
+      // Go through DigestUtils rather than hashing the file directly: chances are we have already
+      // computed this exact digest, and if we haven't, the next caller to ask for it benefits.
+      digest = DigestUtils.manuallyComputeDigest(path, stat);
     }
     return !Arrays.equals(digest, metadata.getDigest());
   }

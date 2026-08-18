@@ -1869,6 +1869,27 @@ public abstract class FileSystemTest {
   }
 
   @Test
+  public void testGetDigestForSizesAroundInternalBufferBoundaries() throws Exception {
+    // The digest is computed by reading the file into a fixed-size buffer, so make sure that sizes
+    // straddling plausible buffer boundaries are handled exactly.
+    for (int size :
+        new int[] {
+          1, 2, 4095, 4096, 4097, 8191, 8192, 8193, 32767, 32768, 32769, 65535, 65536, 65537
+        }) {
+      byte[] buffer = new byte[size];
+      for (int i = 0; i < size; ++i) {
+        buffer[i] = (byte) i;
+      }
+      FileSystemUtils.writeContent(xFile, buffer);
+      Fingerprint fp = new Fingerprint(digestHashFunction);
+      fp.addBytes(buffer);
+      assertWithMessage("size %s", size)
+          .that(BaseEncoding.base16().lowerCase().encode(xFile.getDigest()))
+          .isEqualTo(fp.hexDigestAndReset());
+    }
+  }
+
+  @Test
   public void testStatFailsFastOnNonExistingFiles() throws Exception {
     assertThrows(IOException.class, () -> xNothing.stat());
   }

@@ -21,7 +21,6 @@ import static java.nio.charset.StandardCharsets.ISO_8859_1;
 import com.google.common.base.Preconditions;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.Lists;
-import com.google.common.io.ByteSource;
 import com.google.common.io.CharStreams;
 import com.google.devtools.build.lib.concurrent.ThreadSafety.ThreadSafe;
 import java.io.File;
@@ -38,6 +37,7 @@ import java.nio.file.FileSystemException;
 import java.nio.file.NoSuchFileException;
 import java.nio.file.NotDirectoryException;
 import java.nio.file.NotLinkException;
+import java.security.MessageDigest;
 import java.security.SecureRandom;
 import java.util.Collection;
 import java.util.Iterator;
@@ -366,12 +366,22 @@ public abstract class FileSystem {
    * @throws IOException if the digest could not be computed for any reason
    */
   public byte[] getDigest(PathFragment path) throws IOException {
-    return new ByteSource() {
-      @Override
-      public InputStream openStream() throws IOException {
-        return getInputStream(path);
+    // Deliberately avoids ByteSource#hash: a build digests a large number of mostly small files, so
+    // the per-file cost of setting up Guava's generic copying machinery (a Hasher, a Funnel-backed
+    // OutputStream and a freshly allocated buffer for every file) is a significant fraction of the
+    // time spent digesting. Reading straight into a recycled buffer and updating a MessageDigest
+    // keeps the loop allocation-free.
+    MessageDigest digest = digestFunction.newMessageDigest();
+    byte[] buffer = DigestScratchBuffers.acquire();
+    try (InputStream stream = getInputStream(path)) {
+      int read;
+      while ((read = stream.read(buffer)) != -1) {
+        digest.update(buffer, 0, read);
       }
-    }.hash(digestFunction.getHashFunction()).asBytes();
+    } finally {
+      DigestScratchBuffers.release(buffer);
+    }
+    return digest.digest();
   }
 
   /**
