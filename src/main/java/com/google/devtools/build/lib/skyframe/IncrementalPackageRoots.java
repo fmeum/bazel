@@ -68,6 +68,11 @@ public class IncrementalPackageRoots implements PackageRoots {
   // packages belong to the main repository all share the same root, which is singleSourceRoot.
   private final Map<PackageIdentifier, Root> threadSafeExternalRepoPackageRootsMap;
 
+  // Resolves external repo packages that were loaded by an earlier invocation on the same server
+  // and are therefore not re-evaluated (and don't fire an event) during this one. See
+  // #getPackageRootLookup.
+  private final PackageRootLookup loadedPackageRootLookup;
+
   @GuardedBy("stateLock")
   @Nullable
   private Set<NestedSet.Node> donePackages = Sets.newConcurrentHashSet();
@@ -99,8 +104,10 @@ public class IncrementalPackageRoots implements PackageRoots {
       String prefix,
       IgnoredSubdirectories ignoredPaths,
       boolean useSiblingRepositoryLayout,
-      boolean allowExternalRepositories) {
+      boolean allowExternalRepositories,
+      PackageRootLookup loadedPackageRootLookup) {
     this.threadSafeExternalRepoPackageRootsMap = new ConcurrentHashMap<>();
+    this.loadedPackageRootLookup = loadedPackageRootLookup;
     this.execroot = execroot;
     this.singleSourceRoot = singleSourceRoot;
     this.prefix = prefix;
@@ -122,7 +129,8 @@ public class IncrementalPackageRoots implements PackageRoots {
       String prefix,
       IgnoredSubdirectories ignoredSubdirectories,
       boolean useSiblingRepositoryLayout,
-      boolean allowExternalRepositories) {
+      boolean allowExternalRepositories,
+      PackageRootLookup loadedPackageRootLookup) {
     IncrementalPackageRoots incrementalPackageRoots =
         new IncrementalPackageRoots(
             execroot,
@@ -131,7 +139,8 @@ public class IncrementalPackageRoots implements PackageRoots {
             prefix,
             ignoredSubdirectories,
             useSiblingRepositoryLayout,
-            allowExternalRepositories);
+            allowExternalRepositories,
+            loadedPackageRootLookup);
     eventBus.register(incrementalPackageRoots);
     return incrementalPackageRoots;
   }
@@ -185,10 +194,27 @@ public class IncrementalPackageRoots implements PackageRoots {
 
   @Override
   public PackageRootLookup getPackageRootLookup() {
-    return packageId ->
-        packageId.getRepository().isMain()
-            ? singleSourceRoot
-            : threadSafeExternalRepoPackageRootsMap.get(packageId);
+    return this::getRootForPackage;
+  }
+
+  @Nullable
+  private Root getRootForPackage(PackageIdentifier packageId) {
+    if (packageId.getRepository().isMain()) {
+      return singleSourceRoot;
+    }
+    Root root = threadSafeExternalRepoPackageRootsMap.get(packageId);
+    if (root != null) {
+      return root;
+    }
+    // The map only knows about the packages registered over the course of this invocation. A
+    // package that an earlier invocation on the same server already loaded stays done in the
+    // Skyframe graph, so it isn't re-evaluated, fires no event, and never makes it into the map.
+    // Fall back to the graph for those: the non-Skymeld code path resolves every package that way
+    // (see SkyframeExecutor#collectPackageRoots), and without this, source artifacts under such a
+    // repository fail to resolve during execution. That surfaces e.g. as spurious "undeclared
+    // inclusion(s)" errors for the headers of a toolchain vendored in an external repository,
+    // which the compiler reports as exec-relative "external/<repo>/..." paths.
+    return loadedPackageRootLookup.getRootForPackage(packageId);
   }
 
   // Intentionally don't allow concurrent events here to prevent a race condition between planting

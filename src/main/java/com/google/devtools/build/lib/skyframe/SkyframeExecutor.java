@@ -2516,6 +2516,26 @@ public abstract class SkyframeExecutor implements WalkableGraphFactory {
     return ImmutableMap.copyOf(roots);
   }
 
+  /**
+   * Returns the source root of the given package if it is already loaded in the in-memory graph, or
+   * null otherwise.
+   *
+   * <p>Unlike {@link #collectPackageRoots}, this doesn't scan the whole graph, and unlike a regular
+   * Skyframe lookup it never triggers an evaluation or establishes a dependency: it only reports
+   * what has already been loaded, possibly by an earlier invocation on the same server.
+   */
+  @Nullable
+  public Root getSourceRootOfLoadedPackage(PackageIdentifier pkgId) {
+    InMemoryNodeEntry nodeEntry = memoizingEvaluator.getInMemoryGraph().getIfPresent(pkgId);
+    if (nodeEntry == null) {
+      return null;
+    }
+    // toValue() rather than getValue() since this may be called concurrently with an evaluation,
+    // which could dirty the node at any time. Null if the package was never loaded successfully.
+    PackageValue packageValue = (PackageValue) nodeEntry.toValue();
+    return packageValue == null ? null : packageValue.getPackage().getSourceRoot();
+  }
+
   public void clearSyscallCache() {
     syscallCache.clear();
   }

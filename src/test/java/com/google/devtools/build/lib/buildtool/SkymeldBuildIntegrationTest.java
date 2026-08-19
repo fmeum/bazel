@@ -27,11 +27,14 @@ import com.google.common.truth.Correspondence;
 import com.google.devtools.build.lib.actions.BuildFailedException;
 import com.google.devtools.build.lib.analysis.AnalysisPhaseCompleteEvent;
 import com.google.devtools.build.lib.analysis.ViewCreationFailedException;
+import com.google.devtools.build.lib.analysis.util.AnalysisMock;
 import com.google.devtools.build.lib.buildtool.util.BuildIntegrationTestCase;
+import com.google.devtools.build.lib.cmdline.RepositoryName;
 import com.google.devtools.build.lib.skyframe.SkymeldModule;
 import com.google.devtools.build.lib.skyframe.TopLevelStatusEvents.TopLevelEntityAnalysisConcludedEvent;
 import com.google.devtools.build.lib.util.io.RecordingOutErr;
 import com.google.devtools.build.lib.vfs.Path;
+import com.google.devtools.build.lib.vfs.PathFragment;
 import com.google.devtools.build.skyframe.ErrorTransienceValue;
 import com.google.devtools.build.skyframe.NodeEntry.LifecycleState;
 import com.google.devtools.build.skyframe.SkyKey;
@@ -1040,6 +1043,85 @@ public class SkymeldBuildIntegrationTest extends BuildIntegrationTestCase {
     return event.getTopLevelTargets().stream()
         .map(x -> x.getOriginalLabel().getCanonicalForm())
         .collect(toImmutableSet());
+  }
+
+  private void writeExternalRepoWithHeader() throws IOException {
+    write(
+        "MODULE.bazel",
+        """
+        register_toolchains("@rules_java//java/toolchains/runtime:all")
+        register_toolchains("@rules_java//java/toolchains/javac:all")
+        register_toolchains("@bazel_tools//tools/cpp:all")
+        register_toolchains("@bazel_tools//tools/jdk:all")
+        register_toolchains("@bazel_tools//tools/python:autodetecting_toolchain")
+        bazel_dep(name = "other_module")
+        local_path_override(
+            module_name = "other_module",
+            path = "other_module",
+        )
+        """);
+    write(
+        "other_module/MODULE.bazel",
+        """
+        module(name = "other_module")
+        """);
+    write(
+        "other_module/BUILD",
+        """
+        exports_files(["header.h"])
+        """);
+    write("other_module/header.h", "// A header that is not a declared input of anything.");
+  }
+
+  /**
+   * A source file under an external repository must stay resolvable to a source artifact even when
+   * the invocation that needs it didn't load that repository's packages itself, because an earlier
+   * invocation on the same server already did.
+   *
+   * <p>Header discovery depends on this for headers that aren't declared inputs, such as those of a
+   * C++ toolchain vendored in an external repository, which the compiler reports as exec-relative
+   * "external/&lt;repo&gt;/..." paths. Regression test for #30800.
+   */
+  @Test
+  public void externalRepoSourceArtifact_resolvableAfterInvocationThatDoesntLoadTheRepo(
+      @TestParameter boolean keepSkymeld) throws Exception {
+    if (!AnalysisMock.get().isThisBazel()) {
+      return;
+    }
+    if (!keepSkymeld) {
+      addOptions("--noexperimental_merged_skyframe_analysis_execution");
+    }
+    writeExternalRepoWithHeader();
+    writeMyRuleBzl();
+    write(
+        "foo/BUILD",
+        """
+        load("//foo:my_rule.bzl", "my_rule")
+
+        my_rule(
+            name = "uses_external_repo",
+            srcs = ["@other_module//:header.h"],
+        )
+
+        my_rule(
+            name = "standalone",
+            srcs = ["standalone.in"],
+        )
+        """);
+    write("foo/standalone.in", "");
+
+    buildTarget("//foo:uses_external_repo");
+    // A second invocation on the same server: @other_module's packages are already done in the
+    // Skyframe graph, so they aren't re-evaluated and no symlink planting event fires for them.
+    buildTarget("//foo:standalone");
+
+    assertThat(
+            getSkyframeExecutor()
+                .getSkyframeBuildView()
+                .getArtifactFactory()
+                .resolveSourceArtifact(
+                    PathFragment.create("external/other_module+/header.h"), RepositoryName.MAIN))
+        .isNotNull();
   }
 
   private RecordingOutErr divertInfoLogToOutErr() {
