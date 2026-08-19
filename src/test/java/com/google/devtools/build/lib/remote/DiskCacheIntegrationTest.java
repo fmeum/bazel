@@ -82,11 +82,6 @@ public class DiskCacheIntegrationTest extends BuildIntegrationTestCase {
     addOptions(additionalOptions);
   }
 
-  private void enableRemoteCache(String... additionalOptions) {
-    addOptions("--remote_cache=grpc://localhost:" + worker.getPort());
-    addOptions(additionalOptions);
-  }
-
   private static PathFragment getDiskCacheDir() {
     PathFragment testTmpDir = PathFragment.create(tmpDirFile().getAbsolutePath());
     return testTmpDir.getRelative("disk_cache");
@@ -153,7 +148,7 @@ public class DiskCacheIntegrationTest extends BuildIntegrationTestCase {
     assertRecentlyModified(actionDigests, getBlobDigests("foo", "foobar", "out", "err"));
   }
 
-  private void doBlobsReferencedInAcAreMissingFromCasIgnoresAc(String... additionalOptions)
+  private void doBlobsReferencedInAcAreMissingFromCas(String... additionalOptions)
       throws Exception {
     // Arrange: Prepare the workspace and populate disk cache.
     setupWorkspace();
@@ -165,42 +160,45 @@ public class DiskCacheIntegrationTest extends BuildIntegrationTestCase {
     cleanAndRestartServer();
     addOptions(additionalOptions);
     buildTarget("//:foobar");
+  }
+
+  @Test
+  public void blobsReferencedInAcAreMissingFromCas_recoversByRewinding() throws Exception {
+    doBlobsReferencedInAcAreMissingFromCas();
+
+    // Assert: Should trust the AC and recover from the blobs that turn out to be needed after all
+    // by rewinding their generating actions.
+    assertContents("foobar", "//:foobar");
+  }
+
+  @Test
+  public void noRewinding_blobsReferencedInAcAreMissingFromCas_ignoresAc() throws Exception {
+    doBlobsReferencedInAcAreMissingFromCas("--norewind_lost_inputs");
 
     // Assert: Should ignore the stale AC and rerun the generating action.
     events.assertDoesNotContainEvent("disk cache hit");
   }
 
   @Test
-  public void blobsReferencedInAcAreMissingFromCas_ignoresAc() throws Exception {
-    doBlobsReferencedInAcAreMissingFromCasIgnoresAc();
+  public void noRewinding_bwob_blobsReferencedInAcAreMissingFromCas_ignoresAc() throws Exception {
+    doBlobsReferencedInAcAreMissingFromCas("--norewind_lost_inputs", "--remote_download_minimal");
+
+    // Assert: Should ignore the stale AC and rerun the generating action.
+    events.assertDoesNotContainEvent("disk cache hit");
   }
 
-  @Test
-  public void bwob_blobsReferencedInAcAreMissingFromCas_ignoresAc() throws Exception {
-    doBlobsReferencedInAcAreMissingFromCasIgnoresAc("--remote_download_minimal");
-  }
-
-  @Test
-  public void bwobAndRemoteExec_blobsReferencedInAcAreMissingFromCas_ignoresAc() throws Exception {
-    enableRemoteExec("--remote_download_minimal");
-    doBlobsReferencedInAcAreMissingFromCasIgnoresAc();
-  }
-
-  @Test
-  public void bwobAndRemoteCache_blobsReferencedInAcAreMissingFromCas_ignoresAc() throws Exception {
-    enableRemoteCache("--remote_download_minimal");
-    doBlobsReferencedInAcAreMissingFromCasIgnoresAc();
-  }
-
-  private void doRemoteExecWithDiskCache(String... additionalOptions) throws Exception {
+  private void doRemoteExecWithDiskCache(String downloadOption, String... additionalOptions)
+      throws Exception {
     // Arrange: Prepare the workspace and populate disk cache.
     setupWorkspace();
-    enableRemoteExec(additionalOptions);
+    enableRemoteExec(downloadOption);
+    addOptions(additionalOptions);
     buildTarget("//:foobar");
 
     // Act: Do a clean build.
     cleanAndRestartServer();
     enableRemoteExec("--remote_download_minimal");
+    addOptions(additionalOptions);
     buildTarget("//:foobar");
   }
 
@@ -214,8 +212,17 @@ public class DiskCacheIntegrationTest extends BuildIntegrationTestCase {
   }
 
   @Test
-  public void bwob_remoteExecWithDiskCache_hitRemoteCache() throws Exception {
+  public void bwob_remoteExecWithDiskCache_hitDiskCache() throws Exception {
     doRemoteExecWithDiskCache("--remote_download_minimal");
+
+    // Assert: Should hit the disk cache without a round trip to the remote cache, even though the
+    // blobs referenced by the AC are missing from the disk cache due to BwoB.
+    events.assertContainsInfo("2 disk cache hit");
+  }
+
+  @Test
+  public void noRewinding_bwob_remoteExecWithDiskCache_hitRemoteCache() throws Exception {
+    doRemoteExecWithDiskCache("--remote_download_minimal", "--norewind_lost_inputs");
 
     // Assert: Should hit the remote cache because blobs referenced by the AC are missing from disk
     // cache due to BwoB.
