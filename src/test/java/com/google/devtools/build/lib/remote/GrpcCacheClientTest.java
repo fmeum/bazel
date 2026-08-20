@@ -1330,6 +1330,73 @@ public class GrpcCacheClientTest {
     Mockito.verify(mockBackoff, Mockito.times(2)).nextDelayMillis(any(Exception.class));
   }
 
+  /**
+   * Registers a ByteStream service that hands out a single byte per attempt before failing with
+   * {@code DEADLINE_EXCEEDED}, modeling a server-side deadline that fires while the read is making
+   * progress. The last byte is instead followed by a regular half-close.
+   *
+   * @return a counter of the read attempts the service has received
+   */
+  private AtomicInteger addOneBytePerAttemptByteStream(Digest digest, String contents) {
+    AtomicInteger readCalls = new AtomicInteger();
+    serviceRegistry.addService(
+        new ByteStreamImplBase() {
+          @Override
+          public void read(ReadRequest request, StreamObserver<ReadResponse> responseObserver) {
+            assertThat(request.getResourceName()).contains(digest.getHash());
+            int offset = Math.toIntExact(request.getReadOffset());
+            // Every attempt must resume right after the byte handed out by the previous one.
+            assertThat(offset).isEqualTo(readCalls.getAndIncrement());
+            responseObserver.onNext(
+                ReadResponse.newBuilder()
+                    .setData(ByteString.copyFromUtf8(contents).substring(offset, offset + 1))
+                    .build());
+            if (offset + 1 == contents.length()) {
+              responseObserver.onCompleted();
+            } else {
+              responseObserver.onError(Status.DEADLINE_EXCEEDED.asException());
+            }
+          }
+        });
+    return readCalls;
+  }
+
+  @Test
+  public void downloadBlobWithProgressSucceedsWithinRemoteRetries()
+      throws IOException, InterruptedException {
+    // Since progress no longer resets the retry budget, a read repeatedly cut short by a
+    // server-side deadline gets exactly --remote_retries + 1 attempts in total, no matter how
+    // much progress each of them makes.
+    RemoteOptions options = Options.getDefaults(RemoteOptions.class);
+    options.setRemoteMaxRetryAttempts(2);
+    GrpcCacheClient client = newClient(options);
+    String contents = "abc";
+    Digest digest = DIGEST_UTIL.computeAsUtf8(contents);
+    AtomicInteger readCalls = addOneBytePerAttemptByteStream(digest, contents);
+
+    assertThat(new String(downloadBlob(context, client, digest), UTF_8)).isEqualTo(contents);
+
+    assertThat(readCalls.get()).isEqualTo(3);
+  }
+
+  @Test
+  public void downloadBlobWithProgressFailsBeyondRemoteRetries() throws IOException {
+    // One byte more than the blob of the preceding test is all it takes to exhaust the budget: the
+    // downloadable size is bounded by the number of attempts times the bytes a single attempt gets
+    // through before the deadline, even though every attempt makes progress.
+    RemoteOptions options = Options.getDefaults(RemoteOptions.class);
+    options.setRemoteMaxRetryAttempts(2);
+    GrpcCacheClient client = newClient(options);
+    String contents = "abcd";
+    Digest digest = DIGEST_UTIL.computeAsUtf8(contents);
+    AtomicInteger readCalls = addOneBytePerAttemptByteStream(digest, contents);
+
+    IOException e = assertThrows(IOException.class, () -> downloadBlob(context, client, digest));
+
+    assertThat(Status.fromThrowable(e).getCode()).isEqualTo(Status.Code.DEADLINE_EXCEEDED);
+    assertThat(readCalls.get()).isEqualTo(3);
+  }
+
   @Test
   public void downloadBlobEmptyResponseResetsIdleTimeoutButNotRetryBudget()
       throws IOException, InterruptedException {
