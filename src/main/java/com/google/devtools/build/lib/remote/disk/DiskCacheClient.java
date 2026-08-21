@@ -147,14 +147,31 @@ public class DiskCacheClient {
             outPath = maybePathBacked.maybeGetPath();
           }
 
-          if (outPath != null) {
-            // If the output stream is path-backed, the filesystem may be able to avoid copying the
-            // file.
-            FileSystemUtils.copyFile(path, outPath);
-          } else {
-            try (InputStream in = path.getInputStream()) {
-              ByteStreams.copy(in, out);
+          try {
+            if (outPath != null) {
+              // If the output stream is path-backed, the filesystem may be able to avoid copying
+              // the file.
+              FileSystemUtils.copyFile(path, outPath);
+            } else {
+              try (InputStream in = path.getInputStream()) {
+                ByteStreams.copy(in, out);
+              }
             }
+          } catch (FileNotFoundException e) {
+            // The entry was deleted after the refresh above, but before we could read it, most
+            // likely by a concurrent garbage collection. Report it as a cache miss so that a
+            // combined cache falls back to the remote cache and the build can recover, instead of
+            // failing with an unrecoverable local I/O error.
+            //
+            // Note that a missing parent directory of the *destination* also surfaces as a
+            // FileNotFoundException, but that's a genuine local filesystem error, so only treat
+            // this as a cache miss if the source is actually gone.
+            if (path.exists()) {
+              throw e;
+            }
+            var cacheNotFoundException = new CacheNotFoundException(digest);
+            cacheNotFoundException.addSuppressed(e);
+            throw cacheNotFoundException;
           }
           return null;
         });
@@ -210,6 +227,12 @@ public class DiskCacheClient {
       Tree tree;
       try (var in = toPath(treeDigest, Store.CAS).getInputStream()) {
         tree = Tree.parseFrom(in, ExtensionRegistryLite.getEmptyRegistry());
+      } catch (FileNotFoundException e) {
+        // The tree was deleted after the mtime update above, most likely by a concurrent garbage
+        // collection. Report it as a cache miss so that the action result is considered stale.
+        var cacheNotFoundException = new CacheNotFoundException(treeDigest);
+        cacheNotFoundException.addSuppressed(e);
+        throw cacheNotFoundException;
       }
       checkOutputDirectory(tree.getRoot());
       for (var dir : tree.getChildrenList()) {
