@@ -363,6 +363,22 @@ public class CombinedCache extends AbstractReferenceCounted {
         .call(() -> null, directExecutor());
   }
 
+  /* must not interact with casUploadCache */
+  protected ListenableFuture<Void> uploadOrChunkFile(
+      RemoteActionExecutionContext context, Digest digest, Path file, boolean force) {
+    boolean chunkingSupported;
+    try {
+      chunkingSupported = chunking.supported();
+    } catch (IOException e) {
+      return immediateFailedFuture(e);
+    }
+
+    if (chunkingSupported && digest.getSizeBytes() > chunking.config().chunkingThreshold()) {
+      return uploadChunked(context, digest, file);
+    }
+    return remoteCacheClient.uploadFile(context, digest, file, force);
+  }
+
   /**
    * Upload a local file to the remote cache.
    *
