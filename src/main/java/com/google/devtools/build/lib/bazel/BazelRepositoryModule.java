@@ -305,6 +305,10 @@ public class BazelRepositoryModule extends BlazeModule {
       if (repoOptions.getRepositoryDownloaderRetries() >= 0) {
         downloadManager.setRetries(repoOptions.getRepositoryDownloaderRetries());
       }
+      env.getHttpDownloader()
+          .setTrustStore(
+              repoOptions.getDownloaderTrustStore(),
+              ImmutableList.copyOf(repoOptions.getDownloaderCaCertificates()));
 
       repositoryCache.getDownloadCache().setHardlink(repoOptions.getUseHardlinks());
       if (repoOptions.getExperimentalScaleTimeouts() > 0.0) {

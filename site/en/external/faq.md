@@ -301,6 +301,42 @@ Bazel respects the `http_proxy` and `HTTPS_PROXY` environment variables commonly
 accepted by other programs, such as
 [curl](https://everything.curl.dev/usingcurl/proxies/env.html).
 
+### How do I make Bazel trust my organization's TLS certificate? {:#tls-certificates}
+
+By default Bazel trusts the union of the certificate authorities bundled with
+its JDK and the ones installed in your system trust store, so installing a CA
+system-wide is enough. That covers the usual case of a corporate proxy that
+inspects TLS traffic, which otherwise fails with `PKIX path building failed:
+unable to find valid certification path to requested target`.
+
+The system trust store is:
+
+*   the `ROOT` certificate store on Windows;
+*   the system, login and system-root keychains on macOS, which is where
+    certificates installed by an administrator or by MDM end up;
+*   on other platforms, the certificate bundle named by `$SSL_CERT_FILE`,
+    `$CURL_CA_BUNDLE`, `$NIX_SSL_CERT_FILE` or `$SSL_CERT_DIR` — the same
+    variables [curl](https://everything.curl.dev/usingcurl/tls.html) reads —
+    falling back to the usual distribution locations such as
+    `/etc/ssl/certs/ca-certificates.crt` and
+    `/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem`.
+
+To trust a certificate without installing it system-wide, pass the file
+directly:
+
+```
+common --experimental_downloader_ca_certificate=/path/to/corporate-ca.pem
+```
+
+Two other modes are available through
+`--experimental_downloader_trust_store`. Use `jdk` to trust only the
+certificates bundled with Bazel's JDK, and `system` to trust only the system
+trust store, which makes Bazel accept exactly what curl and other native tools
+accept.
+
+Bazel reads the trust store once per server, so run `bazel shutdown` after
+installing a new certificate.
+
 ### How do I make Bazel prefer IPv6 in dual-stack IPv4/IPv6 setups? {:#ipv6}
 
 On IPv6-only machines, Bazel can download dependencies with no changes. However,

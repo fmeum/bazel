@@ -41,6 +41,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Semaphore;
 import java.util.function.Function;
 
@@ -62,6 +63,18 @@ public class HttpDownloader implements Downloader {
   private final int maxAttempts;
   private final Duration maxRetryTimeout;
 
+  // Building the trust store enumerates the OS certificate store, which costs a native call per
+  // certificate on Windows and macOS, so it is built once and reused for the lifetime of this
+  // downloader. The key is the part of the client environment that feeds into it; in practice it
+  // never varies, but keying on it keeps the cache correct if it does. A consequence worth knowing
+  // is that a certificate installed while the server is running is only picked up after a
+  // `bazel shutdown`.
+  private final ConcurrentHashMap<ImmutableMap<String, String>, TrustStore> trustStoreCache =
+      new ConcurrentHashMap<>();
+
+  private volatile TrustStore.Mode trustStoreMode = TrustStore.Mode.MERGED;
+  private volatile ImmutableList<String> caCertificateFiles = ImmutableList.of();
+
   public HttpDownloader(
       int maxAttempts, Duration maxRetryTimeout, int maxParallelDownloads, float timeoutScaling) {
     this.maxAttempts = maxAttempts;
@@ -72,6 +85,20 @@ public class HttpDownloader implements Downloader {
 
   public HttpDownloader() {
     this(0, Duration.ZERO, 8, 1.0f);
+  }
+
+  /**
+   * Sets which certificate authorities HTTPS downloads trust.
+   *
+   * @param mode which certificate sources to draw trust anchors from
+   * @param caCertificateFiles additional certificate files to trust, named explicitly by the user
+   */
+  public void setTrustStore(TrustStore.Mode mode, ImmutableList<String> caCertificateFiles) {
+    if (mode != this.trustStoreMode || !caCertificateFiles.equals(this.caCertificateFiles)) {
+      this.trustStoreMode = mode;
+      this.caCertificateFiles = caCertificateFiles;
+      trustStoreCache.clear();
+    }
   }
 
   @Override
@@ -277,7 +304,7 @@ public class HttpDownloader implements Downloader {
   }
 
   private HttpConnectorMultiplexer setUpConnectorMultiplexer(
-      ExtendedEventHandler eventHandler, Map<String, String> clientEnv) {
+      ExtendedEventHandler eventHandler, Map<String, String> clientEnv) throws IOException {
     ProxyHelper proxyHelper = new ProxyHelper(clientEnv);
     HttpConnector connector =
         new HttpConnector(
@@ -287,10 +314,24 @@ public class HttpDownloader implements Downloader {
             SLEEPER,
             timeoutScaling,
             maxAttempts,
-            maxRetryTimeout);
+            maxRetryTimeout,
+            getTrustStore(clientEnv));
     ProgressInputStream.Factory progressInputStreamFactory =
         new ProgressInputStream.Factory(LOCALE, CLOCK, eventHandler);
     HttpStream.Factory httpStreamFactory = new HttpStream.Factory(progressInputStreamFactory);
     return new HttpConnectorMultiplexer(eventHandler, connector, httpStreamFactory);
+  }
+
+  private TrustStore getTrustStore(Map<String, String> clientEnv) throws IOException {
+    ImmutableMap<String, String> key = TrustStore.relevantEnv(clientEnv);
+    TrustStore cached = trustStoreCache.get(key);
+    if (cached != null) {
+      return cached;
+    }
+    // Not computeIfAbsent: creating the trust store can fail, and a failure must surface rather
+    // than be cached.
+    TrustStore trustStore = TrustStore.create(trustStoreMode, caCertificateFiles, clientEnv);
+    trustStoreCache.put(key, trustStore);
+    return trustStore;
   }
 }

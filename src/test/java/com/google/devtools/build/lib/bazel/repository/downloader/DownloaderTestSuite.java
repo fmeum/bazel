@@ -31,5 +31,6 @@ import org.junit.runners.Suite.SuiteClasses;
   ProgressInputStreamTest.class,
   ProxyHelperTest.class,
   RetryingInputStreamTest.class,
+  TrustStoreTest.class,
 })
 public class DownloaderTestSuite {}
