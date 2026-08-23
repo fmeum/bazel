@@ -74,6 +74,7 @@ java_library(
             "ChunkedCacheIntegrationTestBase.java",
             "ChunkedCacheFastCdcIntegrationTest.java",
             "ChunkedCacheRepMaxIntegrationTest.java",
+            "ChunkedRemoteExecutionIntegrationTest.java",
             "ChunkedDiskCacheIntegrationTest.java",
             "DiskCacheIntegrationTest.java",
             "RemoteCircuitBreakerRecoveryIntegrationTest.java",
@@ -450,6 +451,39 @@ java_test(
     deps = [
         ":ChunkedCacheIntegrationTestBase",
         "//third_party/java/junit",
+    ],
+)
+
+java_test(
+    name = "ChunkedRemoteExecutionIntegrationTest",
+    srcs = ["ChunkedRemoteExecutionIntegrationTest.java"],
+    tags = ["requires-network"],
+    runtime_deps = [
+        "//third_party/java/grpc:util",
+    ],
+    deps = [
+        "//src/main/java/com/google/devtools/build/lib/authandtls/credentialhelper:credential_module",
+        "//src/main/java/com/google/devtools/build/lib/remote:remote_module",
+        "//src/main/java/com/google/devtools/build/lib/remote/options",
+        "//src/main/java/com/google/devtools/build/lib/remote/util:tracing_metadata_utils",
+        "//src/main/java/com/google/devtools/build/lib/runtime:blaze_command_cluster",
+        "//src/main/java/com/google/devtools/build/lib/runtime:block_waiting_module",
+        "//src/main/java/com/google/devtools/build/lib/runtime:build_summary_stats_module",
+        "//src/main/java/com/google/devtools/build/lib/standalone",
+        "//src/main/java/com/google/devtools/build/lib/vfs",
+        "//src/main/java/com/google/devtools/common/options:options_internal",
+        "//src/test/java/com/google/devtools/build/lib/buildtool/util",
+        "//src/test/java/com/google/devtools/build/lib/remote/util:integration_test_utils",
+        "//third_party/google/bytestream:bytestream_grpc",
+        "//third_party/google/bytestream:bytestream_java_proto",
+        "//third_party/java/grpc:core",
+        "//third_party/java/guava:collect",
+        "//third_party/java/guava:hash",
+        "//third_party/java/junit",
+        "//third_party/java/testparameterinjector",
+        "//third_party/java/truth",
+        "@remoteapis//:build_bazel_remote_execution_v2_remote_execution_java_grpc",
+        "@remoteapis//:build_bazel_remote_execution_v2_remote_execution_java_proto",
     ],
 )
 
