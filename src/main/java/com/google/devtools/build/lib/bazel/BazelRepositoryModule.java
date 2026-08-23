@@ -297,6 +297,11 @@ public class BazelRepositoryModule extends BlazeModule {
     singleExtensionEvalFunction.setProcessWrapper(processWrapper);
     singleExtensionEvalFunction.setDownloadManager(downloadManager);
 
+    AuthAndTLSOptions tlsOptions = env.getOptions().getOptions(AuthAndTLSOptions.class);
+    if (tlsOptions != null) {
+      env.getHttpDownloader().setAuthAndTlsOptions(tlsOptions);
+    }
+
     RepositoryOptions repoOptions = env.getOptions().getOptions(RepositoryOptions.class);
     requireRepoExtensionMetadataMode = RequireRepoExtensionMetadataMode.FALSE;
     if (repoOptions != null) {
@@ -305,10 +310,6 @@ public class BazelRepositoryModule extends BlazeModule {
       if (repoOptions.getRepositoryDownloaderRetries() >= 0) {
         downloadManager.setRetries(repoOptions.getRepositoryDownloaderRetries());
       }
-      env.getHttpDownloader()
-          .setTrustStore(
-              repoOptions.getDownloaderTrustStore(),
-              ImmutableList.copyOf(repoOptions.getDownloaderCaCertificates()));
 
       repositoryCache.getDownloadCache().setHardlink(repoOptions.getUseHardlinks());
       if (repoOptions.getExperimentalScaleTimeouts() > 0.0) {

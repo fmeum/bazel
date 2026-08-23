@@ -20,6 +20,8 @@ import com.google.auth.Credentials;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.Iterables;
+import com.google.devtools.build.lib.authandtls.AuthAndTLSOptions;
+import com.google.devtools.build.lib.authandtls.TrustStore;
 import com.google.devtools.build.lib.buildeventstream.BuildEventStreamProtos.BuildEventId.FetchId;
 import com.google.devtools.build.lib.buildeventstream.FetchEvent;
 import com.google.devtools.build.lib.clock.Clock;
@@ -41,9 +43,9 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Semaphore;
 import java.util.function.Function;
+import javax.annotation.Nullable;
 
 /**
  * HTTP implementation of {@link Downloader}.
@@ -60,20 +62,9 @@ public class HttpDownloader implements Downloader {
 
   private final Semaphore semaphore;
   private final float timeoutScaling;
+  @Nullable private volatile AuthAndTLSOptions authAndTlsOptions;
   private final int maxAttempts;
   private final Duration maxRetryTimeout;
-
-  // Building the trust store enumerates the OS certificate store, which costs a native call per
-  // certificate on Windows and macOS, so it is built once and reused for the lifetime of this
-  // downloader. The key is the part of the client environment that feeds into it; in practice it
-  // never varies, but keying on it keeps the cache correct if it does. A consequence worth knowing
-  // is that a certificate installed while the server is running is only picked up after a
-  // `bazel shutdown`.
-  private final ConcurrentHashMap<ImmutableMap<String, String>, TrustStore> trustStoreCache =
-      new ConcurrentHashMap<>();
-
-  private volatile TrustStore.Mode trustStoreMode = TrustStore.Mode.MERGED;
-  private volatile ImmutableList<String> caCertificateFiles = ImmutableList.of();
 
   public HttpDownloader(
       int maxAttempts, Duration maxRetryTimeout, int maxParallelDownloads, float timeoutScaling) {
@@ -87,18 +78,9 @@ public class HttpDownloader implements Downloader {
     this(0, Duration.ZERO, 8, 1.0f);
   }
 
-  /**
-   * Sets which certificate authorities HTTPS downloads trust.
-   *
-   * @param mode which certificate sources to draw trust anchors from
-   * @param caCertificateFiles additional certificate files to trust, named explicitly by the user
-   */
-  public void setTrustStore(TrustStore.Mode mode, ImmutableList<String> caCertificateFiles) {
-    if (mode != this.trustStoreMode || !caCertificateFiles.equals(this.caCertificateFiles)) {
-      this.trustStoreMode = mode;
-      this.caCertificateFiles = caCertificateFiles;
-      trustStoreCache.clear();
-    }
+  /** Sets the TLS options, which decide which certificate authorities downloads trust. */
+  public void setAuthAndTlsOptions(AuthAndTLSOptions authAndTlsOptions) {
+    this.authAndTlsOptions = authAndTlsOptions;
   }
 
   @Override
@@ -323,15 +305,11 @@ public class HttpDownloader implements Downloader {
   }
 
   private TrustStore getTrustStore(Map<String, String> clientEnv) throws IOException {
-    ImmutableMap<String, String> key = TrustStore.relevantEnv(clientEnv);
-    TrustStore cached = trustStoreCache.get(key);
-    if (cached != null) {
-      return cached;
-    }
-    // Not computeIfAbsent: creating the trust store can fail, and a failure must surface rather
-    // than be cached.
-    TrustStore trustStore = TrustStore.create(trustStoreMode, caCertificateFiles, clientEnv);
-    trustStoreCache.put(key, trustStore);
-    return trustStore;
+    AuthAndTLSOptions options = authAndTlsOptions;
+    return options != null
+        ? TrustStore.createFor(options, clientEnv)
+        // Outside a command, as in BazelPackageLoader, there are no parsed options to read; fall
+        // back to what the flags default to.
+        : TrustStore.create(TrustStore.Mode.MERGED, null, ImmutableList.of(), clientEnv);
   }
 }

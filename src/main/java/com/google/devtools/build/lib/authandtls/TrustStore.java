@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package com.google.devtools.build.lib.bazel.repository.downloader;
+package com.google.devtools.build.lib.authandtls;
 
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.ImmutableList;
@@ -37,6 +37,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 import javax.annotation.Nullable;
@@ -149,7 +150,8 @@ public final class TrustStore {
   private static final long MAX_SCANNED_FILE_SIZE = 8 * 1024 * 1024;
 
   /** A trust store that leaves the JVM's own TLS configuration untouched. */
-  private static final TrustStore JVM_DEFAULT = new TrustStore(null, ImmutableList.of(), 0);
+  private static final TrustStore JVM_DEFAULT =
+      new TrustStore(null, null, ImmutableList.of(), 0);
 
   /**
    * The certificate chain most recently rejected on this thread, if any.
@@ -167,14 +169,17 @@ public final class TrustStore {
   public record Source(String name, int certificateCount) {}
 
   @Nullable private final SSLSocketFactory socketFactory;
+  @Nullable private final X509ExtendedTrustManager trustManager;
   private final ImmutableList<Source> sources;
   private final int trustAnchorCount;
 
   private TrustStore(
       @Nullable SSLSocketFactory socketFactory,
+      @Nullable X509ExtendedTrustManager trustManager,
       ImmutableList<Source> sources,
       int trustAnchorCount) {
     this.socketFactory = socketFactory;
+    this.trustManager = trustManager;
     this.sources = sources;
     this.trustAnchorCount = trustAnchorCount;
   }
@@ -191,6 +196,15 @@ public final class TrustStore {
   @Nullable
   public SSLSocketFactory socketFactory() {
     return socketFactory;
+  }
+
+  /**
+   * The trust manager to use for connections built on Netty, such as the gRPC and HTTP remote
+   * cache clients, or {@code null} to leave them on the JVM's default configuration.
+   */
+  @Nullable
+  public X509ExtendedTrustManager trustManager() {
+    return trustManager;
   }
 
   /** The sources that contributed trust anchors, in the order they were consulted. */
@@ -216,42 +230,109 @@ public final class TrustStore {
             .collect(Collectors.joining(", ")));
   }
 
+  /** The inputs that determine a trust store, used to share one build between all TLS clients. */
+  private record Key(
+      Mode mode,
+      @Nullable String pinnedRootCertificate,
+      ImmutableList<String> caCertificateFiles,
+      ImmutableMap<String, String> env) {}
+
+  // Enumerating an OS certificate store costs a native call per certificate, and every remote
+  // cache connection, BES connection and download would otherwise repeat it. There are only ever a
+  // couple of distinct configurations in a server, so an unbounded map is bounded in practice; the
+  // guard is only there so a pathological caller cannot grow it without limit.
+  private static final int MAX_CACHED_TRUST_STORES = 16;
+
+  private static final ConcurrentHashMap<Key, TrustStore> cache = new ConcurrentHashMap<>();
+
   /**
-   * Builds the trust store for the given configuration.
+   * Builds the trust store described by the given options, or returns a previously built one.
+   *
+   * @param options the TLS options of the command being run
+   * @param clientEnv the environment of the client that issued the command
+   * @throws IOException if a certificate file named by the user cannot be read, or if the
+   *     configuration ends up trusting no certificate at all
+   */
+  public static TrustStore createFor(AuthAndTLSOptions options, Map<String, String> clientEnv)
+      throws IOException {
+    return create(
+        options.getTlsTrustStore(),
+        options.getTlsCertificate(),
+        ImmutableList.copyOf(options.getTlsCaCertificates()),
+        clientEnv);
+  }
+
+  /**
+   * Builds the trust store for the given configuration, or returns a previously built one.
    *
    * @param mode which certificate sources to draw from
+   * @param pinnedRootCertificate the single root certificate named by {@code --tls_certificate}, if
+   *     any; naming one pins trust to it and its meaning is unchanged by {@code mode}
    * @param caCertificateFiles additional certificate files to trust, named explicitly by the user;
    *     it is an error if one of them cannot be read
    * @param clientEnv the environment of the client that issued the command
-   * @throws IOException if a file named by {@code caCertificateFiles} cannot be read, or if the
+   * @throws IOException if a certificate file named by the user cannot be read, or if the
    *     configuration ends up trusting no certificate at all
    */
   public static TrustStore create(
-      Mode mode, ImmutableList<String> caCertificateFiles, Map<String, String> clientEnv)
+      Mode mode,
+      @Nullable String pinnedRootCertificate,
+      ImmutableList<String> caCertificateFiles,
+      Map<String, String> clientEnv)
       throws IOException {
-    if (mode == Mode.JDK && caCertificateFiles.isEmpty()) {
+    if (mode == Mode.JDK && pinnedRootCertificate == null && caCertificateFiles.isEmpty()) {
       // Nothing to add to what the JVM already does, so don't pay for building a trust store and
       // don't risk behaving differently from an unconfigured JVM.
       return JVM_DEFAULT;
     }
-    return create(mode, caCertificateFiles, clientEnv, OS.getCurrent());
+    Key key =
+        new Key(
+            mode, pinnedRootCertificate, caCertificateFiles, relevantEnv(clientEnv));
+    TrustStore cached = cache.get(key);
+    if (cached != null) {
+      return cached;
+    }
+    // Not computeIfAbsent: building can fail, and a failure must surface every time rather than be
+    // cached, and the build itself must not run while holding a bin lock.
+    TrustStore trustStore =
+        create(mode, pinnedRootCertificate, caCertificateFiles, clientEnv, OS.getCurrent());
+    if (cache.size() < MAX_CACHED_TRUST_STORES) {
+      cache.put(key, trustStore);
+    }
+    return trustStore;
   }
 
   @VisibleForTesting
   static TrustStore create(
-      Mode mode, ImmutableList<String> caCertificateFiles, Map<String, String> clientEnv, OS os)
+      Mode mode,
+      @Nullable String pinnedRootCertificate,
+      ImmutableList<String> caCertificateFiles,
+      Map<String, String> clientEnv,
+      OS os)
       throws IOException {
     Collector collector = new Collector();
-    if (mode != Mode.SYSTEM) {
-      collector.addJdkCertificates();
-    }
-    if (mode != Mode.JDK) {
-      collector.addSystemCertificates(os, clientEnv);
+    if (pinnedRootCertificate != null) {
+      // --tls_certificate names the certificate that is trusted to sign server certificates, so it
+      // replaces the trust store rather than adding to it. Widening it to also trust the public
+      // roots would quietly undo a deliberate pin.
+      collector.addRequiredFile(Path.of(pinnedRootCertificate));
+    } else {
+      if (mode != Mode.SYSTEM) {
+        collector.addJdkCertificates();
+      }
+      if (mode != Mode.JDK) {
+        collector.addSystemCertificates(os, clientEnv);
+      }
     }
     for (String file : caCertificateFiles) {
       collector.addRequiredFile(Path.of(file));
     }
     return collector.build();
+  }
+
+  @VisibleForTesting
+  static void clearCacheForTesting() {
+    cache.clear();
   }
 
   /** Forgets any chain recorded earlier on this thread. Call before starting a request. */
@@ -278,7 +359,8 @@ public final class TrustStore {
   }
 
   /** Returns the subset of {@code clientEnv} that {@link #create} reads. */
-  public static ImmutableMap<String, String> relevantEnv(Map<String, String> clientEnv) {
+  @VisibleForTesting
+  static ImmutableMap<String, String> relevantEnv(Map<String, String> clientEnv) {
     ImmutableMap.Builder<String, String> relevant = ImmutableMap.builder();
     for (String name : ENV_VARS) {
       String value = clientEnv.get(name);
@@ -297,6 +379,10 @@ public final class TrustStore {
     private final Set<X509Certificate> certificates = new LinkedHashSet<>();
     private final List<Source> sources = new ArrayList<>();
     private final List<String> searchedLocations = new ArrayList<>();
+    // SSL_CERT_FILE, CURL_CA_BUNDLE and NIX_SSL_CERT_FILE commonly point at the same bundle, and a
+    // distribution may ship one path as a symlink to another. Reading it once keeps the source
+    // list, which is what a TLS error reports, from repeating itself.
+    private final Set<Path> visitedPaths = new LinkedHashSet<>();
 
     void addJdkCertificates() throws IOException {
       // Going through the default TrustManagerFactory rather than reading cacerts directly means
@@ -417,6 +503,9 @@ public final class TrustStore {
         searchedLocations.add(path.toString());
         return false;
       }
+      if (!markVisited(path)) {
+        return true;
+      }
       byte[] contents = Files.readAllBytes(path);
       List<X509Certificate> found = parseCertificates(contents);
       if (found.isEmpty()) {
@@ -433,6 +522,9 @@ public final class TrustStore {
     private void addDirectory(Path dir) {
       if (!Files.isDirectory(dir)) {
         searchedLocations.add(dir.toString());
+        return;
+      }
+      if (!markVisited(dir)) {
         return;
       }
       List<X509Certificate> found = new ArrayList<>();
@@ -454,6 +546,17 @@ public final class TrustStore {
         return;
       }
       record(dir.toString(), found);
+    }
+
+    /** Returns whether this path has not been read yet, remembering it if so. */
+    private boolean markVisited(Path path) {
+      Path canonical;
+      try {
+        canonical = path.toRealPath();
+      } catch (IOException e) {
+        canonical = path.toAbsolutePath().normalize();
+      }
+      return visitedPaths.add(canonical);
     }
 
     private void record(String name, List<X509Certificate> found) {
@@ -484,10 +587,21 @@ public final class TrustStore {
         TrustManagerFactory factory =
             TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm());
         factory.init(merged);
+        TrustManager[] trustManagers = RecordingTrustManager.wrap(factory.getTrustManagers());
         SSLContext context = SSLContext.getInstance("TLS");
-        context.init(null, RecordingTrustManager.wrap(factory.getTrustManagers()), null);
+        context.init(null, trustManagers, null);
+        X509ExtendedTrustManager x509TrustManager = null;
+        for (TrustManager trustManager : trustManagers) {
+          if (trustManager instanceof X509ExtendedTrustManager extendedTrustManager) {
+            x509TrustManager = extendedTrustManager;
+            break;
+          }
+        }
         return new TrustStore(
-            context.getSocketFactory(), ImmutableList.copyOf(sources), certificates.size());
+            context.getSocketFactory(),
+            x509TrustManager,
+            ImmutableList.copyOf(sources),
+            certificates.size());
       } catch (GeneralSecurityException e) {
         throw new IOException("Failed to build the merged trust store", e);
       }

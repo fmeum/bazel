@@ -14,7 +14,6 @@
 
 package com.google.devtools.build.lib.bazel.repository;
 
-import com.google.devtools.build.lib.bazel.repository.downloader.TrustStore;
 import com.google.devtools.build.lib.cmdline.LabelSyntaxException;
 import com.google.devtools.build.lib.cmdline.RepositoryName;
 import com.google.devtools.build.lib.util.OptionsUtils;
@@ -189,57 +188,6 @@ public abstract class RepositoryOptions extends OptionsBase {
           "The maximum number of attempts to retry a download error. If set to 0, retries are"
               + " disabled.")
   public abstract int getRepositoryDownloaderRetries();
-
-  @Option(
-      name = "experimental_downloader_trust_store",
-      defaultValue = "merged",
-      converter = TrustStoreModeConverter.class,
-      documentationCategory = OptionDocumentationCategory.BAZEL_CLIENT_OPTIONS,
-      effectTags = {OptionEffectTag.BAZEL_INTERNAL_CONFIGURATION},
-      metadataTags = {OptionMetadataTag.EXPERIMENTAL},
-      help =
-          """
-          Which certificate authorities the downloader trusts for HTTPS.
-
-          `merged`, the default, trusts the union of the certificates bundled with Bazel's JDK and
-          the ones installed in the system trust store, so that installing a CA system-wide is
-          enough to make Bazel accept it. `jdk` trusts only the certificates bundled with the JDK.
-          `system` trusts only the system trust store, matching what curl and other native tools
-          accept.
-
-          The system trust store is the ROOT certificate store on Windows and the system, login
-          and system-root keychains on macOS. Elsewhere it is the certificate bundle named by
-          $SSL_CERT_FILE, $CURL_CA_BUNDLE, $NIX_SSL_CERT_FILE or $SSL_CERT_DIR, falling back to the
-          usual distribution locations such as /etc/ssl/certs/ca-certificates.crt and
-          /etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem.
-
-          The trust store is read once per server, so run `bazel shutdown` after installing a new
-          certificate.
-          """)
-  public abstract TrustStore.Mode getDownloaderTrustStore();
-
-  @Option(
-      name = "experimental_downloader_ca_certificate",
-      defaultValue = "null",
-      allowMultiple = true,
-      documentationCategory = OptionDocumentationCategory.BAZEL_CLIENT_OPTIONS,
-      effectTags = {OptionEffectTag.BAZEL_INTERNAL_CONFIGURATION},
-      metadataTags = {OptionMetadataTag.EXPERIMENTAL},
-      help =
-          """
-          Path to a file holding additional certificate authorities that the downloader trusts for
-          HTTPS: a PEM or DER encoded certificate bundle, or a Java KeyStore. May be specified
-          multiple times. These are trusted in addition to whatever
-          --experimental_downloader_trust_store selects, including under `jdk`.
-          """)
-  public abstract List<String> getDownloaderCaCertificates();
-
-  /** Converts to {@link TrustStore.Mode}. */
-  public static class TrustStoreModeConverter extends EnumConverter<TrustStore.Mode> {
-    public TrustStoreModeConverter() {
-      super(TrustStore.Mode.class, "downloader trust store mode");
-    }
-  }
 
   @Option(
       name = "distdir",

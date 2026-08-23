@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package com.google.devtools.build.lib.bazel.repository.downloader;
+package com.google.devtools.build.lib.authandtls;
 
 import static com.google.common.truth.Truth.assertThat;
 import static java.nio.charset.StandardCharsets.UTF_8;
@@ -60,6 +60,7 @@ public class TrustStoreTest {
 
   @Before
   public void setUp() throws Exception {
+    TrustStore.clearCacheForTesting();
     TrustManagerFactory factory =
         TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm());
     factory.init((KeyStore) null);
@@ -77,7 +78,11 @@ public class TrustStoreTest {
   @Test
   public void jdkMode_withoutExtraCertificates_leavesTheJvmAlone() throws Exception {
     TrustStore trustStore =
-        TrustStore.create(TrustStore.Mode.JDK, ImmutableList.of(), ImmutableMap.of());
+        TrustStore.create(
+            TrustStore.Mode.JDK,
+            /* pinnedRootCertificate= */ null,
+            ImmutableList.of(),
+            ImmutableMap.of());
 
     // A null socket factory means the connection is left on the JVM's default configuration, which
     // is what makes this mode exactly the behavior Bazel had before the flag existed.
@@ -93,6 +98,7 @@ public class TrustStoreTest {
     TrustStore trustStore =
         TrustStore.create(
             TrustStore.Mode.JDK,
+            /* pinnedRootCertificate= */ null,
             ImmutableList.of(bundle.getPath()),
             ImmutableMap.of(),
             OS_UNDER_TEST);
@@ -112,6 +118,7 @@ public class TrustStoreTest {
     TrustStore trustStore =
         TrustStore.create(
             TrustStore.Mode.MERGED,
+            /* pinnedRootCertificate= */ null,
             ImmutableList.of(),
             ImmutableMap.of("SSL_CERT_FILE", bundle.getPath()),
             OS_UNDER_TEST);
@@ -127,12 +134,14 @@ public class TrustStoreTest {
     TrustStore jdkOnly =
         TrustStore.create(
             TrustStore.Mode.JDK,
+            /* pinnedRootCertificate= */ null,
             ImmutableList.of(bundle.getPath()),
             ImmutableMap.of(),
             OS_UNDER_TEST);
     TrustStore merged =
         TrustStore.create(
             TrustStore.Mode.MERGED,
+            /* pinnedRootCertificate= */ null,
             ImmutableList.of(),
             ImmutableMap.of("SSL_CERT_FILE", bundle.getPath()),
             OS_UNDER_TEST);
@@ -147,6 +156,7 @@ public class TrustStoreTest {
     TrustStore trustStore =
         TrustStore.create(
             TrustStore.Mode.SYSTEM,
+            /* pinnedRootCertificate= */ null,
             ImmutableList.of(),
             ImmutableMap.of("SSL_CERT_FILE", bundle.getPath()),
             OS_UNDER_TEST);
@@ -163,6 +173,7 @@ public class TrustStoreTest {
       TrustStore trustStore =
           TrustStore.create(
               TrustStore.Mode.SYSTEM,
+              /* pinnedRootCertificate= */ null,
               ImmutableList.of(),
               ImmutableMap.of(envVar, bundle.getPath()),
               OS_UNDER_TEST);
@@ -179,6 +190,7 @@ public class TrustStoreTest {
     TrustStore trustStore =
         TrustStore.create(
             TrustStore.Mode.SYSTEM,
+            /* pinnedRootCertificate= */ null,
             ImmutableList.of(),
             ImmutableMap.of("SSL_CERT_FILE", der.getPath()),
             OS_UNDER_TEST);
@@ -203,6 +215,7 @@ public class TrustStoreTest {
     TrustStore trustStore =
         TrustStore.create(
             TrustStore.Mode.SYSTEM,
+            /* pinnedRootCertificate= */ null,
             ImmutableList.of(),
             ImmutableMap.of("SSL_CERT_FILE", keyStoreFile.getPath()),
             OS_UNDER_TEST);
@@ -223,6 +236,7 @@ public class TrustStoreTest {
     TrustStore trustStore =
         TrustStore.create(
             TrustStore.Mode.SYSTEM,
+            /* pinnedRootCertificate= */ null,
             ImmutableList.of(),
             ImmutableMap.of(TrustStore.CERTIFICATE_DIR_ENV_VAR, dir.getPath()),
             OS_UNDER_TEST);
@@ -240,6 +254,7 @@ public class TrustStoreTest {
     TrustStore trustStore =
         TrustStore.create(
             TrustStore.Mode.SYSTEM,
+            /* pinnedRootCertificate= */ null,
             ImmutableList.of(),
             ImmutableMap.of(
                 TrustStore.CERTIFICATE_DIR_ENV_VAR,
@@ -257,6 +272,7 @@ public class TrustStoreTest {
     TrustStore trustStore =
         TrustStore.create(
             TrustStore.Mode.MERGED,
+            /* pinnedRootCertificate= */ null,
             ImmutableList.of(),
             ImmutableMap.of("SSL_CERT_FILE", "/does/not/exist.pem"),
             OS_UNDER_TEST);
@@ -274,6 +290,7 @@ public class TrustStoreTest {
             () ->
                 TrustStore.create(
                     TrustStore.Mode.MERGED,
+                    /* pinnedRootCertificate= */ null,
                     ImmutableList.of("/does/not/exist.pem"),
                     ImmutableMap.of(),
                     OS_UNDER_TEST));
@@ -292,6 +309,7 @@ public class TrustStoreTest {
             () ->
                 TrustStore.create(
                     TrustStore.Mode.MERGED,
+                    /* pinnedRootCertificate= */ null,
                     ImmutableList.of(notACertificate.getPath()),
                     ImmutableMap.of(),
                     OS_UNDER_TEST));
@@ -309,6 +327,7 @@ public class TrustStoreTest {
             () ->
                 TrustStore.create(
                     TrustStore.Mode.SYSTEM,
+                    /* pinnedRootCertificate= */ null,
                     ImmutableList.of(),
                     ImmutableMap.of(TrustStore.CERTIFICATE_DIR_ENV_VAR, empty.getPath()),
                     OS_UNDER_TEST));
@@ -324,6 +343,7 @@ public class TrustStoreTest {
     TrustStore trustStore =
         TrustStore.create(
             TrustStore.Mode.SYSTEM,
+            /* pinnedRootCertificate= */ null,
             ImmutableList.of(),
             ImmutableMap.of("SSL_CERT_FILE", bundle.getPath()),
             OS_UNDER_TEST);
@@ -352,6 +372,97 @@ public class TrustStoreTest {
     TrustStore.clearRejectedChain();
 
     assertThat(TrustStore.describeRejectedChain()).isNull();
+  }
+
+  @Test
+  public void pinnedRootCertificate_replacesTheTrustStore() throws Exception {
+    // --tls_certificate names the certificate trusted to sign server certificates. Widening it to
+    // also trust the public roots would quietly undo a deliberate pin, so the mode is ignored.
+    File pinned = writePem("pinned.pem", jvmCertificates.subList(0, 2));
+
+    TrustStore trustStore =
+        TrustStore.create(
+            TrustStore.Mode.MERGED,
+            pinned.getPath(),
+            ImmutableList.of(),
+            ImmutableMap.of(),
+            OS_UNDER_TEST);
+
+    assertThat(trustStore.trustAnchorCount()).isEqualTo(2);
+    assertThat(sourceNames(trustStore)).containsExactly(pinned.getPath());
+  }
+
+  @Test
+  public void pinnedRootCertificate_stillTakesTheExplicitCaCertificates() throws Exception {
+    File pinned = writePem("pinned.pem", jvmCertificates.subList(0, 2));
+    File extra = writePem("extra.pem", jvmCertificates.subList(4, 7));
+
+    TrustStore trustStore =
+        TrustStore.create(
+            TrustStore.Mode.MERGED,
+            pinned.getPath(),
+            ImmutableList.of(extra.getPath()),
+            ImmutableMap.of(),
+            OS_UNDER_TEST);
+
+    assertThat(trustStore.trustAnchorCount()).isEqualTo(5);
+    assertThat(sourceNames(trustStore)).containsExactly(pinned.getPath(), extra.getPath());
+  }
+
+  @Test
+  public void trustManager_isExposedForTheNettyBasedClients() throws Exception {
+    File bundle = writePem("netty.pem", jvmCertificates.subList(0, 2));
+
+    TrustStore trustStore =
+        TrustStore.create(
+            TrustStore.Mode.SYSTEM,
+            /* pinnedRootCertificate= */ null,
+            ImmutableList.of(),
+            ImmutableMap.of("SSL_CERT_FILE", bundle.getPath()),
+            OS_UNDER_TEST);
+
+    assertThat(trustStore.trustManager()).isNotNull();
+    assertThat(trustStore.trustManager().getAcceptedIssuers()).hasLength(2);
+    // The JVM default must stay a no-op for both kinds of client.
+    assertThat(TrustStore.jvmDefault().trustManager()).isNull();
+    assertThat(TrustStore.jvmDefault().socketFactory()).isNull();
+  }
+
+  @Test
+  public void create_reusesAnAlreadyBuiltTrustStore() throws Exception {
+    // Every remote connection and download resolves the trust store, so building it once matters.
+    File bundle = writePem("cached.pem", jvmCertificates.subList(0, 2));
+    ImmutableMap<String, String> env = ImmutableMap.of("SSL_CERT_FILE", bundle.getPath());
+
+    TrustStore first =
+        TrustStore.create(
+            TrustStore.Mode.SYSTEM, /* pinnedRootCertificate= */ null, ImmutableList.of(), env);
+    TrustStore second =
+        TrustStore.create(
+            TrustStore.Mode.SYSTEM, /* pinnedRootCertificate= */ null, ImmutableList.of(), env);
+
+    assertThat(second).isSameInstanceAs(first);
+  }
+
+  @Test
+  public void aBundleNamedBySeveralEnvVars_isReadOnce() throws Exception {
+    // SSL_CERT_FILE, CURL_CA_BUNDLE and NIX_SSL_CERT_FILE routinely point at the same file, and a
+    // TLS error reports the sources, so it must not list that file three times.
+    File bundle = writePem("shared.pem", jvmCertificates.subList(0, 2));
+
+    TrustStore trustStore =
+        TrustStore.create(
+            TrustStore.Mode.SYSTEM,
+            /* pinnedRootCertificate= */ null,
+            ImmutableList.of(),
+            ImmutableMap.of(
+                "SSL_CERT_FILE", bundle.getPath(),
+                "CURL_CA_BUNDLE", bundle.getPath(),
+                "NIX_SSL_CERT_FILE", bundle.getPath()),
+            OS_UNDER_TEST);
+
+    assertThat(sourceNames(trustStore)).containsExactly(bundle.getPath());
+    assertThat(trustStore.trustAnchorCount()).isEqualTo(2);
   }
 
   private ImmutableList<String> sourceNames(TrustStore trustStore) {

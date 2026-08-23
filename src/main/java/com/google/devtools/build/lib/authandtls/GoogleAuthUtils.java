@@ -61,6 +61,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.Executor;
 import javax.annotation.Nullable;
+import javax.net.ssl.X509ExtendedTrustManager;
 import jdk.net.ExtendedSocketOptions;
 
 /** Utility methods for using {@link AuthAndTLSOptions} with Google Cloud. */
@@ -79,6 +80,19 @@ public final class GoogleAuthUtils {
       @Nullable List<ClientInterceptor> interceptors,
       @Nullable Map<String, ?> serviceConfig)
       throws IOException {
+    return newChannel(
+        executor, target, proxy, options, TrustStore.jvmDefault(), interceptors, serviceConfig);
+  }
+
+  public static ManagedChannel newChannel(
+      @Nullable Executor executor,
+      String target,
+      String proxy,
+      AuthAndTLSOptions options,
+      TrustStore trustStore,
+      @Nullable List<ClientInterceptor> interceptors,
+      @Nullable Map<String, ?> serviceConfig)
+      throws IOException {
     Preconditions.checkNotNull(target);
     Preconditions.checkNotNull(options);
 
@@ -87,7 +101,8 @@ public final class GoogleAuthUtils {
             ? createSSlContext(
                 options.getTlsCertificate(),
                 options.getTlsClientCertificate(),
-                options.getTlsClientKey())
+                options.getTlsClientKey(),
+                trustStore)
             : null;
 
     String targetUrl = convertTargetScheme(target);
@@ -174,7 +189,10 @@ public final class GoogleAuthUtils {
   }
 
   private static SslContext createSSlContext(
-      @Nullable String rootCert, @Nullable String clientCert, @Nullable String clientKey)
+      @Nullable String rootCert,
+      @Nullable String clientCert,
+      @Nullable String clientKey,
+      TrustStore trustStore)
       throws IOException {
     SslContextBuilder sslContextBuilder;
     try {
@@ -183,7 +201,12 @@ public final class GoogleAuthUtils {
       String message = "Failed to init TLS infrastructure: " + e.getMessage();
       throw new IOException(message, e);
     }
-    if (rootCert != null) {
+    // The trust store already accounts for --tls_certificate, so it takes precedence; rootCert is
+    // only consulted for callers that have no trust store of their own.
+    X509ExtendedTrustManager trustManager = trustStore.trustManager();
+    if (trustManager != null) {
+      sslContextBuilder.trustManager(trustManager);
+    } else if (rootCert != null) {
       try {
         sslContextBuilder.trustManager(new File(rootCert));
       } catch (Exception e) {

@@ -20,6 +20,7 @@ import com.google.common.base.Strings;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.io.ByteStreams;
+import com.google.devtools.build.lib.authandtls.TrustStore;
 import com.google.devtools.build.lib.analysis.BlazeVersionInfo;
 import com.google.devtools.build.lib.concurrent.ThreadSafety.ThreadSafe;
 import com.google.devtools.build.lib.events.Event;
@@ -347,7 +348,7 @@ class HttpConnector {
     }
     message.append(
         ". Install that certificate authority in the system trust store, or pass"
-            + " --experimental_downloader_ca_certificate=<path> to trust it directly");
+            + " --experimental_tls_ca_certificate=<path> to trust it directly");
     return message.toString();
   }
 

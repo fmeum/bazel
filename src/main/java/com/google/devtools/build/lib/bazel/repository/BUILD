@@ -217,7 +217,6 @@ java_library(
     name = "repository_options",
     srcs = ["RepositoryOptions.java"],
     deps = [
-        "//src/main/java/com/google/devtools/build/lib/bazel/repository/downloader",
         "//src/main/java/com/google/devtools/build/lib/cmdline",
         "//src/main/java/com/google/devtools/build/lib/util",
         "//src/main/java/com/google/devtools/build/lib/vfs:pathfragment",

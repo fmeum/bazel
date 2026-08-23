@@ -41,6 +41,7 @@ import com.google.devtools.build.lib.analysis.ConfiguredTarget;
 import com.google.devtools.build.lib.analysis.config.BuildOptions;
 import com.google.devtools.build.lib.analysis.config.CoreOptions;
 import com.google.devtools.build.lib.authandtls.AuthAndTLSOptions;
+import com.google.devtools.build.lib.authandtls.TrustStore;
 import com.google.devtools.build.lib.authandtls.CallCredentialsProvider;
 import com.google.devtools.build.lib.authandtls.GoogleAuthUtils;
 import com.google.devtools.build.lib.authandtls.credentialhelper.CredentialHelperEnvironment;
@@ -174,10 +175,23 @@ public final class RemoteModule extends BlazeModule {
               target,
               proxy,
               options,
+              trustStoreForCommand(options),
               interceptors.isEmpty() ? null : interceptors,
               serviceConfig);
         }
       };
+
+  /**
+   * The certificate authorities to trust for this command's remote connections. Falls back to
+   * leaving the JVM's own configuration alone when there is no command environment to read the
+   * client's environment from, as in tests.
+   */
+  private TrustStore trustStoreForCommand(AuthAndTLSOptions options) throws IOException {
+    CommandEnvironment commandEnvironment = env;
+    return commandEnvironment == null
+        ? TrustStore.jvmDefault()
+        : TrustStore.createFor(options, commandEnvironment.getClientEnv());
+  }
 
   private final BuildEventArtifactUploaderFactoryDelegate
       buildEventArtifactUploaderFactoryDelegate = new BuildEventArtifactUploaderFactoryDelegate();
@@ -288,6 +302,7 @@ public final class RemoteModule extends BlazeModule {
               diskCachePath,
               credentials,
               authAndTlsOptions,
+              TrustStore.createFor(authAndTlsOptions, env.getClientEnv()),
               Preconditions.checkNotNull(env.getWorkingDirectory(), "workingDirectory"),
               digestUtil,
               new RemoteRetrier(

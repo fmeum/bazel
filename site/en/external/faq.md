@@ -307,7 +307,9 @@ By default Bazel trusts the union of the certificate authorities bundled with
 its JDK and the ones installed in your system trust store, so installing a CA
 system-wide is enough. That covers the usual case of a corporate proxy that
 inspects TLS traffic, which otherwise fails with `PKIX path building failed:
-unable to find valid certification path to requested target`.
+unable to find valid certification path to requested target`. It applies to
+every connection Bazel makes: repository and registry downloads, the remote
+cache, remote execution and the build event service.
 
 The system trust store is:
 
@@ -325,14 +327,18 @@ To trust a certificate without installing it system-wide, pass the file
 directly:
 
 ```
-common --experimental_downloader_ca_certificate=/path/to/corporate-ca.pem
+common --experimental_tls_ca_certificate=/path/to/corporate-ca.pem
 ```
 
-Two other modes are available through
-`--experimental_downloader_trust_store`. Use `jdk` to trust only the
-certificates bundled with Bazel's JDK, and `system` to trust only the system
-trust store, which makes Bazel accept exactly what curl and other native tools
-accept.
+Two other modes are available through `--experimental_tls_trust_store`. Use
+`jdk` to trust only the certificates bundled with Bazel's JDK, and `system` to
+trust only the system trust store, which makes Bazel accept exactly what curl
+and other native tools accept.
+
+`--tls_certificate` is different: it *pins* trust to the certificate it names,
+so the trust store is not consulted at all. Use
+`--experimental_tls_ca_certificate` when you want to add a certificate rather
+than replace the set.
 
 Bazel reads the trust store once per server, so run `bazel shutdown` after
 installing a new certificate.
