@@ -30,9 +30,8 @@ import com.google.devtools.build.lib.profiler.ProfilerTask;
 import com.google.devtools.build.lib.profiler.SilentCloseable;
 import com.google.devtools.build.lib.vfs.OutputService.RewoundActionSynchronizer;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.locks.Condition;
-import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReadWriteLock;
+import java.util.concurrent.locks.ReentrantLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 import javax.annotation.Nullable;
 
@@ -72,8 +71,9 @@ final class RemoteRewoundActionSynchronizer implements RewoundActionSynchronizer
   // execution, while any action will acquire a read lock on the lookup data of any generating
   // action of its inputs before it starts executing.
   // The values of this cache are weakly referenced to ensure that locks are cleaned up when they
-  // are no longer needed.
-  @Nullable private volatile LoadingCache<ActionLookupData, ReadWriteLock> fineLocks;
+  // are no longer needed. Callers hold on to the FineLock itself rather than to a view of it, so a
+  // lock can't be collected and replaced while it is held.
+  @Nullable private volatile LoadingCache<ActionLookupData, FineLock> fineLocks;
 
   public RemoteRewoundActionSynchronizer(RemoteActionInputFetcher actionInputFetcher) {
     this.actionInputFetcher = actionInputFetcher;
@@ -105,15 +105,16 @@ final class RemoteRewoundActionSynchronizer implements RewoundActionSynchronizer
   Let C be any directed cycle in the graph representing a deadlock, let A_1 -[XY(K)]-> A_2 be an
   edge in C and consider the following cases for the pair XY:
 
-  * RR: A fine read lock is first acquired with the un-timed tryLock, which is documented to barge
-        ahead of queued writers. If another thread holds a read lock, no writer can hold the write
-        lock, so this acquisition succeeds and the RR case doesn't occur.
+  * RR: A thread waiting for a fine read lock is only ever waiting for the thread that holds the
+        corresponding write lock, see the invariant documented on FineLock. If another thread holds
+        the read lock, no thread holds the write lock, so this case doesn't occur.
   * WW and WR: In both cases, A_1 attempts to acquire a write lock, which only happens when A_1 is
         a rewound action about to prepare for its (re-)execution. While a rewound action is waiting
-        for a write lock in enterActionPreparation, it doesn't hold any locks: enterActionExecution
-        hasn't been called yet in SkyframeActionExecutor, it only ever acquires the single write
-        lock it is waiting for, and all past executions of the action have released all their locks
-        due to use of try-with-resources. This means that A_1 can't have any incoming edges in the
+        for a write lock in enterActionPreparation (or for the writer gate guarding it), it
+        doesn't hold any locks: enterActionExecution hasn't been called yet in
+        SkyframeActionExecutor, it only ever acquires the single write lock it is waiting for, and
+        all past executions of the action have released all their locks due to use of
+        try-with-resources. This means that A_1 can't have any incoming edges in the
         wait-for graph, which is a contradiction to the assumption that it is contained in the
         directed cycle C.
 
@@ -177,7 +178,7 @@ final class RemoteRewoundActionSynchronizer implements RewoundActionSynchronizer
               Caffeine.newBuilder()
                   .weakValues()
                   // TODO: Investigate the effect of fair locks on build wall time.
-                  .build((ActionLookupData unused) -> newFineLock());
+                  .build((ActionLookupData unused) -> new FineLock());
           // Must be assigned after fineLocks as lockArtifactsForConsumption relies on a null
           // coarseLock implying a non-null fineLocks.
           coarseLock = null;
@@ -187,20 +188,20 @@ final class RemoteRewoundActionSynchronizer implements RewoundActionSynchronizer
       }
     }
 
-    var writeLock = fineLocks.get(outputKeyFor(action)).writeLock();
+    var fineLock = fineLocks.get(outputKeyFor(action));
     try (SilentCloseable c =
         Profiler.instance()
             .profile(ProfilerTask.ACTION_LOCK, "action.awaitRewoundActionConsumers")) {
-      writeLock.lockInterruptibly();
+      fineLock.lockWriteInterruptibly();
     }
     try (SilentCloseable c =
         Profiler.instance().profile(ProfilerTask.INFO, "action.prepareOutputsForRewinding")) {
       prepareOutputsForRewinding(action);
     } catch (Throwable t) {
-      writeLock.unlock();
+      fineLock.unlockWrite();
       throw t;
     }
-    return writeLock::unlock;
+    return fineLock::unlockWrite;
   }
 
   /**
@@ -288,105 +289,117 @@ final class RemoteRewoundActionSynchronizer implements RewoundActionSynchronizer
     if (localCoarseLock != null) {
       localCoarseLock.readLock().unlock();
     }
-    var allReadWriteLocks =
+    var allFineLocks =
         localFineLocks.getAll(inputKeysFor(artifacts, metadataProvider, writeLockedKey)).values();
-    var locksToUnlockBuilder =
-        ImmutableList.<Lock>builderWithExpectedSize(allReadWriteLocks.size());
+    var locksToUnlockBuilder = ImmutableList.<FineLock>builderWithExpectedSize(allFineLocks.size());
     try {
-      for (var readWriteLock : allReadWriteLocks) {
-        var readLock = readWriteLock.readLock();
-        lockFineReadLockInterruptibly(readLock);
-        locksToUnlockBuilder.add(readLock);
+      for (var fineLock : allFineLocks) {
+        fineLock.lockReadInterruptibly();
+        locksToUnlockBuilder.add(fineLock);
       }
     } catch (Throwable e) {
-      for (var readLock : locksToUnlockBuilder.build()) {
-        readLock.unlock();
+      for (var fineLock : locksToUnlockBuilder.build()) {
+        fineLock.unlockRead();
       }
       throw e;
     }
     var locksToUnlock = locksToUnlockBuilder.build();
-    return () -> locksToUnlock.forEach(Lock::unlock);
+    return () -> locksToUnlock.forEach(FineLock::unlockRead);
   }
 
   /**
-   * Acquires a fine read lock without queuing behind a waiting writer if another reader already
-   * holds it.
+   * The value of the {@link RemoteRewoundActionSynchronizer#fineLocks} cache: a reentrant
+   * read-write lock in which a thread waiting for the read lock is only ever waiting for the thread
+   * that holds the write lock.
    *
-   * <p>The un-timed {@link ReentrantReadWriteLock.ReadLock#tryLock()} is documented to barge even
-   * for a fair lock. This property is required by the RR case in the deadlock proof above. The
-   * interrupt check preserves the entry semantics of {@link Lock#lockInterruptibly()} because
-   * {@link Lock#tryLock()} itself ignores interruption.
+   * <p>This property is what the RR case of the deadlock proof above relies on and a plain {@link
+   * ReentrantReadWriteLock} does not provide it. It requires both of the following:
+   *
+   * <ul>
+   *   <li>Readers barge: {@link ReentrantReadWriteLock.ReadLock#tryLock()} is documented to acquire
+   *       the read lock whenever no other thread holds the write lock, even for a fair lock and
+   *       even if writers are queued. Without this, a reader queues behind any waiting writer
+   *       because {@code ReentrantReadWriteLock.NonfairSync#readerShouldBlock} defers to it, and is
+   *       then blocked by whichever reader is keeping that writer waiting.
+   *   <li>At most one writer is ever enqueued: writers acquire {@link #writerGate} for the duration
+   *       of the write lock. Without this, a reader whose barging {@code tryLock} fails because a
+   *       writer holds the lock can end up enqueued behind a second waiting writer, where a reader
+   *       that barges in later keeps it blocked indefinitely. Rewinding a lost tree artifact
+   *       rewinds the entire {@link com.google.devtools.build.lib.actions.ActionTemplate} expansion
+   *       at once, so multiple writers of the same key are the norm rather than a corner case.
+   * </ul>
+   *
+   * <p>Together these give the required invariant: a reader only ever enqueues while another thread
+   * holds the write lock, and that thread holds {@link #writerGate}, so no writer is enqueued at
+   * that point. Nodes are only ever appended to the queue, and a writer can only append one while
+   * it holds {@link #writerGate}, i.e. after the write lock has been released. An enqueued reader
+   * therefore never has a writer ahead of it and acquires the read lock as soon as no thread holds
+   * the write lock.
+   *
+   * <p>The price is that writers can be starved by a steady stream of readers, just as with the
+   * {@code StampedLock} this replaces. Deadlock freedom doesn't depend on writer progress and the
+   * readers of a given key are bounded by the actions consuming its outputs.
+   *
+   * <p>Callers hold on to this object rather than to a view of it, so it also can't be collected
+   * and replaced by the weak {@link RemoteRewoundActionSynchronizer#fineLocks} cache while it is
+   * locked. The views of a {@link ReentrantReadWriteLock} only retain its internal synchronization
+   * state, not the lock itself (see <a
+   * href="https://bugs.openjdk.org/browse/JDK-8189598">JDK-8189598</a>), which is why it can't be
+   * used as a weak cache value without a wrapper such as the one Guava's {@code Striped} uses.
+   *
+   * <p>As with {@link ReentrantReadWriteLock}, a thread that holds the read lock must not attempt
+   * to acquire the write lock: the acquisition never succeeds.
    */
   @VisibleForTesting
-  static void lockFineReadLockInterruptibly(Lock readLock) throws InterruptedException {
-    if (Thread.interrupted()) {
-      throw new InterruptedException();
-    }
-    if (!readLock.tryLock()) {
-      readLock.lockInterruptibly();
-    }
-  }
+  static final class FineLock {
+    private final ReentrantReadWriteLock lock = new ReentrantReadWriteLock();
+    // Serializes writers so that at most one of them is ever enqueued on lock. Only ever contended
+    // by the rewound actions covering a single key.
+    private final ReentrantLock writerGate = new ReentrantLock();
 
-  /**
-   * Creates a read-write lock that remains reachable while either of its views is in use.
-   *
-   * <p>The standard {@link ReentrantReadWriteLock} views only retain its internal synchronization
-   * state, not the parent lock (see
-   * <a href="https://bugs.openjdk.org/browse/JDK-8189598">JDK-8189598</a>). This would allow a weak
-   * cache value to be collected and replaced while one of its views is still locked. Guava solves
-   * this for {@code Striped} by wrapping both views with a reference to the parent. Here the cached
-   * value is itself the read view, and the write view retains it, which achieves the same
-   * reachability with only two view objects and no allocation when accessing either view.
-   */
-  @VisibleForTesting
-  static ReadWriteLock newFineLock() {
-    return new WeakSafeReentrantReadWriteLock();
-  }
-
-  private static final class WeakSafeReentrantReadWriteLock
-      extends ReentrantReadWriteLock.ReadLock implements ReadWriteLock {
-    private static final long serialVersionUID = 1L;
-
-    private final Lock writeLock;
-
-    private WeakSafeReentrantReadWriteLock() {
-      this(new ReentrantReadWriteLock());
+    void lockReadInterruptibly() throws InterruptedException {
+      // tryLock() ignores interruption, so check for it to preserve the entry semantics of
+      // Lock#lockInterruptibly().
+      if (Thread.interrupted()) {
+        throw new InterruptedException();
+      }
+      if (!tryLockRead()) {
+        lock.readLock().lockInterruptibly();
+      }
     }
 
-    private WeakSafeReentrantReadWriteLock(ReentrantReadWriteLock parent) {
-      super(parent);
-      writeLock = new WeakSafeWriteLock(parent, this);
+    boolean tryLockRead() {
+      return lock.readLock().tryLock();
     }
 
-    @Override
-    public Lock readLock() {
-      return this;
+    void unlockRead() {
+      lock.readLock().unlock();
     }
 
-    @Override
-    public Lock writeLock() {
-      return writeLock;
+    void lockWriteInterruptibly() throws InterruptedException {
+      writerGate.lockInterruptibly();
+      try {
+        lock.writeLock().lockInterruptibly();
+      } catch (Throwable t) {
+        writerGate.unlock();
+        throw t;
+      }
     }
-  }
 
-  private static final class WeakSafeWriteLock extends ReentrantReadWriteLock.WriteLock {
-    private static final long serialVersionUID = 1L;
-
-    // Keep the weakly cached value alive as long as the write view is reachable.
-    @SuppressWarnings("unused")
-    private final WeakSafeReentrantReadWriteLock cachedValue;
-
-    private WeakSafeWriteLock(
-        ReentrantReadWriteLock lock, WeakSafeReentrantReadWriteLock cachedValue) {
-      super(lock);
-      this.cachedValue = cachedValue;
+    void unlockWrite() {
+      // Release the write lock first so that a reader enqueued behind it is signalled before
+      // another writer can enqueue.
+      try {
+        lock.writeLock().unlock();
+      } finally {
+        writerGate.unlock();
+      }
     }
 
     @Override
-    public Condition newCondition() {
-      // StampedLock views, which this class replaces, do not support conditions. A condition would
-      // also need to retain the weakly cached value to preserve the reachability guarantee.
-      throw new UnsupportedOperationException();
+    public String toString() {
+      return "FineLock[readers=%d, writeLocked=%s]"
+          .formatted(lock.getReadLockCount(), lock.isWriteLocked());
     }
   }
 
