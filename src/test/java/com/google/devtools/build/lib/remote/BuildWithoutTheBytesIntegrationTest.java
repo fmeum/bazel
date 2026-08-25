@@ -675,6 +675,9 @@ public class BuildWithoutTheBytesIntegrationTest extends BuildWithoutTheBytesInt
     if (atomicUpdates) {
       addOptions("--experimental_rewind_atomic_updates");
     }
+    // waitDownloads() left behind a pending command whose options were already parsed; create a
+    // fresh one so that the options added above take effect for the next build.
+    runtimeWrapper.newCommand();
     buildTarget("//a:bar", "//a:keeper");
 
     if (atomicUpdates) {
