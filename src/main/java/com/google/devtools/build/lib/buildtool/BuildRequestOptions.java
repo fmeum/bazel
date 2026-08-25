@@ -424,6 +424,24 @@ public abstract class BuildRequestOptions extends OptionsBase {
   public abstract boolean getExperimentalPreciseRewinding();
 
   @Option(
+      name = "experimental_rewind_atomic_updates",
+      defaultValue = "false",
+      documentationCategory = OptionDocumentationCategory.UNDOCUMENTED,
+      effectTags = {OptionEffectTag.EXECUTION},
+      metadataTags = {OptionMetadataTag.EXPERIMENTAL},
+      help =
+          "Whether to assume that rewound actions update their outputs atomically, e.g. because"
+              + " they execute remotely and their outputs are only materialized in the local output"
+              + " tree by atomically moving fully downloaded files into place. If true, rewound"
+              + " actions do not delete their existing outputs before re-execution, keep any output"
+              + " that still exists locally at its existing version instead of adopting the"
+              + " re-executed result, and skip the synchronization that otherwise prevents actions"
+              + " from observing concurrently deleted outputs. Unsound if rewound actions may"
+              + " execute locally (e.g. via --remote_local_fallback or dynamic execution). This is"
+              + " a no-op unless --rewind_lost_inputs is true.")
+  public abstract boolean getExperimentalRewindAtomicUpdates();
+
+  @Option(
       name = "incompatible_skip_genfiles_symlink",
       defaultValue = "true",
       documentationCategory = OptionDocumentationCategory.UNDOCUMENTED,

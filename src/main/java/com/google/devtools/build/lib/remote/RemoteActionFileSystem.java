@@ -117,6 +117,10 @@ public class RemoteActionFileSystem extends FileSystem implements PathCanonicali
 
   @Nullable private ActionExecutionMetadata action = null;
 
+  // Set when the action was rewound under --experimental_rewind_atomic_updates. Written before the
+  // (re-)execution starts and read when its result is processed, possibly on another thread.
+  private volatile boolean preserveExistingOutputs = false;
+
   /** Describes how to handle symlinks when calling {@link #statInternal}. */
   private enum FollowMode {
     /** Canonicalize the entire path. This is equivalent to {@link Symlinks.FOLLOW}. */
@@ -303,6 +307,25 @@ public class RemoteActionFileSystem extends FileSystem implements PathCanonicali
 
   public void updateContext(ActionExecutionMetadata action) {
     this.action = action;
+  }
+
+  /**
+   * Marks this filesystem as belonging to a rewound action that is assumed to update its outputs
+   * atomically (see {@code --experimental_rewind_atomic_updates}).
+   *
+   * <p>{@link RemoteExecutionService#downloadOutputs} keeps outputs that still exist in the local
+   * output tree at their existing version by skipping both their download and their metadata
+   * injection, so that their metadata is derived from the local file instead. Since the local file
+   * was atomically moved into place when it was first materialized, it is complete and matches the
+   * metadata handed to concurrently executing consumers, whereas the re-executed result may differ
+   * if the action is non-deterministic.
+   */
+  void preserveExistingOutputs() {
+    this.preserveExistingOutputs = true;
+  }
+
+  boolean shouldPreserveExistingOutputs() {
+    return preserveExistingOutputs;
   }
 
   void injectRemoteFile(

@@ -619,6 +619,81 @@ public class BuildWithoutTheBytesIntegrationTest extends BuildWithoutTheBytesInt
   }
 
   @Test
+  public void remoteCacheEvictBlobs_actionRewindingWithAtomicUpdates_keepsExistingLocalOutputs(
+      @TestParameter boolean atomicUpdates) throws Exception {
+    // Arrange: gen is non-deterministic and has two outputs: used.out is consumed by the remotely
+    // executing bar, while kept.out is consumed by the locally executing keeper and is thus
+    // materialized in the local output tree.
+    write(
+        "a/BUILD",
+        """
+        genrule(
+            name = "gen",
+            srcs = ["gen.in"],
+            outs = [
+                "used.out",
+                "kept.out",
+            ],
+            cmd = "cat $(location gen.in) > $(location used.out)" +
+                  " && date +%s%N > $(location kept.out)",
+        )
+
+        genrule(
+            name = "bar",
+            srcs = [
+                "used.out",
+                "bar.in",
+            ],
+            outs = ["bar.out"],
+            cmd = "cat $(SRCS) > $@",
+        )
+
+        genrule(
+            name = "keeper",
+            srcs = ["kept.out"],
+            outs = ["keeper.out"],
+            cmd = "cat $(SRCS) > $@",
+            tags = ["no-remote-exec"],
+        )
+        """);
+    write("a/gen.in", "gen");
+    write("a/bar.in", "bar");
+
+    // Populate the remote cache. keeper executes locally, so kept.out is materialized in the local
+    // output tree, while used.out is not (bar executes remotely with minimal downloads).
+    buildTarget("//a:bar", "//a:keeper");
+    waitDownloads();
+    assertOutputDoesNotExist("a/used.out");
+    var keptBytes = readContent(getOutputPath("a/kept.out"));
+
+    // Act: Evict blobs from the remote cache and do an incremental build. bar's re-execution
+    // discovers that used.out is lost and rewinds gen, which re-executes remotely and produces
+    // different content for kept.out.
+    evictAllBlobs();
+    write("a/bar.in", "updated bar");
+    enableActionRewinding();
+    if (atomicUpdates) {
+      addOptions("--experimental_rewind_atomic_updates");
+    }
+    buildTarget("//a:bar", "//a:keeper");
+
+    if (atomicUpdates) {
+      // Assert: the locally materialized kept.out was kept at its existing version, so neither it
+      // nor the actions downstream of it observed the re-executed non-deterministic content.
+      assertThat(readContent(getOutputPath("a/kept.out"))).isEqualTo(keptBytes);
+      assertThat(readContent(getOutputPath("a/keeper.out"))).isEqualTo(keptBytes);
+    } else {
+      // Assert: the rewound gen deleted kept.out before re-executing. Depending on whether keeper
+      // re-evaluated before or after the rewind, kept.out is either absent or has been re-fetched
+      // with the re-executed non-deterministic content.
+      var keptPath = getOutputPath("a/kept.out");
+      if (keptPath.exists()) {
+        assertThat(readContent(keptPath)).isNotEqualTo(keptBytes);
+      }
+    }
+  }
+
+  @Test
   public void remoteCacheEvictBlobs_whenUploadingInputFile(@TestParameter boolean actionRewinding)
       throws Exception {
     // Arrange: Prepare workspace and populate remote cache

@@ -237,6 +237,32 @@ public interface OutputService {
       OutputMetadataStore outputMetadataStore) {}
 
   /**
+   * Whether this output service supports {@code --experimental_rewind_atomic_updates}, i.e.,
+   * whether {@link #notifyRewoundActionWithAtomicUpdates} preserves existing local outputs of
+   * rewound actions. If false, the flag is a no-op and rewound actions delete their outputs and
+   * synchronize with concurrent consumers as usual.
+   */
+  default boolean supportsRewindAtomicUpdates() {
+    return false;
+  }
+
+  /**
+   * Notifies the filesystem returned by {@link #createActionFileSystem} that its action was rewound
+   * and re-executes under the assumption that it updates its outputs atomically (see {@code
+   * --experimental_rewind_atomic_updates}).
+   *
+   * <p>Implementations should preserve outputs that still exist in the local output tree at their
+   * existing version instead of replacing them with the re-executed result: those files are
+   * complete and match the metadata that concurrently executing consumers were handed, while the
+   * re-executed result may differ if the action is non-deterministic. Only outputs that do not
+   * exist locally should adopt the new result, which materializes them by atomically moving fully
+   * downloaded files into place and therefore requires no synchronization with concurrent readers.
+   *
+   * @param actionFileSystem must be a filesystem returned by {@link #createActionFileSystem}.
+   */
+  default void notifyRewoundActionWithAtomicUpdates(FileSystem actionFileSystem) {}
+
+  /**
    * Checks the filesystem returned by {@link #createActionFileSystem} for errors attributable to
    * lost inputs.
    */

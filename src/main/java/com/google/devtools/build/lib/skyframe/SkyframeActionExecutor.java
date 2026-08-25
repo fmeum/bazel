@@ -246,6 +246,7 @@ public final class SkyframeActionExecutor {
   private boolean rewindingEnabled;
   private int maxRepeatedLostInputs;
   private boolean preciseRewindingEnabled;
+  private boolean rewindAtomicUpdatesEnabled;
   @Nullable private Label bustActionCachesTarget;
   private boolean invocationRetriesEnabled;
   private final Supplier<ImmutableList<Root>> sourceRootSupplier;
@@ -348,6 +349,10 @@ public final class SkyframeActionExecutor {
     this.finalizeActions = buildRequestOptions.getFinalizeActions();
     this.rewindingEnabled = buildRequestOptions.getRewindLostInputs();
     this.preciseRewindingEnabled = buildRequestOptions.getExperimentalPreciseRewinding();
+    this.rewindAtomicUpdatesEnabled =
+        this.rewindingEnabled
+            && buildRequestOptions.getExperimentalRewindAtomicUpdates()
+            && outputService.supportsRewindAtomicUpdates();
     this.maxRepeatedLostInputs = buildRequestOptions.getMaxRepeatedLostInputs();
     this.bustActionCachesTarget = buildRequestOptions.getBustActionCachesTarget();
     this.invocationRetriesEnabled =
@@ -444,6 +449,21 @@ public final class SkyframeActionExecutor {
 
   public boolean preciseRewindingEnabled() {
     return preciseRewindingEnabled;
+  }
+
+  /**
+   * Whether rewound actions are assumed to update their outputs atomically (see {@code
+   * --experimental_rewind_atomic_updates}).
+   *
+   * <p>If true, a rewound action does not delete its existing outputs before re-execution, keeps
+   * any output that still exists in the local output tree at its existing version, and skips the
+   * {@link OutputService.RewoundActionSynchronizer} locking that otherwise excludes concurrent
+   * consumers of its outputs during re-execution. The local output tree is then only ever modified
+   * by atomically moving fully materialized files into place at paths that have no file, which
+   * concurrent readers tolerate without synchronization.
+   */
+  public boolean rewindAtomicUpdatesEnabled() {
+    return rewindAtomicUpdatesEnabled;
   }
 
   /**
@@ -638,6 +658,11 @@ public final class SkyframeActionExecutor {
     if (actionFileSystem != null) {
       updateActionFileSystemContext(
           action, actionFileSystem, compositeInputMetadataProvider, outputMetadataStore);
+      if (rewindAtomicUpdatesEnabled && wasRewound(action)) {
+        // Tell the action filesystem to preserve outputs that still exist locally instead of
+        // replacing them with the re-executed result. See rewindAtomicUpdatesEnabled().
+        outputService.notifyRewoundActionWithAtomicUpdates(actionFileSystem);
+      }
     }
 
     ActionExecutionContext actionExecutionContext =
@@ -1146,9 +1171,17 @@ public final class SkyframeActionExecutor {
           env.getListener().post(event);
           var rewoundActionSynchronizer = outputService.getRewoundActionSynchronizer();
           boolean wasRewound = wasRewound(action);
+          // With --experimental_rewind_atomic_updates, a rewound action keeps its existing local
+          // outputs in place: they are known to be complete (files only ever appear in the output
+          // tree by being atomically moved into place) and match the metadata that concurrently
+          // executing consumers were handed. Skipping the deletion in Action#prepare means the
+          // only remaining local filesystem effect of the re-execution is the creation of files at
+          // paths that currently have none, which requires no synchronization with readers.
+          boolean atomicUpdates = wasRewound && rewindAtomicUpdatesEnabled;
+          boolean synchronizeAsRewound = wasRewound && !atomicUpdates;
           try (SilentCloseable outerLock =
-              rewoundActionSynchronizer.enterActionPreparation(action, wasRewound)) {
-            if (actionFileSystemType().shouldDoEagerActionPrep()) {
+              rewoundActionSynchronizer.enterActionPreparation(action, synchronizeAsRewound)) {
+            if (actionFileSystemType().shouldDoEagerActionPrep() && !atomicUpdates) {
               try (SilentCloseable d =
                   Profiler.instance().profile(ProfilerTask.INFO, "action.prepare")) {
                 // This call generally deletes any files at locations that are declared outputs of
@@ -1182,7 +1215,9 @@ public final class SkyframeActionExecutor {
 
             try (SilentCloseable innerLock =
                 rewoundActionSynchronizer.enterActionExecution(
-                    action, wasRewound, actionExecutionContext.getInputMetadataProvider())) {
+                    action,
+                    synchronizeAsRewound,
+                    actionExecutionContext.getInputMetadataProvider())) {
               return executeAction(env.getListener(), action);
             }
           }

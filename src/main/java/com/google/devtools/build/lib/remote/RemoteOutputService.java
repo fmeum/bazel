@@ -115,6 +115,16 @@ public class RemoteOutputService implements OutputService {
   }
 
   @Override
+  public boolean supportsRewindAtomicUpdates() {
+    return true;
+  }
+
+  @Override
+  public void notifyRewoundActionWithAtomicUpdates(FileSystem actionFileSystem) {
+    ((RemoteActionFileSystem) actionFileSystem).preserveExistingOutputs();
+  }
+
+  @Override
   public String getFileSystemName(String outputBaseFileSystemName) {
     return "remoteActionFS";
   }

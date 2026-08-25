@@ -1277,6 +1277,18 @@ public class RemoteExecutionService {
         result.getOrParseActionResultMetadata(
             combinedCache, digestUtil, context, action.getRemotePathResolver());
 
+    // With --experimental_rewind_atomic_updates, a rewound action keeps outputs that still exist
+    // in the local output tree at their existing version: both the download and the metadata
+    // injection are skipped for them, so that their metadata is derived from the local file, which
+    // is complete (files are only ever atomically moved into place) and matches the metadata that
+    // concurrently executing consumers were handed. Only outputs that don't exist locally adopt
+    // the re-executed result, which materializes them at paths that currently have no file and
+    // thus requires no synchronization with concurrent readers. Tree artifact contents are
+    // exempted and always adopt the re-executed result: a tree's metadata must describe the
+    // children of a single execution, not a mix of two.
+    boolean preserveExistingOutputs =
+        remoteActionFileSystem != null && remoteActionFileSystem.shouldPreserveExistingOutputs();
+
     // The expiration time for remote cache entries.
     var expirationTime = Instant.now().plus(remoteOptions.getRemoteCacheTtl());
 
@@ -1303,6 +1315,11 @@ public class RemoteExecutionService {
 
     for (FileMetadata file : metadata.files()) {
       if (realToTmpPath.containsKey(file.path)) {
+        continue;
+      }
+
+      if (preserveExistingOutputs && file.path.exists(Symlinks.NOFOLLOW)) {
+        // Keep the existing local file at its existing version (see above).
         continue;
       }
 
@@ -1439,8 +1456,14 @@ public class RemoteExecutionService {
       }
     }
 
-    Iterable<SymlinkMetadata> symlinks =
-        Iterables.concat(metadata.symlinks(), symlinksInDirectories);
+    Iterable<SymlinkMetadata> topLevelSymlinks = metadata.symlinks();
+    if (preserveExistingOutputs) {
+      // Keep existing local symlink outputs at their existing version (see above). Tree artifact
+      // contents always adopt the re-executed result and are not filtered.
+      topLevelSymlinks =
+          Iterables.filter(topLevelSymlinks, symlink -> !symlink.path().exists(Symlinks.NOFOLLOW));
+    }
+    Iterable<SymlinkMetadata> symlinks = Iterables.concat(topLevelSymlinks, symlinksInDirectories);
 
     // Create the symbolic links after all downloads are finished, because dangling symlinks
     // might not be supported on all platforms.
