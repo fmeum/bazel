@@ -594,6 +594,113 @@ function test_success_on_incompatible_top_level_target_with_skipping() {
   done
 }
 
+# Validates that a multi-valued --platforms runs every test once per target
+# platform, and that target_compatible_with filters out the platforms a given
+# test can't run on.
+function test_multiple_target_platforms() {
+  cd target_skipping || fail "couldn't cd into workspace"
+
+  bazel test \
+    --show_result=10 \
+    --host_platform=@//target_skipping:foo1_bar1_platform \
+    --platforms=@//target_skipping:foo1_bar1_platform,@//target_skipping:foo1_bar2_platform \
+    :all &> "${TEST_log}" || fail "Bazel failed unexpectedly."
+
+  # Three tests times two target platforms. //target_skipping:pass_on_foo1 is
+  # compatible with both platforms, //target_skipping:pass_on_foo1_bar2 only
+  # with foo1_bar2_platform and //target_skipping:fail_on_foo2 with neither.
+  expect_log 'Executed 3 out of 6 tests'
+  expect_log '^//target_skipping:pass_on_foo1  *  PASSED in'
+  expect_log '^//target_skipping:pass_on_foo1_bar2  *  PASSED in'
+  expect_log '^//target_skipping:pass_on_foo1_bar2  *  SKIPPED$'
+  expect_log '^//target_skipping:fail_on_foo2  *  SKIPPED$'
+}
+
+# Validates that an explicitly requested target that is incompatible with only
+# some of the target platforms is skipped for those (with a warning) instead of
+# failing the build.
+function test_multiple_target_platforms_explicit_incompatible_target() {
+  cd target_skipping || fail "couldn't cd into workspace"
+
+  bazel test \
+    --show_result=10 \
+    --host_platform=@//target_skipping:foo1_bar1_platform \
+    --platforms=@//target_skipping:foo1_bar1_platform,@//target_skipping:foo1_bar2_platform \
+    //target_skipping:pass_on_foo1_bar2 &> "${TEST_log}" \
+    || fail "Bazel failed unexpectedly."
+
+  expect_log '^//target_skipping:pass_on_foo1_bar2  *  PASSED in'
+  expect_log '^//target_skipping:pass_on_foo1_bar2  *  SKIPPED$'
+  expect_log 'WARNING:.*//target_skipping:pass_on_foo1_bar2 was explicitly requested, but is incompatible with target platform'
+
+  # A target that is incompatible with every requested platform is skipped for
+  # all of them. The warnings make it clear that nothing ran.
+  bazel test \
+    --show_result=10 \
+    --host_platform=@//target_skipping:foo1_bar1_platform \
+    --platforms=@//target_skipping:foo1_bar1_platform,@//target_skipping:foo1_bar2_platform \
+    //target_skipping:fail_on_foo2 &> "${TEST_log}" \
+    || fail "Bazel failed unexpectedly."
+
+  expect_log '^//target_skipping:fail_on_foo2  *  SKIPPED$'
+  expect_log 'WARNING:.*//target_skipping:fail_on_foo2 was explicitly requested, but is incompatible with target platform'
+}
+
+# Validates that each configured target still sees a single-valued --platforms,
+# so transitions that read or set it keep working.
+function test_multiple_target_platforms_single_valued_per_configured_target() {
+  cat >> target_skipping/BUILD <<'EOF'
+load(":platform_reader.bzl", "platform_reader")
+
+platform_reader(name = "platform_reader")
+EOF
+
+  cat > target_skipping/platform_reader.bzl <<'EOF'
+def _impl(ctx):
+    platforms = ctx.fragments.platform.platforms
+    if len(platforms) != 1:
+        fail("expected exactly one target platform, got %s" % platforms)
+    out = ctx.actions.declare_file(ctx.label.name + ".txt")
+    ctx.actions.write(out, str(platforms[0]))
+    return [DefaultInfo(files = depset([out]))]
+
+platform_reader = rule(
+    implementation = _impl,
+    fragments = ["platform"],
+)
+EOF
+
+  cd target_skipping || fail "couldn't cd into workspace"
+
+  # The rule implementation fails analysis if it ever sees more than one target
+  # platform, so a successful build is the assertion here.
+  bazel build \
+    --show_result=10 \
+    --host_platform=@//target_skipping:foo1_bar1_platform \
+    --platforms=@//target_skipping:foo1_bar1_platform,@//target_skipping:foo1_bar2_platform \
+    //target_skipping:platform_reader &> "${TEST_log}" \
+    || fail "Bazel failed unexpectedly."
+
+  # One output per target platform, in distinct output directories.
+  local -r outputs="$(grep -c 'platform_reader.txt$' "${TEST_log}")"
+  [[ "${outputs}" == 2 ]] \
+    || fail "Expected 2 outputs for platform_reader, got ${outputs}"
+}
+
+# Validates that `run` rejects a multi-valued --platforms instead of silently
+# picking one of the configured targets.
+function test_multiple_target_platforms_rejected_by_run() {
+  cd target_skipping || fail "couldn't cd into workspace"
+
+  bazel run \
+    --host_platform=@//target_skipping:foo3_platform \
+    --platforms=@//target_skipping:foo3_platform,@//target_skipping:foo1_bar1_platform \
+    //target_skipping:some_foo3_target &> "${TEST_log}" \
+    && fail "Bazel passed unexpectedly."
+
+  expect_log "'run' only supports a single target platform"
+}
+
 # Crudely validates that the build event protocol contains useful information
 # when targets are skipped due to incompatibilities.
 function test_build_event_protocol() {

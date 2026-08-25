@@ -13,10 +13,12 @@
 // limitations under the License.
 package com.google.devtools.build.lib.analysis;
 
+import static com.google.common.collect.ImmutableList.toImmutableList;
 import static com.google.common.truth.Truth.assertThat;
 import static org.junit.Assert.assertThrows;
 
 import com.google.common.collect.ImmutableList;
+import com.google.devtools.build.lib.analysis.config.BuildOptions;
 import com.google.devtools.build.lib.analysis.util.OptionsTestCase;
 import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.skyframe.config.PlatformMappingKey;
@@ -82,10 +84,10 @@ public final class PlatformOptionsTest extends OptionsTestCase<PlatformOptions> 
 
   @Test
   public void testPlatforms_extraValues() throws Exception {
-    // Only the first value matters.
+    // Every value is a target platform of its own, so extra values are not dropped.
     PlatformOptions one = createWithPrefix(PLATFORMS_PREFIX, "//one,//two");
     PlatformOptions two = createWithPrefix(PLATFORMS_PREFIX, "//one");
-    assertSame(one, two);
+    assertDifferent(one, two);
   }
 
   @Test
@@ -94,6 +96,48 @@ public final class PlatformOptionsTest extends OptionsTestCase<PlatformOptions> 
     PlatformOptions foo = createWithPrefix(PLATFORMS_PREFIX, "//one,//two");
     PlatformOptions bar = createWithPrefix(PLATFORMS_PREFIX, "//two,//one");
     assertDifferent(foo, bar);
+  }
+
+  @Test
+  public void splitByTargetPlatform_noPlatforms_returnsInput() throws Exception {
+    BuildOptions options = BuildOptions.of(ImmutableList.of(PlatformOptions.class));
+
+    assertThat(PlatformOptions.splitByTargetPlatform(options)).containsExactly(options);
+  }
+
+  @Test
+  public void splitByTargetPlatform_singlePlatform_returnsInput() throws Exception {
+    BuildOptions options =
+        BuildOptions.of(ImmutableList.of(PlatformOptions.class), "--platforms=//p:one");
+
+    assertThat(PlatformOptions.splitByTargetPlatform(options)).containsExactly(options);
+  }
+
+  @Test
+  public void splitByTargetPlatform_multiplePlatforms_splitsInOrder() throws Exception {
+    BuildOptions options =
+        BuildOptions.of(
+            ImmutableList.of(PlatformOptions.class), "--platforms=//p:one,//p:two,//p:three");
+
+    ImmutableList<BuildOptions> split = PlatformOptions.splitByTargetPlatform(options);
+
+    assertThat(
+            split.stream()
+                .map(o -> o.get(PlatformOptions.class).getPlatforms())
+                .collect(toImmutableList()))
+        .containsExactly(
+            ImmutableList.of(Label.parseCanonicalUnchecked("//p:one")),
+            ImmutableList.of(Label.parseCanonicalUnchecked("//p:two")),
+            ImmutableList.of(Label.parseCanonicalUnchecked("//p:three")))
+        .inOrder();
+    // Nothing but --platforms differs between the split options.
+    for (BuildOptions splitOptions : split) {
+      BuildOptions normalized =
+          splitOptions.toBuilder()
+              .addFragmentOptions(options.get(PlatformOptions.class))
+              .build();
+      assertThat(normalized).isEqualTo(options);
+    }
   }
 
   @Test

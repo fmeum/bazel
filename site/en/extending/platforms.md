@@ -65,6 +65,20 @@ $ bazel build //:my_linux_app --platforms=//myplatforms:linux_x86
 Organizations generally maintain their own platform definitions because build
 machine setups vary between organizations.
 
+`--platforms` accepts more than one platform. Every target on the command line
+is then built - and, for `bazel test`, run - once per target platform:
+
+```shell
+$ bazel test //... --platforms=//myplatforms:linux_x86,//myplatforms:linux_arm64
+```
+
+Each of those builds gets its own configuration holding exactly one target
+platform, so rules and transitions that read or set `--platforms` see a single
+value as before, and the two builds land in separate output directories. Targets
+whose [`target_compatible_with`](#skipping-incompatible-targets) isn't satisfied
+by a given target platform are skipped for that platform only. `bazel run` needs
+a single executable to run and therefore rejects a multi-valued `--platforms`.
+
 When `--platforms` isn't set, it defaults to `@platforms//host`. This is
 specially defined to auto-detect the host machine's OS and CPU properties so
 builds target the same machine Bazel runs on. Build rules can
@@ -200,6 +214,11 @@ FAILED: Build did NOT complete successfully
 
 Incompatible explicit targets are silently skipped if
 `--skip_incompatible_explicit_targets` is enabled.
+
+When `--platforms` lists more than one target platform, an explicit target that
+is incompatible with one of them may still be buildable for another, so it is
+skipped for the platforms it's incompatible with instead of failing the build. A
+warning is printed for each platform it's skipped on.
 
 ### More expressive constraints {:#expressive-constraints}
 

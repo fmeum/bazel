@@ -19,6 +19,7 @@ import static com.google.common.collect.ImmutableList.toImmutableList;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Iterables;
+import com.google.devtools.build.lib.analysis.config.BuildOptions;
 import com.google.devtools.build.lib.analysis.config.CoreOptionConverters.LabelConverter;
 import com.google.devtools.build.lib.analysis.config.CoreOptionConverters.LabelListConverter;
 import com.google.devtools.build.lib.analysis.config.FragmentOptions;
@@ -95,8 +96,14 @@ public abstract class PlatformOptions extends FragmentOptions {
         OptionEffectTag.LOADING_AND_ANALYSIS
       },
       help =
-          "The labels of the platform rules describing the target platforms for the current "
-              + "command.")
+          """
+          The labels of the platform rules describing the target platforms for the current
+          command. If more than one platform is specified, every top-level target is analyzed
+          (and, for tests, run) once per target platform. Each individual configured target
+          still observes a single-valued `--platforms`, so transitions that read or set this
+          flag keep working unchanged. Top-level targets whose `target_compatible_with` is not
+          satisfied by a given target platform are skipped for that platform.
+          """)
   public abstract List<Label> getPlatforms();
 
   public abstract void setPlatforms(List<Label> value);
@@ -200,15 +207,27 @@ public abstract class PlatformOptions extends FragmentOptions {
             result.getExtraToolchains() == null
                 ? ImmutableList.of()
                 : ImmutableList.copyOf(result.getExtraToolchains())));
-    // Only the first entry of platforms is used (it should have been Label and not List<Label>)
-    // So drop all but the first entry.
-    if (result.getPlatforms().size() > 1) {
-      result.setPlatforms(ImmutableList.of(result.getPlatforms().get(0)));
+    // Multiple target platforms are only meaningful for the top-level configuration, which
+    // BuildView splits into one single-platform configuration per entry. Deduplicating here keeps
+    // that split (and the resulting output directories) free of redundant copies. Note that the
+    // order is preserved: it decides which platform is the build's primary one.
+    List<Label> platforms = result.getPlatforms();
+    if (platforms != null && platforms.size() > 1) {
+      ImmutableList<Label> dedupedPlatforms = ImmutableSet.copyOf(platforms).asList();
+      if (dedupedPlatforms.size() != platforms.size()) {
+        result.setPlatforms(dedupedPlatforms);
+      }
     }
     return result;
   }
 
-  /** Returns the intended target platform value based on options defined in this fragment. */
+  /**
+   * Returns the intended target platform value based on options defined in this fragment.
+   *
+   * <p>If multiple target platforms are set, this returns the first one. Configurations that reach
+   * a configured target always hold exactly one target platform, so this is only ambiguous for the
+   * top-level options before {@link #splitByTargetPlatform} has split them.
+   */
   public Label computeTargetPlatform() {
     if (!getPlatforms().isEmpty()) {
       return Iterables.getFirst(getPlatforms(), null);
@@ -216,6 +235,33 @@ public abstract class PlatformOptions extends FragmentOptions {
       // Default to the host platform, whatever it is.
       return getHostPlatform();
     }
+  }
+
+  /**
+   * Splits top-level {@link BuildOptions} into one instance per target platform listed in {@code
+   * --platforms}.
+   *
+   * <p>Each returned instance has a single-valued {@code --platforms}, so every configured target
+   * created from them sees exactly one target platform and transitions that read or set {@code
+   * --platforms} keep working unchanged.
+   *
+   * <p>Returns the input unchanged (as a singleton list) if at most one target platform is set,
+   * which is the overwhelmingly common case.
+   */
+  public static ImmutableList<BuildOptions> splitByTargetPlatform(BuildOptions buildOptions) {
+    PlatformOptions platformOptions = buildOptions.get(PlatformOptions.class);
+    if (platformOptions == null
+        || platformOptions.getPlatforms() == null
+        || platformOptions.getPlatforms().size() <= 1) {
+      return ImmutableList.of(buildOptions);
+    }
+    ImmutableList.Builder<BuildOptions> result = ImmutableList.builder();
+    for (Label platform : platformOptions.getPlatforms()) {
+      PlatformOptions singlePlatform = (PlatformOptions) platformOptions.clone();
+      singlePlatform.setPlatforms(ImmutableList.of(platform));
+      result.add(buildOptions.toBuilder().addFragmentOptions(singlePlatform).build());
+    }
+    return result.build();
   }
 
   /**

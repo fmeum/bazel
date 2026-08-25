@@ -111,13 +111,30 @@ public class TopLevelConstraintSemantics {
       ExtendedEventHandler eventHandler,
       boolean eagerlyThrowError,
       boolean explicitlyRequested,
-      boolean skipIncompatibleExplicitTargets)
+      boolean skipIncompatibleExplicitTargets,
+      boolean multipleTargetPlatforms)
       throws TargetCompatibilityCheckException {
 
     RuleContextConstraintSemantics.IncompatibleCheckResult incompatibleCheckResult =
         RuleContextConstraintSemantics.checkForIncompatibility(configuredTarget);
     if (!incompatibleCheckResult.isIncompatible()) {
       return PlatformCompatibility.COMPATIBLE;
+    }
+
+    // When the build spans several target platforms, being incompatible with one of them says
+    // nothing about the others: the whole point of listing several platforms is to build (and run)
+    // each target on the subset of platforms it supports. So an incompatible target is always
+    // skipped for that platform rather than failing the build. Explicitly requested targets still
+    // get a warning so that a target that is incompatible with every requested platform doesn't
+    // silently disappear.
+    if (multipleTargetPlatforms) {
+      if (!skipIncompatibleExplicitTargets && explicitlyRequested) {
+        eventHandler.handle(
+            Event.warn(
+                getIncompatibleMessageForPlatform(
+                    configuredTarget, incompatibleCheckResult.underlyingTarget())));
+      }
+      return PlatformCompatibility.INCOMPATIBLE_IMPLICIT;
     }
 
     // We need the label in unambiguous form here. I.e. with the "@" prefix for targets in the
@@ -161,6 +178,28 @@ public class TopLevelConstraintSemantics {
         // We need access to the provider so we pass in the underlying target here that is
         // responsible for the incompatibility.
         reportOnIncompatibility(underlyingTarget));
+  }
+
+  /**
+   * Like {@link #getIncompatibleMessage}, but phrased for builds that span several target
+   * platforms, where the target is only skipped for the platform it's incompatible with.
+   */
+  private static String getIncompatibleMessageForPlatform(
+      ConfiguredTarget configuredTarget, ConfiguredTarget underlyingTarget) {
+    Label targetPlatform = targetPlatformOf(underlyingTarget);
+    return String.format(
+        "Target %s was explicitly requested, but is incompatible with %s and is skipped for it.%s",
+        configuredTarget.getOriginalLabel(),
+        targetPlatform == null
+            ? "one of the requested target platforms"
+            : "target platform " + targetPlatform,
+        reportOnIncompatibility(underlyingTarget));
+  }
+
+  @Nullable
+  private static Label targetPlatformOf(ConfiguredTarget target) {
+    IncompatiblePlatformProvider provider = target.get(IncompatiblePlatformProvider.PROVIDER);
+    return provider == null ? null : provider.targetPlatform();
   }
 
   /**
@@ -228,10 +267,15 @@ public class TopLevelConstraintSemantics {
    * command line are errored unless --skip_incompatible_explicit_targets is enabled. Having one or
    * more errored targets will cause the entire build to fail with an error message.
    *
+   * <p>If the build has more than one target platform (i.e. {@code --platforms} lists several
+   * platforms), incompatible targets are always skipped for the platform they're incompatible with,
+   * even when explicitly requested, since they may still be buildable for another platform.
+   *
    * @param topLevelTargets the build's top-level targets
    * @param explicitTargetPatterns the set of explicit target patterns specified by the user on the
    *     command line. Every target must be in the unambiguous canonical form (i.e., with the "@"
    *     prefix for all targets including in the main repository).
+   * @param multipleTargetPlatforms whether the build has more than one target platform
    * @return the set of to-be-skipped and errored top-level targets.
    * @throws ViewCreationFailedException if any top-level target was explicitly requested on the
    *     command line.
@@ -240,7 +284,8 @@ public class TopLevelConstraintSemantics {
       ImmutableSet<ConfiguredTarget> topLevelTargets,
       ImmutableSet<Label> explicitTargetPatterns,
       boolean keepGoing,
-      boolean skipIncompatibleExplicitTargets)
+      boolean skipIncompatibleExplicitTargets,
+      boolean multipleTargetPlatforms)
       throws ViewCreationFailedException {
     ImmutableSet.Builder<ConfiguredTarget> incompatibleTargets = ImmutableSet.builder();
     ImmutableSet.Builder<ConfiguredTarget> incompatibleButRequestedTargets = ImmutableSet.builder();
@@ -253,7 +298,8 @@ public class TopLevelConstraintSemantics {
                 eventHandler,
                 /* eagerlyThrowError= */ !keepGoing,
                 explicitTargetPatterns.contains(target.getOriginalLabel()),
-                skipIncompatibleExplicitTargets);
+                skipIncompatibleExplicitTargets,
+                multipleTargetPlatforms);
         if (PlatformCompatibility.INCOMPATIBLE_EXPLICIT.equals(platformCompatibility)) {
           incompatibleButRequestedTargets.add(target);
         } else if (PlatformCompatibility.INCOMPATIBLE_IMPLICIT.equals(platformCompatibility)) {
