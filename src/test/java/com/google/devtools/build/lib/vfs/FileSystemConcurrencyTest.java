@@ -13,10 +13,13 @@
 // limitations under the License.
 package com.google.devtools.build.lib.vfs;
 
+import static com.google.common.truth.Truth.assertThat;
+
 import com.google.devtools.build.lib.testutil.TestThread;
 import com.google.devtools.build.lib.testutil.TestUtils;
 import com.google.devtools.build.lib.vfs.util.FileSystems;
 import java.io.File;
+import java.util.Arrays;
 import java.util.concurrent.atomic.AtomicBoolean;
 import org.junit.Before;
 import org.junit.Test;
@@ -74,4 +77,44 @@ public class FileSystemConcurrencyTest {
     deleteThread.joinAndAssertState(TestUtils.WAIT_TIMEOUT_MILLISECONDS);
   }
 
+  /**
+   * Digests files of assorted sizes from many threads at once.
+   *
+   * <p>{@link FileSystem#getDigest} reads file contents through a recycled scratch buffer, so a
+   * buffer handed to two threads at the same time would silently produce wrong digests.
+   */
+  @Test
+  public void testConcurrentDigests() throws Exception {
+    int fileCount = 64;
+    Path[] files = new Path[fileCount];
+    byte[][] expectedDigests = new byte[fileCount][];
+    for (int i = 0; i < fileCount; i++) {
+      // Cover files both well below and well above any plausible scratch buffer size.
+      byte[] contents = new byte[i * 4096];
+      Arrays.fill(contents, (byte) i);
+      files[i] = workingDir.getRelative("digested" + i);
+      FileSystemUtils.writeContent(files[i], contents);
+      expectedDigests[i] = files[i].getDigest();
+    }
+
+    int threadCount = 16;
+    TestThread[] threads = new TestThread[threadCount];
+    for (int t = 0; t < threadCount; t++) {
+      threads[t] =
+          new TestThread(
+              () -> {
+                for (int round = 0; round < 20; round++) {
+                  for (int i = 0; i < fileCount; i++) {
+                    assertThat(files[i].getDigest()).isEqualTo(expectedDigests[i]);
+                  }
+                }
+              });
+    }
+    for (TestThread thread : threads) {
+      thread.start();
+    }
+    for (TestThread thread : threads) {
+      thread.joinAndAssertState(TestUtils.WAIT_TIMEOUT_MILLISECONDS);
+    }
+  }
 }
