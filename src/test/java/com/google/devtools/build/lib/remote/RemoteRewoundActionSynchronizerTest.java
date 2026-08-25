@@ -15,7 +15,6 @@ package com.google.devtools.build.lib.remote;
 
 import static com.google.common.truth.Truth.assertThat;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
-import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.junit.Assert.assertThrows;
 
 import com.google.common.testing.GcFinalization;
@@ -37,6 +36,10 @@ import org.junit.runners.JUnit4;
 public final class RemoteRewoundActionSynchronizerTest {
   private static final Duration TIMEOUT = Duration.ofSeconds(10);
 
+  // Used to observe that an acquisition blocks: a correct implementation never acquires, so this
+  // wait can't flake, it only bounds the time spent proving a negative.
+  private static final Duration BLOCK_PROBE_TIMEOUT = Duration.ofSeconds(1);
+
   private final List<Thread> threads = new ArrayList<>();
 
   @After
@@ -46,6 +49,7 @@ public final class RemoteRewoundActionSynchronizerTest {
     }
     for (Thread thread : threads) {
       thread.join(TIMEOUT.toMillis());
+      assertThat(thread.isAlive()).isFalse();
     }
     threads.clear();
   }
@@ -80,11 +84,11 @@ public final class RemoteRewoundActionSynchronizerTest {
     // All of them hold the write lock at the same time.
     assertThat(allAcquired.await(TIMEOUT.toMillis(), MILLISECONDS)).isTrue();
     // ... and readers are excluded while any of them does.
-    assertThat(awaitReadLock(lock)).isFalse();
+    assertThat(awaitReadLock(lock, BLOCK_PROBE_TIMEOUT)).isFalse();
 
     release.countDown();
     joinThreads();
-    assertThat(awaitReadLock(lock)).isTrue();
+    assertThat(awaitReadLock(lock, TIMEOUT)).isTrue();
   }
 
   /**
@@ -128,11 +132,11 @@ public final class RemoteRewoundActionSynchronizerTest {
     var lock = new FineLock();
 
     lock.lockWriteInterruptibly();
-    assertThat(awaitReadLock(lock)).isFalse();
+    assertThat(awaitReadLock(lock, BLOCK_PROBE_TIMEOUT)).isFalse();
     assertThat(lock.tryLockRead()).isFalse();
 
     lock.unlockWrite();
-    assertThat(awaitReadLock(lock)).isTrue();
+    assertThat(awaitReadLock(lock, TIMEOUT)).isTrue();
   }
 
   @Test(timeout = 30_000)
@@ -150,6 +154,50 @@ public final class RemoteRewoundActionSynchronizerTest {
     assertThat(writer.await(TIMEOUT.toMillis(), MILLISECONDS)).isTrue();
   }
 
+  /**
+   * Regression test for the synchronization protocol of a rewound expanded action that consumes a
+   * sibling's outputs: while executing, it holds the write locks of the template key and its own
+   * key as well as the read lock of the sibling's own key. A subsequent rewind of just that
+   * sibling (e.g. due to an individual lost file) is admitted to the shared template key
+   * concurrently, but must not get to invalidate the sibling's outputs, i.e. acquire the write
+   * lock of the sibling's own key, while the consumer is still reading them.
+   */
+  @Test(timeout = 30_000)
+  public void rewoundSiblingConsumer_blocksProducerRewind() throws Exception {
+    var templateLock = new FineLock();
+    var producerLock = new FineLock();
+    var consumerLock = new FineLock();
+
+    // The consumer, itself rewound, prepares and executes.
+    templateLock.lockWriteInterruptibly();
+    consumerLock.lockWriteInterruptibly();
+    producerLock.lockReadInterruptibly();
+
+    // The producer is rewound again while the consumer executes.
+    var producerRewound = new CountDownLatch(1);
+    startThread(
+        "producerRewind",
+        () -> {
+          templateLock.lockWriteInterruptibly();
+          try {
+            producerLock.lockWriteInterruptibly();
+            producerLock.unlockWrite();
+          } finally {
+            templateLock.unlockWrite();
+          }
+          producerRewound.countDown();
+        });
+
+    // It must not get to invalidate its outputs while the consumer is reading them.
+    assertThat(producerRewound.await(BLOCK_PROBE_TIMEOUT.toMillis(), MILLISECONDS)).isFalse();
+
+    // Once the consumer finishes and releases its locks, the producer's rewind proceeds.
+    producerLock.unlockRead();
+    consumerLock.unlockWrite();
+    templateLock.unlockWrite();
+    assertThat(producerRewound.await(TIMEOUT.toMillis(), MILLISECONDS)).isTrue();
+  }
+
   @Test(timeout = 30_000)
   public void locks_areReentrant() throws Exception {
     var lock = new FineLock();
@@ -158,7 +206,7 @@ public final class RemoteRewoundActionSynchronizerTest {
     lock.lockReadInterruptibly();
     lock.unlockRead();
     // Still read locked.
-    assertThat(awaitWriteLock(lock)).isFalse();
+    assertThat(awaitWriteLock(lock, BLOCK_PROBE_TIMEOUT)).isFalse();
     lock.unlockRead();
 
     lock.lockWriteInterruptibly();
@@ -168,11 +216,11 @@ public final class RemoteRewoundActionSynchronizerTest {
     assertThat(lock.tryLockRead()).isFalse();
     lock.unlockWrite();
     // Still write locked.
-    assertThat(awaitReadLock(lock)).isFalse();
+    assertThat(awaitReadLock(lock, BLOCK_PROBE_TIMEOUT)).isFalse();
     lock.unlockWrite();
 
-    assertThat(awaitReadLock(lock)).isTrue();
-    assertThat(awaitWriteLock(lock)).isTrue();
+    assertThat(awaitReadLock(lock, TIMEOUT)).isTrue();
+    assertThat(awaitWriteLock(lock, TIMEOUT)).isTrue();
   }
 
   @Test(timeout = 30_000)
@@ -194,7 +242,7 @@ public final class RemoteRewoundActionSynchronizerTest {
     writer.join(TIMEOUT.toMillis());
     assertThat(writer.isAlive()).isFalse();
     lock.unlockRead();
-    assertThat(awaitWriteLock(lock)).isTrue();
+    assertThat(awaitWriteLock(lock, TIMEOUT)).isTrue();
 
     // Interrupt a reader waiting for the writers to finish.
     lock.lockWriteInterruptibly();
@@ -203,7 +251,7 @@ public final class RemoteRewoundActionSynchronizerTest {
     reader.join(TIMEOUT.toMillis());
     assertThat(reader.isAlive()).isFalse();
     lock.unlockWrite();
-    assertThat(awaitReadLock(lock)).isTrue();
+    assertThat(awaitReadLock(lock, TIMEOUT)).isTrue();
   }
 
   @Test(timeout = 60_000)
@@ -315,25 +363,28 @@ public final class RemoteRewoundActionSynchronizerTest {
     return new Blocked(thread, acquired);
   }
 
-  /** Returns whether a fresh thread can acquire the read lock within a short timeout. */
-  private boolean awaitReadLock(FineLock lock) throws InterruptedException {
+  /** Returns whether a fresh thread can acquire the read lock within the given timeout. */
+  private boolean awaitReadLock(FineLock lock, Duration timeout) throws InterruptedException {
     return awaitLock(
         () -> {
           lock.lockReadInterruptibly();
           lock.unlockRead();
-        });
+        },
+        timeout);
   }
 
-  /** Returns whether a fresh thread can acquire the write lock within a short timeout. */
-  private boolean awaitWriteLock(FineLock lock) throws InterruptedException {
+  /** Returns whether a fresh thread can acquire the write lock within the given timeout. */
+  private boolean awaitWriteLock(FineLock lock, Duration timeout) throws InterruptedException {
     return awaitLock(
         () -> {
           lock.lockWriteInterruptibly();
           lock.unlockWrite();
-        });
+        },
+        timeout);
   }
 
-  private boolean awaitLock(InterruptibleRunnable acquisition) throws InterruptedException {
+  private boolean awaitLock(InterruptibleRunnable acquisition, Duration timeout)
+      throws InterruptedException {
     var acquired = new CountDownLatch(1);
     Thread thread =
         startThread(
@@ -342,7 +393,7 @@ public final class RemoteRewoundActionSynchronizerTest {
               acquisition.run();
               acquired.countDown();
             });
-    boolean result = acquired.await(1, SECONDS);
+    boolean result = acquired.await(timeout.toMillis(), MILLISECONDS);
     thread.interrupt();
     thread.join(TIMEOUT.toMillis());
     return result;
