@@ -26,6 +26,7 @@ import com.google.common.base.Splitter;
 import com.google.common.collect.Collections2;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
+import com.google.common.collect.ImmutableSet;
 import com.google.common.io.BaseEncoding;
 import com.google.devtools.build.lib.actions.FileValue;
 import com.google.devtools.build.lib.analysis.BlazeDirectories;
@@ -202,6 +203,21 @@ public abstract sealed class RepoRecordedInput {
     for (SkyKey key : keys) {
       var unused = results.get(key);
     }
+    if (env.valuesMissing()) {
+      return;
+    }
+    // Some recorded inputs can only decide which further Skyframe values they need after
+    // inspecting the value of their primary key (e.g. a directory listing may only be requested
+    // for a path that is known to be an existing directory). Request those in a second batch.
+    var secondStageKeysBuilder = ImmutableSet.<SkyKey>builder();
+    for (var recordedInput : recordedInputs) {
+      secondStageKeysBuilder.addAll(recordedInput.getSecondStageSkyKeys(env, directories));
+    }
+    var secondStageKeys = secondStageKeysBuilder.build();
+    var secondStageResults = env.getValuesAndExceptions(secondStageKeys);
+    for (SkyKey key : secondStageKeys) {
+      var unused = secondStageResults.get(key);
+    }
   }
 
   /**
@@ -316,8 +332,22 @@ public abstract sealed class RepoRecordedInput {
   /** Returns the parser object for this type of recorded inputs. */
   protected abstract Parser getParser();
 
-  /** Returns the {@link SkyKey} that is necessary to determine {@link #isOutdated}. */
+  /**
+   * Returns the first {@link SkyKey} that is necessary to determine {@link #isOutdated}. {@link
+   * #getValue} may request further keys after this key's value is available (see {@link
+   * #getSecondStageSkyKeys}).
+   */
   protected abstract SkyKey getSkyKey(BlazeDirectories directories);
+
+  /**
+   * Returns any additional {@link SkyKey}s that {@link #getValue} may request after the value of
+   * the key returned by {@link #getSkyKey} is available. Only called when the value of {@link
+   * #getSkyKey} is not missing; used by {@link #prefetch} to batch Skyframe requests.
+   */
+  protected Collection<SkyKey> getSecondStageSkyKeys(Environment env, BlazeDirectories directories)
+      throws InterruptedException {
+    return ImmutableList.of();
+  }
 
   /**
    * Returns true if the {@link #getValue} can be requested even if previous recorded inputs have
@@ -326,6 +356,13 @@ public abstract sealed class RepoRecordedInput {
   protected abstract boolean canBeRequestedUnconditionally();
 
   private static final Optional<String> UNDECIDED = Optional.of("values missing");
+
+  /**
+   * The recorded value for a watched directory ({@link Dirents} or {@link DirTree}) whose path is
+   * not (or no longer) an existing directory. Never matches a fingerprint recorded for an existing
+   * directory.
+   */
+  private static final String ENOENT_MARKER_VALUE = "ENOENT";
 
   /**
    * Represents a filesystem path stored in a way that is repo-cache-friendly. That is, if the path
@@ -587,7 +624,25 @@ public abstract sealed class RepoRecordedInput {
 
     @Override
     public SkyKey getSkyKey(BlazeDirectories directories) {
-      return DirectoryListingValue.key(path.getRootedPath(directories));
+      // DirectoryListingValue.key may only be created for paths that are known to be existing
+      // directories, so the FileValue for the path has to be checked first (see
+      // https://github.com/bazelbuild/bazel/issues/30883).
+      return FileValue.key(path.getRootedPath(directories));
+    }
+
+    @Override
+    protected Collection<SkyKey> getSecondStageSkyKeys(
+        Environment env, BlazeDirectories directories) throws InterruptedException {
+      FileValue fileValue;
+      try {
+        fileValue = (FileValue) env.getValueOrThrow(getSkyKey(directories), IOException.class);
+      } catch (IOException e) {
+        return ImmutableList.of();
+      }
+      if (fileValue == null || !fileValue.isDirectory()) {
+        return ImmutableList.of();
+      }
+      return ImmutableList.of(DirectoryListingValue.key(path.getRootedPath(directories)));
     }
 
     @Override
@@ -600,8 +655,24 @@ public abstract sealed class RepoRecordedInput {
     @Override
     public MaybeValue getValue(Environment env, BlazeDirectories directories)
         throws InterruptedException {
-      var skyKey = getSkyKey(directories);
-      var directoryListingValue = (DirectoryListingValue) env.getValue(skyKey);
+      RootedPath rootedPath = path.getRootedPath(directories);
+      FileValue fileValue;
+      try {
+        fileValue = (FileValue) env.getValueOrThrow(FileValue.key(rootedPath), IOException.class);
+      } catch (IOException e) {
+        return new MaybeValue.Invalid("failed to stat %s: %s".formatted(path, e.getMessage()));
+      }
+      if (fileValue == null) {
+        return MaybeValue.VALUES_MISSING;
+      }
+      if (!fileValue.isDirectory()) {
+        // The directory has been deleted or replaced by a file. Don't request its listing, which
+        // would fail with an InconsistentFilesystemException; report a distinguished value that
+        // never matches an entry recorded from an existing directory instead.
+        return new MaybeValue.Valid(ENOENT_MARKER_VALUE);
+      }
+      var directoryListingValue =
+          (DirectoryListingValue) env.getValue(DirectoryListingValue.key(rootedPath));
       if (directoryListingValue == null) {
         return MaybeValue.VALUES_MISSING;
       }
@@ -610,6 +681,9 @@ public abstract sealed class RepoRecordedInput {
 
     @Override
     public String describeChange(String oldValue, String newValue) {
+      if (ENOENT_MARKER_VALUE.equals(newValue)) {
+        return "%s is no longer an existing directory".formatted(path);
+      }
       return "directory entries of %s changed".formatted(path);
     }
   }
@@ -726,8 +800,30 @@ public abstract sealed class RepoRecordedInput {
 
     @Override
     public SkyKey getSkyKey(BlazeDirectories directories) {
+      // DirectoryTreeDigestValue.key may only be created for paths that are known to be existing
+      // directories, as its evaluation involves requesting the directory's listing (see
+      // https://github.com/bazelbuild/bazel/issues/30883).
+      return FileValue.key(path.getRootedPath(directories));
+    }
+
+    private SkyKey getDirectoryTreeDigestKey(BlazeDirectories directories) {
       RootedPath rootedPath = path.getRootedPath(directories);
       return DirectoryTreeDigestValue.key(rootedPath, rootedPath, excludes);
+    }
+
+    @Override
+    protected Collection<SkyKey> getSecondStageSkyKeys(
+        Environment env, BlazeDirectories directories) throws InterruptedException {
+      FileValue fileValue;
+      try {
+        fileValue = (FileValue) env.getValueOrThrow(getSkyKey(directories), IOException.class);
+      } catch (IOException e) {
+        return ImmutableList.of();
+      }
+      if (fileValue == null || !fileValue.isDirectory()) {
+        return ImmutableList.of();
+      }
+      return ImmutableList.of(getDirectoryTreeDigestKey(directories));
     }
 
     @Override
@@ -740,10 +836,28 @@ public abstract sealed class RepoRecordedInput {
     @Override
     public MaybeValue getValue(Environment env, BlazeDirectories directories)
         throws InterruptedException {
-      var skyKey = getSkyKey(directories);
+      FileValue fileValue;
+      try {
+        fileValue =
+            (FileValue)
+                env.getValueOrThrow(
+                    FileValue.key(path.getRootedPath(directories)), IOException.class);
+      } catch (IOException e) {
+        return new MaybeValue.Invalid("failed to stat %s: %s".formatted(path, e.getMessage()));
+      }
+      if (fileValue == null) {
+        return MaybeValue.VALUES_MISSING;
+      }
+      if (!fileValue.isDirectory()) {
+        // The directory has been deleted or replaced by a file. Don't request its tree digest,
+        // which would fail with an InconsistentFilesystemException; report a distinguished value
+        // that never matches an entry recorded from an existing directory instead.
+        return new MaybeValue.Valid(ENOENT_MARKER_VALUE);
+      }
       try {
         var directoryTreeDigestValue =
-            (DirectoryTreeDigestValue) env.getValueOrThrow(skyKey, IOException.class);
+            (DirectoryTreeDigestValue)
+                env.getValueOrThrow(getDirectoryTreeDigestKey(directories), IOException.class);
         if (directoryTreeDigestValue == null) {
           return MaybeValue.VALUES_MISSING;
         }
@@ -756,6 +870,9 @@ public abstract sealed class RepoRecordedInput {
 
     @Override
     public String describeChange(String oldValue, String newValue) {
+      if (ENOENT_MARKER_VALUE.equals(newValue)) {
+        return "%s is no longer an existing directory".formatted(path);
+      }
       return "directory tree at %s changed".formatted(path);
     }
   }

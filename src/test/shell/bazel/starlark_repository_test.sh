@@ -2944,6 +2944,111 @@ EOF
   expect_log "I'm running!"
 }
 
+# Regression test for https://github.com/bazelbuild/bazel/issues/30883.
+function test_path_readdir_deleted_dir() {
+  create_new_workspace
+  cat > $(setup_module_dot_bazel) <<EOF
+r = use_repo_rule("//:r.bzl", "r")
+r(name = "r")
+EOF
+  touch BUILD
+  cat > r.bzl <<EOF
+def _r(rctx):
+  p = rctx.workspace_root.get_child("foo")
+  rctx.watch(p)
+  if p.exists:
+    print("I see: " + ",".join(sorted([c.basename for c in p.readdir()])))
+  else:
+    print("I see: nothing")
+  rctx.file("BUILD", "filegroup(name='r')")
+r=repository_rule(_r)
+EOF
+
+  mkdir foo
+  touch foo/bar
+  bazel build @r >& $TEST_log || fail "expected bazel to succeed"
+  expect_log "I see: bar"
+
+  # deleting the watched directory should trigger a refetch, not an error.
+  rm -r foo
+  bazel build @r >& $TEST_log || fail "expected bazel to succeed"
+  expect_log "I see: nothing"
+
+  # recreating the watched directory should trigger a refetch again.
+  mkdir foo
+  touch foo/quux
+  bazel build @r >& $TEST_log || fail "expected bazel to succeed"
+  expect_log "I see: quux"
+}
+
+# Regression test for https://github.com/bazelbuild/bazel/issues/30883.
+function test_path_readdir_deleted_dir_without_watch() {
+  create_new_workspace
+  cat > $(setup_module_dot_bazel) <<EOF
+r = use_repo_rule("//:r.bzl", "r")
+r(name = "r")
+EOF
+  touch BUILD
+  cat > r.bzl <<EOF
+def _r(rctx):
+  p = rctx.workspace_root.get_child("foo")
+  if p.exists:
+    print("I see: " + ",".join(sorted([c.basename for c in p.readdir()])))
+  else:
+    print("I see: nothing")
+  rctx.file("BUILD", "filegroup(name='r')")
+r=repository_rule(_r)
+EOF
+
+  mkdir foo
+  touch foo/bar
+  bazel build @r >& $TEST_log || fail "expected bazel to succeed"
+  expect_log "I see: bar"
+
+  # deleting the directory whose entries are watched should trigger a refetch,
+  # not an error.
+  rm -r foo
+  bazel build @r >& $TEST_log || fail "expected bazel to succeed"
+  expect_log "I see: nothing"
+}
+
+# Regression test for https://github.com/bazelbuild/bazel/issues/30883.
+function test_watch_tree_deleted_dir() {
+  create_new_workspace
+  cat > $(setup_module_dot_bazel) <<EOF
+r = use_repo_rule("//:r.bzl", "r")
+r(name = "r")
+EOF
+  touch BUILD
+  cat > r.bzl <<EOF
+def _r(rctx):
+  p = rctx.workspace_root.get_child("foo")
+  rctx.watch(p)
+  if p.is_dir:
+    rctx.watch_tree(p)
+    print("I see: a directory")
+  else:
+    print("I see: nothing")
+  rctx.file("BUILD", "filegroup(name='r')")
+r=repository_rule(_r)
+EOF
+
+  mkdir -p foo/sub
+  touch foo/sub/bar
+  bazel build @r >& $TEST_log || fail "expected bazel to succeed"
+  expect_log "I see: a directory"
+
+  # deleting the watched directory tree should trigger a refetch, not an error.
+  rm -r foo
+  bazel build @r >& $TEST_log || fail "expected bazel to succeed"
+  expect_log "I see: nothing"
+
+  # recreating the watched directory tree should trigger a refetch again.
+  mkdir foo
+  bazel build @r >& $TEST_log || fail "expected bazel to succeed"
+  expect_log "I see: a directory"
+}
+
 # Regression test for https://github.com/bazelbuild/bazel/issues/21823.
 function test_repository_cache_concurrency() {
   sha=cd55a062e763b9349921f0f5db8c3933288dc8ba4f76dd9416aac68acee3cb94
