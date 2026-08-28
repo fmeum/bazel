@@ -147,6 +147,11 @@ public class SingleExtensionEvalFunction implements SkyFunction {
     Facts lockfileFacts = Facts.EMPTY;
     // Store workspace lockfile facts separately for validation in ERROR mode
     Facts workspaceLockfileFacts = Facts.EMPTY;
+    // The facts recorded by the most recent actual evaluation of the extension, if there is such a
+    // record. Unlike the workspace lockfile, the hidden lockfile is not subject to manual edits or
+    // merges, so its facts entry can be used to detect that the workspace lockfile's facts have
+    // been modified since the extension last ran.
+    @Nullable Facts lastEvaluatedFacts = null;
     if (!lockfileMode.equals(LockfileMode.OFF)) {
       var lockfiles =
           env.getValuesAndExceptions(
@@ -158,9 +163,22 @@ public class SingleExtensionEvalFunction implements SkyFunction {
       if (workspaceLockfile == null || hiddenLockfile == null) {
         return null;
       }
+      // Facts whose stored factsVersion differs from the current extension's facts_version are
+      // discarded: the extension's schema may have changed.
+      @Nullable Facts hiddenLockfileFacts = null;
+      if (hiddenLockfile.getFacts().containsKey(extensionId)
+          && hiddenLockfile.getFactsVersions().getOrDefault(extensionId, 0)
+              == currentFactsVersion) {
+        hiddenLockfileFacts = hiddenLockfile.getFacts().get(extensionId);
+      }
+      // Only treat the hidden lockfile's facts as evidence of a manual edit of the workspace
+      // lockfile if the latter actually exists and is of a supported version: a missing or
+      // outdated workspace lockfile is regenerated from the hidden lockfile without rerunning
+      // extensions.
+      if (!workspaceLockfile.equals(BazelLockFileValue.EMPTY_LOCKFILE)) {
+        lastEvaluatedFacts = hiddenLockfileFacts;
+      }
       // Prefer the workspace lockfile facts when present, falling back to the hidden lockfile.
-      // In both cases, facts whose stored factsVersion differs from the current extension's
-      // facts_version are discarded: the extension's schema may have changed.
       if (workspaceLockfile.getFacts().containsKey(extensionId)) {
         int workspaceFactsVersion =
             workspaceLockfile.getFactsVersions().getOrDefault(extensionId, 0);
@@ -168,11 +186,8 @@ public class SingleExtensionEvalFunction implements SkyFunction {
           workspaceLockfileFacts = workspaceLockfile.getFacts().get(extensionId);
           lockfileFacts = workspaceLockfileFacts;
         }
-      } else {
-        int hiddenFactsVersion = hiddenLockfile.getFactsVersions().getOrDefault(extensionId, 0);
-        if (hiddenFactsVersion == currentFactsVersion) {
-          lockfileFacts = hiddenLockfile.getFacts().getOrDefault(extensionId, Facts.EMPTY);
-        }
+      } else if (hiddenLockfileFacts != null) {
+        lockfileFacts = hiddenLockfileFacts;
       }
       var lockedExtensionMap = workspaceLockfile.getModuleExtensions().get(extensionId);
       var lockedExtension =
@@ -194,7 +209,9 @@ public class SingleExtensionEvalFunction implements SkyFunction {
                   usagesValue,
                   extension.getEvalFactors(),
                   lockedExtension,
-                  lockfileFacts);
+                  lockfileFacts,
+                  workspaceLockfileFacts,
+                  lastEvaluatedFacts);
           if (singleExtensionValue != null) {
             return singleExtensionValue;
           }
@@ -313,6 +330,12 @@ public class SingleExtensionEvalFunction implements SkyFunction {
    * Tries to get the evaluation result from the lockfile, if it's still up-to-date. Otherwise,
    * returns {@code null}.
    *
+   * @param facts the facts to attach to the reused result (workspace lockfile facts if present,
+   *     otherwise the hidden lockfile's)
+   * @param workspaceLockfileFacts the facts stored in the workspace lockfile, or {@link
+   *     Facts#EMPTY} if it has none for this extension
+   * @param lastEvaluatedFacts the facts recorded by the most recent actual evaluation of the
+   *     extension (kept in the hidden lockfile), or {@code null} if there is no such record
    * @throws NeedsSkyframeRestartException in case we need a skyframe restart. Note that we
    *     <em>don't</em> return {@code null} in this case!
    */
@@ -324,7 +347,9 @@ public class SingleExtensionEvalFunction implements SkyFunction {
       SingleExtensionUsagesValue usagesValue,
       ModuleExtensionEvalFactors evalFactors,
       LockFileModuleExtension lockedExtension,
-      Facts facts)
+      Facts facts,
+      Facts workspaceLockfileFacts,
+      @Nullable Facts lastEvaluatedFacts)
       throws SingleExtensionEvalFunctionException,
           InterruptedException,
           NeedsSkyframeRestartException {
@@ -354,10 +379,26 @@ public class SingleExtensionEvalFunction implements SkyFunction {
         diffRecorder.record(
             "an input to the extension '" + extensionId + "' changed: " + reason.get());
       }
+      // Facts are managed by the extension itself and are thus never invalidated by Bazel based
+      // on its inputs. However, if the facts in the workspace lockfile do not match those
+      // recorded by the most recent actual evaluation of the extension (e.g. entries were dropped
+      // in a manual edit or a merge conflict resolution), the extension has to be rerun so that
+      // it can regenerate them (https://github.com/bazelbuild/bazel/issues/29161). In ERROR mode,
+      // this is limited to reproducible extensions, which are allowed to be rerun in that mode:
+      // failing the build over the hidden lockfile's purely machine-local state could otherwise
+      // produce false positives after a rollback of the extension together with the workspace
+      // lockfile (https://github.com/bazelbuild/bazel/issues/28717).
+      if (lastEvaluatedFacts != null
+          && !lastEvaluatedFacts.equals(workspaceLockfileFacts)
+          && (lockedExtension.isReproducible() || !lockfileMode.equals(LockfileMode.ERROR))) {
+        diffRecorder.record(
+            "the facts recorded in the lockfile for the extension '"
+                + extensionId
+                + "' do not match the result of its most recent evaluation");
+      }
     } catch (DiffFoundEarlyExitException ignored) {
       // ignored
     }
-    // There is intentionally no diff check for facts - they are never invalidated by Bazel.
     if (!diffRecorder.anyDiffsDetected()) {
       return createSingleExtensionValue(
           lockedExtension.getGeneratedRepoSpecs(),
