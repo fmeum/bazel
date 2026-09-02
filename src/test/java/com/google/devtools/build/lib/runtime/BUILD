@@ -74,11 +74,13 @@ java_library(
         "//src/main/java/com/google/devtools/build/lib/clock",
         "//src/main/java/com/google/devtools/build/lib/cmdline",
         "//src/main/java/com/google/devtools/build/lib/collect/nestedset",
+        "//src/main/java/com/google/devtools/build/lib/compress:compression_service_impl",
         "//src/main/java/com/google/devtools/build/lib/events",
         "//src/main/java/com/google/devtools/build/lib/events:event_bus_event_handler",
         "//src/main/java/com/google/devtools/build/lib/exec:bin_tools",
         "//src/main/java/com/google/devtools/build/lib/exec:execution_options",
         "//src/main/java/com/google/devtools/build/lib/exec:runfiles_tree_updater",
+        "//src/main/java/com/google/devtools/build/lib/exec:spawn_exec_exception",
         "//src/main/java/com/google/devtools/build/lib/packages",
         "//src/main/java/com/google/devtools/build/lib/packages/semantics",
         "//src/main/java/com/google/devtools/build/lib/pkgcache",
@@ -90,6 +92,7 @@ java_library(
         "//src/main/java/com/google/devtools/build/lib/query2/query/output",
         "//src/main/java/com/google/devtools/build/lib/remote:store",
         "//src/main/java/com/google/devtools/build/lib/remote/options",
+        "//src/main/java/com/google/devtools/build/lib/repository:repository_events",
         "//src/main/java/com/google/devtools/build/lib/runtime:after_command_event",
         "//src/main/java/com/google/devtools/build/lib/runtime:blaze_command_cluster",
         "//src/main/java/com/google/devtools/build/lib/runtime:blaze_command_result",
@@ -202,8 +205,6 @@ java_library(
 java_test(
     name = "ConfigCommandTest",
     srcs = ["commands/ConfigCommandTest.java"],
-    # TODO(bazel-team): Fails on Windows for unclear reasons.
-    tags = ["no_windows"],
     deps = [
         "//src/main/java/com/google/devtools/build/lib/analysis/config:fragment_options",
         "//src/main/java/com/google/devtools/build/lib/analysis/config/output:configuration_for_output",

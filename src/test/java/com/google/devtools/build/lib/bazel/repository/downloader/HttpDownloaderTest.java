@@ -42,6 +42,7 @@ import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.io.StringReader;
+import java.net.ConnectException;
 import java.net.InetAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
@@ -550,6 +551,18 @@ public class HttpDownloaderTest {
           assertThat(suppressed).isInstanceOf(IOException.class);
           assertThat(suppressed).hasCauseThat().isInstanceOf(SocketTimeoutException.class);
         }
+        // The message states why each URL failed, without Java class names or the destination.
+        assertThat(expected)
+            .hasMessageThat()
+            .startsWith(
+                "Error downloading "
+                    + outputFile.getBaseName()
+                    + " from all 2 URLs:\n  "
+                    + urls.get(0)
+                    + ": ");
+        assertThat(expected).hasMessageThat().contains("\n  " + urls.get(1) + ": ");
+        assertThat(expected).hasMessageThat().doesNotContain("Exception");
+        assertThat(expected).hasMessageThat().doesNotContain(outputFile.getPathString());
       }
     }
   }
@@ -914,6 +927,55 @@ public class HttpDownloaderTest {
   }
 
   @Test
+  public void download_checksumMismatch_statesUrlAndBothHashes() throws Exception {
+    try (ServerSocket server = new ServerSocket(0, 1, InetAddress.getByName(null))) {
+      @SuppressWarnings("unused")
+      Future<?> possiblyIgnoredError =
+          executor.submit(
+              () -> {
+                try (Socket socket = server.accept()) {
+                  readHttpRequest(socket.getInputStream());
+                  sendLines(
+                      socket,
+                      "HTTP/1.1 200 OK",
+                      "Date: Fri, 31 Dec 1999 23:59:59 GMT",
+                      "Connection: close",
+                      "Content-Type: text/plain",
+                      "Content-Length: 9",
+                      "",
+                      "malicious");
+                }
+                return null;
+              });
+      URI url = URI.create(String.format("http://localhost:%d/foo", server.getLocalPort()));
+      String wanted = Hashing.sha256().hashString("hello", UTF_8).toString();
+      String actual = Hashing.sha256().hashString("malicious", UTF_8).toString();
+
+      IOException e =
+          assertThrows(
+              IOException.class,
+              () ->
+                  download(
+                      downloadManager,
+                      ImmutableList.of(url),
+                      ImmutableMap.of(),
+                      ImmutableMap.of(),
+                      Optional.of(Checksum.fromString(DownloadCache.KeyType.SHA256, wanted)),
+                      "testCanonicalId",
+                      Optional.empty(),
+                      fs.getPath(workingDir.newFile().getAbsolutePath()),
+                      ImmutableMap.of(),
+                      "testRepo"));
+
+      assertThat(e)
+          .hasMessageThat()
+          .isEqualTo(
+              String.format(
+                  "Error downloading %s: Checksum was %s but wanted %s", url, actual, wanted));
+    }
+  }
+
+  @Test
   public void downloadAndRead_twoUrlsFirstNotFoundAndSecondOk()
       throws IOException, InterruptedException {
     try (ServerSocket server1 = new ServerSocket(0, 1, InetAddress.getByName(null));
@@ -1170,6 +1232,43 @@ public class HttpDownloaderTest {
     assertThat(times.get()).isEqualTo(4);
     String content = new String(result.getInputStream().readAllBytes(), UTF_8);
     assertThat(content).isEqualTo("content");
+  }
+
+  @Test
+  public void download_connectException_doesNotRetry() throws Exception {
+    Downloader downloader = mock(Downloader.class);
+    HttpDownloader httpDownloader = mock(HttpDownloader.class);
+    DownloadManager downloadManager =
+        new DownloadManager(downloadCache, downloader, httpDownloader, eventHandler);
+    downloadManager.setRetries(5);
+    AtomicInteger times = new AtomicInteger(0);
+    doAnswer(
+            (Answer<Void>)
+                invocationOnMock -> {
+                  times.getAndIncrement();
+                  IOException e = new IOException();
+                  e.addSuppressed(new ConnectException("Connection refused"));
+                  throw e;
+                })
+        .when(downloader)
+        .download(any(), any(), any(), any(), any(), any(), any(), any(), any(), eq("testRepo"));
+
+    assertThrows(
+        IOException.class,
+        () ->
+            download(
+                downloadManager,
+                ImmutableList.of(URI.create("http://localhost")),
+                ImmutableMap.of(),
+                ImmutableMap.of(),
+                Optional.empty(),
+                "testCanonicalId",
+                Optional.empty(),
+                fs.getPath(workingDir.newFile().getAbsolutePath()),
+                ImmutableMap.of(),
+                "testRepo"));
+
+    assertThat(times.get()).isEqualTo(1);
   }
 
   @Test

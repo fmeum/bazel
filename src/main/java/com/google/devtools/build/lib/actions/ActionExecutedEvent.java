@@ -110,6 +110,18 @@ public final class ActionExecutedEvent implements BuildEventWithConfiguration {
     return stdout.toString();
   }
 
+  /** Returns the file holding the action's stdout, or null if it wrote none. */
+  @Nullable
+  public Path getStdoutPath() {
+    return stdout;
+  }
+
+  /** Returns the file holding the action's stderr, or null if it wrote none. */
+  @Nullable
+  public Path getStderrPath() {
+    return stderr;
+  }
+
   @Nullable
   public String getStderr() {
     if (stderr == null) {

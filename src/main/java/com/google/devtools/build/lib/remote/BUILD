@@ -42,6 +42,10 @@ java_library(
 java_library(
     name = "remote_action",
     srcs = ["RemoteAction.java"],
+    visibility = [
+        "//src/main/java/com/google/devtools/build/lib:build_lib",
+        "//src/tools/remote:__subpackages__",
+    ],
     deps = [
         "//src/main/java/com/google/devtools/build/lib/actions",
         "//src/main/java/com/google/devtools/build/lib/actions:action_input",
@@ -57,6 +61,10 @@ java_library(
 java_library(
     name = "combined_cache_client_factory",
     srcs = ["CombinedCacheClientFactory.java"],
+    visibility = [
+        "//src/main/java/com/google/devtools/build/lib:build_lib",
+        "//src/tools/remote:__subpackages__",
+    ],
     deps = [
         ":Retrier",
         "//src/main/java/com/google/devtools/build/lib/authandtls",
@@ -78,6 +86,10 @@ java_library(
 java_library(
     name = "remote_repo_contents_cache_impl",
     srcs = ["RemoteRepoContentsCacheImpl.java"],
+    visibility = [
+        "//src/main/java/com/google/devtools/build/lib:build_lib",
+        "//src/tools/remote:__subpackages__",
+    ],
     deps = [
         ":combined_cache",
         ":remote_external_overlay_file_system",
@@ -113,6 +125,10 @@ java_library(
 java_library(
     name = "remote_module",
     srcs = ["RemoteModule.java"],
+    visibility = [
+        "//src/main/java/com/google/devtools/build/lib:build_lib",
+        "//src/tools/remote:__subpackages__",
+    ],
     deps = [
         ":ReferenceCountedChannel",
         ":Retrier",
@@ -218,6 +234,10 @@ java_library(
 java_library(
     name = "client_api_version",
     srcs = ["ClientApiVersion.java"],
+    visibility = [
+        "//src/main/java/com/google/devtools/build/lib:build_lib",
+        "//src/tools/remote:__subpackages__",
+    ],
     deps = [
         ":api_version",
         "//third_party/java/guava:collect",
@@ -229,6 +249,10 @@ java_library(
 java_library(
     name = "grpc_remote_executor",
     srcs = ["GrpcRemoteExecutor.java"],
+    visibility = [
+        "//src/main/java/com/google/devtools/build/lib:build_lib",
+        "//src/tools/remote:__subpackages__",
+    ],
     deps = [
         ":ExecutionStatusException",
         ":ReferenceCountedChannel",
@@ -252,6 +276,10 @@ java_library(
 java_library(
     name = "google_channel_connection_factory",
     srcs = ["GoogleChannelConnectionFactory.java"],
+    visibility = [
+        "//src/main/java/com/google/devtools/build/lib:build_lib",
+        "//src/tools/remote:__subpackages__",
+    ],
     deps = [
         ":ReferenceCountedChannel",
         ":channel_factory",
@@ -275,6 +303,10 @@ java_library(
 java_library(
     name = "channel_factory",
     srcs = ["ChannelFactory.java"],
+    visibility = [
+        "//src/main/java/com/google/devtools/build/lib:build_lib",
+        "//src/tools/remote:__subpackages__",
+    ],
     deps = [
         "//src/main/java/com/google/devtools/build/lib/authandtls",
         "//third_party/java/grpc:core",
@@ -284,6 +316,10 @@ java_library(
 java_library(
     name = "path_canonicalizer",
     srcs = ["PathCanonicalizer.java"],
+    visibility = [
+        "//src/main/java/com/google/devtools/build/lib:build_lib",
+        "//src/tools/remote:__subpackages__",
+    ],
     deps = [
         "//src/main/java/com/google/devtools/build/lib/vfs",
         "//src/main/java/com/google/devtools/build/lib/vfs:pathfragment",
@@ -295,21 +331,27 @@ java_library(
 java_library(
     name = "api_version",
     srcs = ["ApiVersion.java"],
+    visibility = [
+        "//src/main/java/com/google/devtools/build/lib:build_lib",
+        "//src/tools/remote:__subpackages__",
+    ],
     deps = ["@remoteapis//:build_bazel_semver_semver_java_proto"],
 )
 
 java_library(
     name = "remote_action_input_fetcher",
     srcs = ["RemoteActionInputFetcher.java"],
+    visibility = [
+        "//src/main/java/com/google/devtools/build/lib:build_lib",
+        "//src/tools/remote:__subpackages__",
+    ],
     deps = [
         ":abstract_action_input_prefetcher",
         ":combined_cache",
-        ":concurrent_artifact_path_trie",
         ":remote_output_checker",
         "//src/main/java/com/google/devtools/build/lib/actions:action_input",
         "//src/main/java/com/google/devtools/build/lib/actions:action_input_prefetcher",
         "//src/main/java/com/google/devtools/build/lib/actions:action_output_directory_helper",
-        "//src/main/java/com/google/devtools/build/lib/actions:artifacts",
         "//src/main/java/com/google/devtools/build/lib/actions:file_metadata",
         "//src/main/java/com/google/devtools/build/lib/actions:virtual_action_input",
         "//src/main/java/com/google/devtools/build/lib/events",
@@ -319,7 +361,6 @@ java_library(
         "//src/main/java/com/google/devtools/build/lib/remote/util:tracing_metadata_utils",
         "//src/main/java/com/google/devtools/build/lib/util:temp_path_generator",
         "//src/main/java/com/google/devtools/build/lib/vfs",
-        "//src/main/java/com/google/devtools/build/lib/vfs:pathfragment",
         "//third_party/java/guava:base",
         "//third_party/java/guava:concurrent",
         "//third_party/java/jsr305_annotations",
@@ -330,6 +371,10 @@ java_library(
 java_library(
     name = "remote_spawn_runner",
     srcs = ["RemoteSpawnRunner.java"],
+    visibility = [
+        "//src/main/java/com/google/devtools/build/lib:build_lib",
+        "//src/tools/remote:__subpackages__",
+    ],
     deps = [
         ":ExecutionStatusException",
         ":Retrier",
@@ -376,6 +421,10 @@ java_library(
 java_library(
     name = "remote_execution_cache",
     srcs = ["RemoteExecutionCache.java"],
+    visibility = [
+        "//src/main/java/com/google/devtools/build/lib:build_lib",
+        "//src/tools/remote:__subpackages__",
+    ],
     deps = [
         ":chunker",
         ":combined_cache",
@@ -407,6 +456,10 @@ java_library(
 java_library(
     name = "chunker",
     srcs = ["Chunker.java"],
+    visibility = [
+        "//src/main/java/com/google/devtools/build/lib:build_lib",
+        "//src/tools/remote:__subpackages__",
+    ],
     deps = [
         "//src/main/java/com/google/devtools/build/lib/remote/common",
         "//src/main/java/com/google/devtools/build/lib/remote/zstd",
@@ -421,6 +474,10 @@ java_library(
 java_library(
     name = "remote_action_file_system",
     srcs = ["RemoteActionFileSystem.java"],
+    visibility = [
+        "//src/main/java/com/google/devtools/build/lib:build_lib",
+        "//src/tools/remote:__subpackages__",
+    ],
     deps = [
         ":path_canonicalizer",
         ":remote_action_input_fetcher",
@@ -448,6 +505,10 @@ java_library(
 java_library(
     name = "grpc_cache_client",
     srcs = ["GrpcCacheClient.java"],
+    visibility = [
+        "//src/main/java/com/google/devtools/build/lib:build_lib",
+        "//src/tools/remote:__subpackages__",
+    ],
     deps = [
         ":ReferenceCountedChannel",
         ":Retrier",
@@ -485,6 +546,10 @@ java_library(
 java_library(
     name = "byte_stream_build_event_artifact_uploader",
     srcs = ["ByteStreamBuildEventArtifactUploader.java"],
+    visibility = [
+        "//src/main/java/com/google/devtools/build/lib:build_lib",
+        "//src/tools/remote:__subpackages__",
+    ],
     deps = [
         ":combined_cache",
         ":remote_action_file_system",
@@ -511,6 +576,10 @@ java_library(
 java_library(
     name = "remote_action_context_provider",
     srcs = ["RemoteActionContextProvider.java"],
+    visibility = [
+        "//src/main/java/com/google/devtools/build/lib:build_lib",
+        "//src/tools/remote:__subpackages__",
+    ],
     deps = [
         ":bazel_output_service_cluster",
         ":combined_cache",
@@ -542,6 +611,10 @@ java_library(
 java_library(
     name = "execute_retrier",
     srcs = ["ExecuteRetrier.java"],
+    visibility = [
+        "//src/main/java/com/google/devtools/build/lib:build_lib",
+        "//src/tools/remote:__subpackages__",
+    ],
     deps = [
         ":Retrier",
         "//src/main/java/com/google/devtools/build/lib/remote/common:bulk_transfer_exception",
@@ -559,6 +632,10 @@ java_library(
 java_library(
     name = "network_time_interceptor",
     srcs = ["NetworkTimeInterceptor.java"],
+    visibility = [
+        "//src/main/java/com/google/devtools/build/lib:build_lib",
+        "//src/tools/remote:__subpackages__",
+    ],
     deps = [
         "//src/main/java/com/google/devtools/build/lib/remote/common",
         "//third_party/java/grpc:core",
@@ -569,6 +646,10 @@ java_library(
 java_library(
     name = "remote_lease_extension",
     srcs = ["RemoteLeaseExtension.java"],
+    visibility = [
+        "//src/main/java/com/google/devtools/build/lib:build_lib",
+        "//src/tools/remote:__subpackages__",
+    ],
     deps = [
         ":combined_cache",
         ":lease_service",
@@ -598,6 +679,10 @@ java_library(
 java_library(
     name = "byte_stream_build_event_artifact_uploader_factory",
     srcs = ["ByteStreamBuildEventArtifactUploaderFactory.java"],
+    visibility = [
+        "//src/main/java/com/google/devtools/build/lib:build_lib",
+        "//src/tools/remote:__subpackages__",
+    ],
     deps = [
         ":byte_stream_build_event_artifact_uploader",
         ":combined_cache",
@@ -613,6 +698,10 @@ java_library(
 java_library(
     name = "byte_stream_uploader",
     srcs = ["ByteStreamUploader.java"],
+    visibility = [
+        "//src/main/java/com/google/devtools/build/lib:build_lib",
+        "//src/tools/remote:__subpackages__",
+    ],
     deps = [
         ":ReferenceCountedChannel",
         ":Retrier",
@@ -638,6 +727,10 @@ java_library(
 java_library(
     name = "remote_spawn_strategy",
     srcs = ["RemoteSpawnStrategy.java"],
+    visibility = [
+        "//src/main/java/com/google/devtools/build/lib:build_lib",
+        "//src/tools/remote:__subpackages__",
+    ],
     deps = [
         "//src/main/java/com/google/devtools/build/lib/exec:abstract_spawn_strategy",
         "//src/main/java/com/google/devtools/build/lib/exec:execution_options",
@@ -648,11 +741,19 @@ java_library(
 java_library(
     name = "platform_properties",
     srcs = ["PlatformProperties.java"],
+    visibility = [
+        "//src/main/java/com/google/devtools/build/lib:build_lib",
+        "//src/tools/remote:__subpackages__",
+    ],
 )
 
 java_library(
     name = "remote_output_service",
     srcs = ["RemoteOutputService.java"],
+    visibility = [
+        "//src/main/java/com/google/devtools/build/lib:build_lib",
+        "//src/tools/remote:__subpackages__",
+    ],
     deps = [
         ":lease_service",
         ":remote_action_file_system",
@@ -681,6 +782,10 @@ java_library(
 java_library(
     name = "remote_server_capabilities",
     srcs = ["RemoteServerCapabilities.java"],
+    visibility = [
+        "//src/main/java/com/google/devtools/build/lib:build_lib",
+        "//src/tools/remote:__subpackages__",
+    ],
     deps = [
         ":Retrier",
         ":client_api_version",
@@ -699,9 +804,14 @@ java_library(
 java_library(
     name = "combined_cache",
     srcs = [
+        "ChunkLocationMap.java",
         "ChunkedBlobDownloader.java",
         "ChunkedBlobUploader.java",
         "CombinedCache.java",
+    ],
+    visibility = [
+        "//src/main/java/com/google/devtools/build/lib:build_lib",
+        "//src/tools/remote:__subpackages__",
     ],
     deps = [
         ":grpc_cache_client",
@@ -722,6 +832,7 @@ java_library(
         "//src/main/java/com/google/devtools/build/lib/vfs",
         "//src/main/java/com/google/devtools/build/lib/vfs:pathfragment",
         "//src/main/protobuf:failure_details_java_proto",
+        "//third_party/java/caffeine",
         "//third_party/java/flogger",
         "//third_party/java/guava:base",
         "//third_party/java/guava:collect",
@@ -737,6 +848,10 @@ java_library(
 java_library(
     name = "upload_manifest",
     srcs = ["UploadManifest.java"],
+    visibility = [
+        "//src/main/java/com/google/devtools/build/lib:build_lib",
+        "//src/tools/remote:__subpackages__",
+    ],
     deps = [
         ":combined_cache",
         ":store",
@@ -768,6 +883,10 @@ java_library(
 java_library(
     name = "repository_remote_helpers_factory_impl",
     srcs = ["RepositoryRemoteHelpersFactoryImpl.java"],
+    visibility = [
+        "//src/main/java/com/google/devtools/build/lib:build_lib",
+        "//src/tools/remote:__subpackages__",
+    ],
     deps = [
         ":combined_cache",
         ":remote_execution_cache",
@@ -785,6 +904,10 @@ java_library(
 java_library(
     name = "remote_repository_remote_executor",
     srcs = ["RemoteRepositoryRemoteExecutor.java"],
+    visibility = [
+        "//src/main/java/com/google/devtools/build/lib:build_lib",
+        "//src/tools/remote:__subpackages__",
+    ],
     deps = [
         ":combined_cache",
         ":remote_execution_cache",
@@ -808,6 +931,10 @@ java_library(
 java_library(
     name = "remote_external_overlay_file_system",
     srcs = ["RemoteExternalOverlayFileSystem.java"],
+    visibility = [
+        "//src/main/java/com/google/devtools/build/lib:build_lib",
+        "//src/tools/remote:__subpackages__",
+    ],
     deps = [
         ":abstract_action_input_prefetcher",
         ":combined_cache",
@@ -844,6 +971,10 @@ java_library(
 java_library(
     name = "remote_spawn_cache",
     srcs = ["RemoteSpawnCache.java"],
+    visibility = [
+        "//src/main/java/com/google/devtools/build/lib:build_lib",
+        "//src/tools/remote:__subpackages__",
+    ],
     deps = [
         ":bazel_output_service_cluster",
         ":remote_action",
@@ -893,6 +1024,7 @@ java_library(
         "//third_party/java/grpc:core",
         "//third_party/java/guava:base",
         "//third_party/java/guava:concurrent",
+        "//third_party/java/jsr305_annotations",
         "//third_party/java/netty4:common",
         "//third_party/java/rxjava3",
         "@remoteapis//:build_bazel_remote_execution_v2_remote_execution_java_proto",
@@ -953,6 +1085,7 @@ java_library(
     name = "abstract_action_input_prefetcher",
     srcs = ["AbstractActionInputPrefetcher.java"],
     deps = [
+        ":concurrent_artifact_path_trie",
         ":remote_output_checker",
         ":subtree_materializer",
         "//src/main/java/com/google/devtools/build/lib/actions",
@@ -1032,7 +1165,7 @@ java_library(
     name = "remote_rewound_action_synchronizer",
     srcs = ["RemoteRewoundActionSynchronizer.java"],
     deps = [
-        ":remote_action_input_fetcher",
+        ":abstract_action_input_prefetcher",
         "//src/main/java/com/google/devtools/build/lib/actions",
         "//src/main/java/com/google/devtools/build/lib/actions:action_lookup_data",
         "//src/main/java/com/google/devtools/build/lib/actions:artifacts",
@@ -1078,6 +1211,10 @@ java_library(
     srcs = [
         "BazelOutputService.java",
         "RemoteExecutionService.java",
+    ],
+    visibility = [
+        "//src/main/java/com/google/devtools/build/lib:build_lib",
+        "//src/tools/remote:__subpackages__",
     ],
     deps = [
         ":ReferenceCountedChannel",

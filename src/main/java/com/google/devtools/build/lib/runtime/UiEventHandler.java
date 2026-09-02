@@ -24,6 +24,7 @@ import com.google.common.flogger.GoogleLogger;
 import com.google.common.primitives.Bytes;
 import com.google.common.util.concurrent.Uninterruptibles;
 import com.google.devtools.build.lib.actions.ActionCompletionEvent;
+import com.google.devtools.build.lib.actions.ActionExecutedEvent;
 import com.google.devtools.build.lib.actions.ActionProgressEvent;
 import com.google.devtools.build.lib.actions.ActionScanningCompletedEvent;
 import com.google.devtools.build.lib.actions.ActionStartedEvent;
@@ -57,6 +58,7 @@ import com.google.devtools.build.lib.events.EventKind;
 import com.google.devtools.build.lib.events.ExtendedEventHandler.FetchProgress;
 import com.google.devtools.build.lib.pkgcache.LoadingPhaseCompleteEvent;
 import com.google.devtools.build.lib.pkgcache.PathPackageLocator;
+import com.google.devtools.build.lib.repository.RepositoryFailedEvent;
 import com.google.devtools.build.lib.runtime.CrashDebuggingProtos.InflightActionInfo;
 import com.google.devtools.build.lib.server.TerminalSizeMonitor;
 import com.google.devtools.build.lib.skyframe.ConfigurationPhaseStartedEvent;
@@ -141,6 +143,7 @@ public final class UiEventHandler implements EventHandler {
   private ByteArrayOutputStream stderrLineBuffer;
 
   private final int maxStdoutErrBytes;
+  private final FailureSummary failureSummary;
   private int terminalWidth;
 
   /**
@@ -208,6 +211,7 @@ public final class UiEventHandler implements EventHandler {
       TerminalSizeMonitor terminalSizeMonitor) {
     this.terminalWidth = normalizeTerminalWidth(options.getTerminalColumns());
     this.maxStdoutErrBytes = options.getMaxStdoutErrBytes();
+    this.failureSummary = new FailureSummary(maxStdoutErrBytes);
     this.outErr =
         OutErr.create(
             new FullyBufferedOutputStream(outErr.getOutputStream()),
@@ -718,7 +722,16 @@ public final class UiEventHandler implements EventHandler {
     // it as an event and add a timestamp, if events are supposed to have a timestamp.
     boolean done = false;
     synchronized (this) {
-      handleInternal(stateTracker.buildComplete(event));
+      Event buildCompleteEvent = stateTracker.buildComplete(event);
+      if (!event.getResult().getSuccess()) {
+        String summary = failureSummary.render();
+        if (summary != null) {
+          // Printed right before the final build status so that the causes of the failures are
+          // the last thing on screen.
+          handleInternal(Event.error(summary));
+        }
+      }
+      handleInternal(buildCompleteEvent);
       ignoreRefreshLimitOnce();
 
       // After a build has completed, only stop updating the UI if there is no more activities.
@@ -767,6 +780,18 @@ public final class UiEventHandler implements EventHandler {
         logger.atWarning().withCause(e).log("IO Error writing to output stream");
       }
     }
+  }
+
+  @Subscribe
+  public void actionExecuted(ActionExecutedEvent event) {
+    if (event.getException() != null) {
+      failureSummary.actionFailed(event);
+    }
+  }
+
+  @Subscribe
+  public void repositoryFailed(RepositoryFailedEvent event) {
+    failureSummary.repositoryFailed(event);
   }
 
   @Subscribe

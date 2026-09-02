@@ -27,7 +27,6 @@ java_library(
     deps = [
         ":thread_safety",
         "//src/main/java/com/google/devtools/build/lib/concurrent/safeexecutor:safe_executor",
-        "//src/main/java/com/google/devtools/build/lib/unsafe:unsafe-provider",
         "//third_party/java/flogger",
         "//third_party/java/guava:annotations",
         "//third_party/java/guava:base",
@@ -41,6 +40,7 @@ java_library(
 java_library(
     name = "thread_safety",
     srcs = ["ThreadSafety.java"],
+    visibility = ["//src/main/java/com/google/devtools/build/lib:build_lib"],
 )
 
 java_library(
@@ -57,6 +57,7 @@ java_library(
     srcs = ["TaskDeduplicator.java"],
     deps = [
         "//third_party/java/error_prone:annotations",
+        "//third_party/java/guava:annotations",
         "//third_party/java/guava:concurrent",
         "//third_party/java/jsr305_annotations",
     ],

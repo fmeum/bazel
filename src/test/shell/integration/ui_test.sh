@@ -639,38 +639,44 @@ function test_fancy_symbol_encoding() {
 function test_ui_events_filters() {
   bazel clean || fail "${PRODUCT_NAME} clean failed"
 
-  bazel build pkgloadingerror:all > "${TEST_log}" 2>&1 && fail "expected failure"
+  bazel build -k pkgloadingerror:all > "${TEST_log}" 2>&1 && fail "expected failure"
   expect_log "^ERROR: .*/bzl/bzl.bzl:1:5: name 'invalidsyntax' is not defined"
   expect_log "^WARNING: Target pattern parsing failed."
   expect_log "^INFO: Elapsed time"
 
-  bazel build --ui_event_filters=-error pkgloadingerror:all > "${TEST_log}" 2>&1 && fail "expected failure"
+  bazel clean || fail "${PRODUCT_NAME} clean failed"
+  bazel build -k --ui_event_filters=-error pkgloadingerror:all > "${TEST_log}" 2>&1 && fail "expected failure"
   expect_not_log "^ERROR: .*bzl/bzl.bzl:1:5: name 'invalidsyntax' is not defined"
   expect_log "^WARNING: Target pattern parsing failed."
   expect_log "^INFO: Elapsed time"
 
-  bazel build --ui_event_filters=info pkgloadingerror:all > "${TEST_log}" 2>&1 && fail "expected failure"
+  bazel clean || fail "${PRODUCT_NAME} clean failed"
+  bazel build -k --ui_event_filters=info pkgloadingerror:all > "${TEST_log}" 2>&1 && fail "expected failure"
   expect_not_log "^ERROR: .*/bzl/bzl.bzl:1:5: name 'invalidsyntax' is not defined"
   expect_not_log "^WARNING: Target pattern parsing failed."
   expect_log "^INFO: Elapsed time"
 
-  bazel build --ui_event_filters= pkgloadingerror:all > "${TEST_log}" 2>&1 && fail "expected failure"
+  bazel clean || fail "${PRODUCT_NAME} clean failed"
+  bazel build -k --ui_event_filters= pkgloadingerror:all > "${TEST_log}" 2>&1 && fail "expected failure"
   expect_not_log "^ERROR: .*/bzl/bzl.bzl:1:5: name 'invalidsyntax' is not defined"
   expect_not_log "^WARNING: Target pattern parsing failed."
   expect_not_log "^INFO: Elapsed time"
 
-  bazel build --ui_event_filters=-error --ui_event_filters=+error \
+  bazel clean || fail "${PRODUCT_NAME} clean failed"
+  bazel build -k --ui_event_filters=-error --ui_event_filters=+error \
       pkgloadingerror:all > "${TEST_log}" 2>&1 && fail "expected failure"
   expect_log "^ERROR: .*bzl/bzl.bzl:1:5: name 'invalidsyntax' is not defined"
   expect_log "^WARNING: Target pattern parsing failed."
   expect_log "^INFO: Elapsed time"
 
-  bazel build --ui_event_filters= --ui_event_filters=+info pkgloadingerror:all > "${TEST_log}" 2>&1 && fail "expected failure"
+  bazel clean || fail "${PRODUCT_NAME} clean failed"
+  bazel build -k --ui_event_filters= --ui_event_filters=+info pkgloadingerror:all > "${TEST_log}" 2>&1 && fail "expected failure"
   expect_not_log "^ERROR: .*/bzl/bzl.bzl:1:5: name 'invalidsyntax' is not defined"
   expect_not_log "^WARNING: Target pattern parsing failed."
   expect_log "^INFO: Elapsed time"
 
-  bazel build --ui_event_filters=warning --ui_event_filters=info --ui_event_filters=+error \
+  bazel clean || fail "${PRODUCT_NAME} clean failed"
+  bazel build -k --ui_event_filters=warning --ui_event_filters=info --ui_event_filters=+error \
       pkgloadingerror:all > "${TEST_log}" 2>&1 && fail "expected failure"
   expect_log "^ERROR: .*/bzl/bzl.bzl:1:5: name 'invalidsyntax' is not defined"
   expect_not_log "^WARNING: Target pattern parsing failed."
@@ -855,4 +861,133 @@ EOF
   expect_not_log "Build completed successfully"
 
 }
+function test_failure_summary_lists_failed_actions() {
+  mkdir -p summary
+  cat > summary/BUILD <<'EOF'
+genrule(
+    name = "compile",
+    outs = ["compile.txt"],
+    cmd = "echo 'warning: unused variable' >&2; echo 'main.cc:3:12: error: expected semicolon' >&2; exit 1",
+)
+genrule(
+    name = "gen",
+    outs = ["gen.txt"],
+    cmd = "echo 'warning: something benign' >&2; echo 'tool: fatal: input config.yaml not found' >&2; exit 1",
+)
+EOF
+  bazel build --keep_going --curses=no --color=no //summary:all >$TEST_log 2>&1 \
+    && fail "expected failure"
+  expect_log '^ERROR: 2 actions failed:$'
+  expect_log '^  //summary:compile: Executing genrule //summary:compile (exit code 1)$'
+  expect_log '^      main.cc:3:12: error: expected semicolon$'
+  expect_log '^  //summary:gen: Executing genrule //summary:gen (exit code 1)$'
+  expect_log '^      tool: fatal: input config.yaml not found$'
+  # The summary is the last thing printed before the final build status.
+  local summary_line
+  local status_line
+  summary_line=$(grep -n '^ERROR: 2 actions failed:$' "$TEST_log" | cut -d: -f1)
+  status_line=$(grep -n '^ERROR: Build did NOT complete successfully' "$TEST_log" | cut -d: -f1)
+  [[ "$summary_line" -lt "$status_line" ]] \
+    || fail "expected the failure summary right before the build status"
+}
+
+function test_failure_summary_lists_failed_repository_fetches() {
+  mkdir -p uses_broken
+  cat > uses_broken/fail_repo.bzl <<'EOF'
+def _impl(rctx):
+    fail("no mirror reachable")
+
+fail_repo = repository_rule(implementation = _impl)
+EOF
+  cat > uses_broken/BUILD <<'EOF'
+filegroup(
+    name = "uses_broken",
+    srcs = ["@broken//:file"],
+)
+EOF
+  cp MODULE.bazel MODULE.bazel.orig
+  cat >> MODULE.bazel <<'EOF'
+fail_repo = use_repo_rule("//uses_broken:fail_repo.bzl", "fail_repo")
+fail_repo(name = "broken")
+EOF
+  if bazel build --curses=no --color=no //uses_broken >$TEST_log 2>&1; then
+    mv MODULE.bazel.orig MODULE.bazel
+    fail "expected failure"
+  fi
+  mv MODULE.bazel.orig MODULE.bazel
+  expect_log '^ERROR: 1 repository fetch failed:$'
+  expect_log '^  @@+fail_repo+broken: Fetching repository$'
+  expect_log '^      no mirror reachable$'
+}
+
+function test_failure_summary_lists_download_causes_per_url() {
+  mkdir -p uses_unreachable
+  cat > uses_unreachable/BUILD <<'EOF'
+filegroup(
+    name = "uses_unreachable",
+    srcs = ["@unreachable//:file"],
+)
+EOF
+  cp MODULE.bazel MODULE.bazel.orig
+  cat >> MODULE.bazel <<'EOF'
+http_archive = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
+http_archive(
+    name = "unreachable",
+    urls = [
+        "file:///nonexistent/mirror1/archive.tar.gz",
+        "file:///nonexistent/mirror2/archive.tar.gz",
+    ],
+    sha256 = "0000000000000000000000000000000000000000000000000000000000000000",
+)
+EOF
+  if bazel build --curses=no --color=no //uses_unreachable >$TEST_log 2>&1; then
+    mv MODULE.bazel.orig MODULE.bazel
+    fail "expected failure"
+  fi
+  mv MODULE.bazel.orig MODULE.bazel
+  # Every layer states the cause per URL, without Java class names or temporary paths.
+  expect_log '^Error in download_and_extract: Error downloading archive.tar.gz from all 2 URLs:$'
+  expect_log '^  file:///nonexistent/mirror1/archive.tar.gz: /nonexistent/mirror1/archive.tar.gz'
+  expect_not_log 'java.io.IOException'
+  expect_not_log 'AlreadyReportedRepositoryAccessException'
+  expect_not_log 'Error downloading .* to /'
+  expect_log '^ERROR: 1 repository fetch failed:$'
+  expect_log '^  @@+http_archive+unreachable: Fetching repository$'
+  expect_log '^      Error downloading archive.tar.gz from all 2 URLs:$'
+  expect_log '^        file:///nonexistent/mirror1/archive.tar.gz: /nonexistent/mirror1/archive.tar.gz'
+  expect_log '^        file:///nonexistent/mirror2/archive.tar.gz: /nonexistent/mirror2/archive.tar.gz'
+}
+
+function test_failure_summary_states_hash_mismatch() {
+  mkdir -p uses_mismatch
+  cat > uses_mismatch/BUILD <<'EOF'
+filegroup(
+    name = "uses_mismatch",
+    srcs = ["@mismatch//:file"],
+)
+EOF
+  echo "not the expected content" > uses_mismatch/archive.tar.gz
+  local wanted="0000000000000000000000000000000000000000000000000000000000000000"
+  cp MODULE.bazel MODULE.bazel.orig
+  cat >> MODULE.bazel <<EOF
+http_archive = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
+http_archive(
+    name = "mismatch",
+    urls = ["file://$PWD/uses_mismatch/archive.tar.gz"],
+    sha256 = "$wanted",
+)
+EOF
+  if bazel build --curses=no --color=no //uses_mismatch >$TEST_log 2>&1; then
+    mv MODULE.bazel.orig MODULE.bazel
+    fail "expected failure"
+  fi
+  mv MODULE.bazel.orig MODULE.bazel
+  local cause="Error downloading file://$PWD/uses_mismatch/archive.tar.gz: Checksum was [0-9a-f]\{64\} but wanted $wanted"
+  expect_log "^Error in download_and_extract: $cause\$"
+  expect_not_log 'java.io.IOException'
+  expect_log '^ERROR: 1 repository fetch failed:$'
+  expect_log '^  @@+http_archive+mismatch: Fetching repository$'
+  expect_log "^      $cause\$"
+}
+
 run_suite "Integration tests for ${PRODUCT_NAME}'s UI"

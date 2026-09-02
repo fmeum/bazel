@@ -96,6 +96,7 @@ cc_binary(
         ":combiners",
         ":options",
         ":output_jar",
+        "//src/main/cpp/util:strings",
         "@zlib",
     ],
 )
@@ -117,6 +118,7 @@ cc_binary(
         ":desugar_checking",
         ":options",
         ":output_jar",
+        "//src/main/cpp/util:strings",
         "@zlib",
     ],
 )
@@ -138,6 +140,7 @@ cc_test(
         ":combiners",
         ":input_jar",
         ":test_util",
+        "@com_google_googletest//:gtest",
         "@com_google_googletest//:gtest_main",
         "@zlib",
     ],
@@ -156,6 +159,7 @@ cc_test(
         ":combiners",
         ":input_jar",
         ":test_util",
+        "@com_google_googletest//:gtest",
         "@com_google_googletest//:gtest_main",
         "@rules_cc//cc/runfiles",
     ],
@@ -172,6 +176,7 @@ cc_test(
         ":combiners",
         ":desugar_checking",
         ":input_jar",
+        "@com_google_googletest//:gtest",
         "@com_google_googletest//:gtest_main",
         "@zlib",
     ],
@@ -188,7 +193,9 @@ cc_test(
     deps = [
         ":input_jar",
         ":test_util",
-        "//src/main/cpp/util",
+        "//src/main/cpp/util:filesystem",
+        "//src/main/cpp/util:strings",
+        "@com_google_googletest//:gtest",
         "@com_google_googletest//:gtest_main",
     ],
 )
@@ -205,7 +212,9 @@ cc_test(
     deps = [
         ":input_jar",
         ":test_util",
-        "//src/main/cpp/util",
+        "//src/main/cpp/util:filesystem",
+        "//src/main/cpp/util:strings",
+        "@com_google_googletest//:gtest",
         "@com_google_googletest//:gtest_main",
     ],
 )
@@ -228,6 +237,7 @@ cc_test(
     deps = [
         ":input_jar",
         ":test_util",
+        "@com_google_googletest//:gtest",
         "@com_google_googletest//:gtest_main",
     ],
 )
@@ -244,6 +254,7 @@ cc_test(
     deps = [
         ":input_jar",
         ":test_util",
+        "@com_google_googletest//:gtest",
         "@com_google_googletest//:gtest_main",
     ],
 )
@@ -256,21 +267,16 @@ cc_test(
     deps = [
         ":input_jar",
         ":test_util",
+        "@com_google_googletest//:gtest",
         "@com_google_googletest//:gtest_main",
     ],
 )
 
 cc_test(
     name = "options_test",
-    srcs = [
-        "options.h",
-        "options_test.cc",
-    ],
+    srcs = ["options_test.cc"],
     deps = [
         ":options",
-        ":token_stream",
-        "//src/main/cpp/util",
-        "@abseil-cpp//absl/container:flat_hash_set",
         "@com_google_googletest//:gtest_main",
     ],
 )
@@ -313,7 +319,7 @@ cc_test(
         ":output_jar",
         ":port",
         ":test_util",
-        "//src/main/cpp/util",
+        "//src/main/cpp/util:filesystem",
         "@abseil-cpp//absl/strings",
         "@com_google_googletest//:gtest_main",
     ],
@@ -327,6 +333,8 @@ cc_test(
     deps = [
         ":test_util",
         ":token_stream",
+        "//src/main/cpp/util:filesystem",
+        "@com_google_googletest//:gtest",
         "@com_google_googletest//:gtest_main",
     ],
 )
@@ -344,6 +352,7 @@ cc_test(
     deps = [
         ":input_jar",
         ":test_util",
+        "@com_google_googletest//:gtest",
         "@com_google_googletest//:gtest_main",
         "@zlib",
     ],
@@ -357,6 +366,7 @@ cc_test(
         ":zip_headers",
     ],
     deps = [
+        "@com_google_googletest//:gtest",
         "@com_google_googletest//:gtest_main",
     ],
 )
@@ -368,6 +378,7 @@ cc_test(
         ":zlib_interface",
     ],
     deps = [
+        "@com_google_googletest//:gtest",
         "@com_google_googletest//:gtest_main",
         "@zlib",
     ],
@@ -450,7 +461,7 @@ cc_library(
     visibility = ["//visibility:private"],
     deps = [
         ":diag",
-        "//src/main/cpp/util",
+        "//src/main/cpp/util:filesystem",  # buildcleaner: keep for windows
     ],
 )
 
@@ -471,10 +482,7 @@ cc_library(
 
 cc_library(
     name = "options",
-    srcs = [
-        "options.cc",
-        "options.h",
-    ],
+    srcs = ["options.cc"],
     hdrs = ["options.h"],
     deps = [
         ":diag",
@@ -498,7 +506,6 @@ cc_library(
         ":mapped_file",
         ":options",
         ":port",
-        "//src/main/cpp/util",
         "@abseil-cpp//absl/container:flat_hash_map",
         "@abseil-cpp//absl/strings",
         "@re2",
@@ -512,7 +519,9 @@ cc_library(
     srcs = ["test_util.cc"],
     hdrs = ["test_util.h"],
     deps = [
-        "//src/main/cpp/util",
+        "//src/main/cpp/util:filesystem",
+        "//src/main/cpp/util:strings",
+        "@com_google_googletest//:gtest",
         "@com_google_googletest//:gtest_main",
         "@rules_cc//cc/runfiles",
     ],
@@ -524,7 +533,7 @@ cc_library(
     deps = [
         ":diag",
         ":mapped_file",
-        "//src/main/cpp/util",
+        "//src/main/cpp/util:filesystem",
         "@abseil-cpp//absl/container:flat_hash_set",
     ],
 )

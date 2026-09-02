@@ -21,10 +21,13 @@ import static org.mockito.Mockito.mock;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.eventbus.EventBus;
+import com.google.devtools.build.lib.actions.ActionExecutedEvent;
+import com.google.devtools.build.lib.actions.ActionExecutedEvent.ErrorTiming;
 import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.actions.ArtifactRoot;
 import com.google.devtools.build.lib.actions.ArtifactRoot.RootType;
 import com.google.devtools.build.lib.actions.RunningActionEvent;
+import com.google.devtools.build.lib.actions.SpawnResult;
 import com.google.devtools.build.lib.actions.util.ActionsTestUtil;
 import com.google.devtools.build.lib.actions.util.ActionsTestUtil.NullAction;
 import com.google.devtools.build.lib.analysis.AnalysisPhaseCompleteEvent;
@@ -34,15 +37,22 @@ import com.google.devtools.build.lib.buildtool.buildevent.BuildCompleteEvent;
 import com.google.devtools.build.lib.buildtool.buildevent.BuildStartingEvent;
 import com.google.devtools.build.lib.buildtool.buildevent.MainRepoMappingComputationStartingEvent;
 import com.google.devtools.build.lib.cmdline.RepositoryMapping;
+import com.google.devtools.build.lib.cmdline.RepositoryName;
 import com.google.devtools.build.lib.events.Event;
 import com.google.devtools.build.lib.events.EventKind;
+import com.google.devtools.build.lib.exec.SpawnExecException;
 import com.google.devtools.build.lib.pkgcache.LoadingPhaseCompleteEvent;
+import com.google.devtools.build.lib.repository.RepositoryFailedEvent;
 import com.google.devtools.build.lib.runtime.UiOptions.UseCurses;
+import com.google.devtools.build.lib.server.FailureDetails;
+import com.google.devtools.build.lib.server.FailureDetails.FailureDetail;
 import com.google.devtools.build.lib.server.TerminalSizeMonitor;
 import com.google.devtools.build.lib.testutil.ManualClock;
 import com.google.devtools.build.lib.util.DetailedExitCode;
 import com.google.devtools.build.lib.util.io.OutErr;
 import com.google.devtools.build.lib.vfs.DigestHashFunction;
+import com.google.devtools.build.lib.vfs.FileSystemUtils;
+import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.build.lib.vfs.inmemoryfs.InMemoryFileSystem;
 import com.google.devtools.common.options.Options;
 import com.google.testing.junit.testparameterinjector.TestParameter;
@@ -52,6 +62,7 @@ import java.io.OutputStream;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import net.starlark.java.syntax.Location;
 import org.junit.Before;
 import org.junit.Test;
 import org.junit.experimental.runners.Enclosed;
@@ -242,6 +253,56 @@ public class UiEventHandlerTest {
       output.assertFlushed("hello there!\n");
     }
 
+    @Test
+    public void handleActionExecutionError_outputsErrorHeaderThenSubprocessStderr() {
+      Event errorEvent =
+          Event.error(
+              Location.fromFileLineColumn("pkg/foo/BUILD.bazel", 10, 5),
+              "Action failed: command failed");
+      Event.ProcessOutput processOutput =
+          new Event.ProcessOutput() {
+            @Override
+            public String getStdOutPath() {
+              return "stdout.log";
+            }
+
+            @Override
+            public long getStdOutSize() {
+              return 0;
+            }
+
+            @Override
+            public byte[] getStdOut() {
+              return new byte[0];
+            }
+
+            @Override
+            public String getStdErrPath() {
+              return "stderr.log";
+            }
+
+            @Override
+            public long getStdErrSize() {
+              return "compiler error: syntax error\n".length();
+            }
+
+            @Override
+            public byte[] getStdErr() {
+              return "compiler error: syntax error\n".getBytes(UTF_8);
+            }
+          };
+
+      uiEventHandler.handle(errorEvent.withProcessOutput(processOutput));
+
+      if (outputKind == EventKind.STDERR) {
+        output.assertFlushed(
+            "\033[31m\033[1mERROR: \033[0mpkg/foo/BUILD.bazel:10:5: Action failed: command"
+                + " failed"
+                + System.lineSeparator(),
+            "compiler error: syntax error\n");
+      }
+    }
+
     // This test only exercises progress bar code when testing stderr output, since we don't make
     // any assertions on stderr (where the progress bar is written) when testing stdout.
     @Test
@@ -288,6 +349,63 @@ public class UiEventHandlerTest {
     @Before
     public void createUiEventHandler() {
       createUiEventHandler(EventKind.STDERR);
+    }
+
+    @Test
+    public void buildComplete_printsFailureSummaryBeforeBuildStatus() throws Exception {
+      NullAction action = actionWithProgressMessage("Compiling foo.cc", "foo.o");
+      Artifact primaryOutput = action.getPrimaryOutput();
+      SpawnResult spawnResult =
+          new SpawnResult.Builder()
+              .setRunnerName("test")
+              .setStatus(SpawnResult.Status.NON_ZERO_EXIT)
+              .setExitCode(1)
+              .setFailureDetail(
+                  FailureDetail.newBuilder()
+                      .setMessage("spawn failed")
+                      .setSpawn(
+                          FailureDetails.Spawn.newBuilder()
+                              .setCode(FailureDetails.Spawn.Code.NON_ZERO_EXIT))
+                      .build())
+              .build();
+      Path stderr = primaryOutput.getPath().getParentDirectory().getRelative("stderr-1");
+      stderr.getParentDirectory().createDirectoryAndParents();
+      FileSystemUtils.writeContent(stderr, UTF_8, "foo.cc:3:12: error: expected ';'\n");
+      uiEventHandler.actionExecuted(
+          new ActionExecutedEvent(
+              primaryOutput.getExecPath(),
+              action,
+              new SpawnExecException("bash failed", spawnResult, /* forciblyRunRemotely= */ false)
+                  .toActionExecutionException(action),
+              primaryOutput.getPath(),
+              primaryOutput,
+              /* primaryOutputMetadata= */ null,
+              /* stdout= */ null,
+              stderr,
+              ErrorTiming.AFTER_EXECUTION,
+              /* startTime= */ null,
+              /* endTime= */ null));
+      uiEventHandler.repositoryFailed(
+          new RepositoryFailedEvent(
+              RepositoryName.createUnvalidated("+http_archive+foo"),
+              """
+              Error downloading x.tar.gz from all 2 URLs:
+                https://a.example/x.tar.gz: GET returned 404 Not Found
+                https://b.example/x.tar.gz: Unknown host: b.example\
+              """));
+
+      uiEventHandler.buildComplete(BUILD_COMPLETE_EVENT);
+
+      output.assertFlushedInOrder(
+          "\033[31m\033[1mERROR: \033[0m1 action and 1 repository fetch failed:\n"
+              + "  //null/action:owner: Compiling foo.cc (exit code 1)\n"
+              + "      foo.cc:3:12: error: expected ';'\n"
+              + "  @@+http_archive+foo: Fetching repository\n"
+              + "      Error downloading x.tar.gz from all 2 URLs:\n"
+              + "        https://a.example/x.tar.gz: GET returned 404 Not Found\n"
+              + "        https://b.example/x.tar.gz: Unknown host: b.example"
+              + System.lineSeparator(),
+          BUILD_DID_NOT_COMPLETE_MESSAGE);
     }
 
     @Test
@@ -424,6 +542,11 @@ public class UiEventHandlerTest {
     private void assertFlushed(String... messages) {
       assertThat(writtenSinceFlush).isEmpty();
       assertThat(flushed).containsExactlyElementsIn(messages);
+    }
+
+    private void assertFlushedInOrder(String... messages) {
+      assertThat(writtenSinceFlush).isEmpty();
+      assertThat(flushed).containsExactlyElementsIn(messages).inOrder();
     }
   }
 }
