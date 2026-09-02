@@ -551,6 +551,18 @@ public class HttpDownloaderTest {
           assertThat(suppressed).isInstanceOf(IOException.class);
           assertThat(suppressed).hasCauseThat().isInstanceOf(SocketTimeoutException.class);
         }
+        // The message states why each URL failed, without Java class names or the destination.
+        assertThat(expected)
+            .hasMessageThat()
+            .startsWith(
+                "Error downloading "
+                    + outputFile.getBaseName()
+                    + " from all 2 URLs:\n  "
+                    + urls.get(0)
+                    + ": ");
+        assertThat(expected).hasMessageThat().contains("\n  " + urls.get(1) + ": ");
+        assertThat(expected).hasMessageThat().doesNotContain("Exception");
+        assertThat(expected).hasMessageThat().doesNotContain(outputFile.getPathString());
       }
     }
   }
@@ -911,6 +923,55 @@ public class HttpDownloaderTest {
                       eventHandler,
                       ImmutableMap.of()));
       assertThat(e).hasMessageThat().contains("Checksum was");
+    }
+  }
+
+  @Test
+  public void download_checksumMismatch_statesUrlAndBothHashes() throws Exception {
+    try (ServerSocket server = new ServerSocket(0, 1, InetAddress.getByName(null))) {
+      @SuppressWarnings("unused")
+      Future<?> possiblyIgnoredError =
+          executor.submit(
+              () -> {
+                try (Socket socket = server.accept()) {
+                  readHttpRequest(socket.getInputStream());
+                  sendLines(
+                      socket,
+                      "HTTP/1.1 200 OK",
+                      "Date: Fri, 31 Dec 1999 23:59:59 GMT",
+                      "Connection: close",
+                      "Content-Type: text/plain",
+                      "Content-Length: 9",
+                      "",
+                      "malicious");
+                }
+                return null;
+              });
+      URI url = URI.create(String.format("http://localhost:%d/foo", server.getLocalPort()));
+      String wanted = Hashing.sha256().hashString("hello", UTF_8).toString();
+      String actual = Hashing.sha256().hashString("malicious", UTF_8).toString();
+
+      IOException e =
+          assertThrows(
+              IOException.class,
+              () ->
+                  download(
+                      downloadManager,
+                      ImmutableList.of(url),
+                      ImmutableMap.of(),
+                      ImmutableMap.of(),
+                      Optional.of(Checksum.fromString(DownloadCache.KeyType.SHA256, wanted)),
+                      "testCanonicalId",
+                      Optional.empty(),
+                      fs.getPath(workingDir.newFile().getAbsolutePath()),
+                      ImmutableMap.of(),
+                      "testRepo"));
+
+      assertThat(e)
+          .hasMessageThat()
+          .isEqualTo(
+              String.format(
+                  "Error downloading %s: Checksum was %s but wanted %s", url, actual, wanted));
     }
   }
 

@@ -15,6 +15,7 @@
 package com.google.devtools.build.lib.bazel.repository.downloader;
 
 import static com.google.common.base.Preconditions.checkArgument;
+import static com.google.common.base.Preconditions.checkState;
 
 import com.google.auth.Credentials;
 import com.google.common.collect.ImmutableList;
@@ -89,7 +90,7 @@ public class HttpDownloader implements Downloader {
       throws IOException, InterruptedException {
     // Stream the payload straight to the destination file (without buffering a potentially large
     // archive in memory) and report progress to the CLI. On total failure, wrap every per-URL
-    // failure in a single new IOException naming the URLs and the destination.
+    // failure in a single new IOException stating why each URL failed.
     var unused =
         this.<Void>downloadFromUrls(
             urls,
@@ -195,7 +196,11 @@ public class HttpDownloader implements Downloader {
         // treat them as ordinary IOExceptions and fall back to the next URL.
         ioExceptions =
             recordFailure(
-                ioExceptions, new IOException(e), url, eventHandler, reportProgressEvents);
+                ioExceptions,
+                new IOException(e.getMessage(), e),
+                url,
+                eventHandler,
+                reportProgressEvents);
       } catch (InterruptedIOException e) {
         throw new InterruptedException(e.getMessage());
       } catch (IOException e) {
@@ -228,37 +233,49 @@ public class HttpDownloader implements Downloader {
     ioExceptions.add(failure);
     if (reportProgressEvents) {
       eventHandler.handle(
-          Event.warn(
-              "Download from "
-                  + url
-                  + " failed: "
-                  + failure.getClass()
-                  + " "
-                  + failure.getMessage()));
+          Event.warn("Download from " + url + " failed: " + describeFailure(failure)));
     }
     return ioExceptions;
   }
 
   /**
    * Builds the exception thrown by {@link #download} when every URL failed: a new {@link
-   * IOException} naming the URLs and destination, with each per-URL failure attached as a
-   * suppressed exception.
+   * IOException} whose message states, for each URL, why it failed, with each per-URL failure
+   * attached as a suppressed exception. The destination is a temporary file in most cases and only
+   * contributes its name.
    */
   private static IOException aggregatedDownloadException(
       List<URI> urls, Path destination, List<IOException> ioExceptions) {
-    IOException exception =
-        new IOException(
-            "Error downloading "
-                + urls
-                + " to "
-                + destination
-                + (ioExceptions.isEmpty()
-                    ? ""
-                    : ": " + Iterables.getLast(ioExceptions).getMessage()));
+    checkState(ioExceptions.size() == urls.size(), "%s vs. %s", ioExceptions, urls);
+    StringBuilder message = new StringBuilder("Error downloading ");
+    if (urls.isEmpty()) {
+      message.append(destination.getBaseName()).append(": no URLs to download from");
+    } else if (urls.size() == 1) {
+      message.append(urls.get(0)).append(": ").append(describeFailure(ioExceptions.get(0)));
+    } else {
+      message
+          .append(destination.getBaseName())
+          .append(" from all ")
+          .append(urls.size())
+          .append(" URLs:");
+      for (int i = 0; i < urls.size(); i++) {
+        message
+            .append("\n  ")
+            .append(urls.get(i))
+            .append(": ")
+            .append(describeFailure(ioExceptions.get(i)));
+      }
+    }
+    IOException exception = new IOException(message.toString());
     for (IOException cause : ioExceptions) {
       exception.addSuppressed(cause);
     }
     return exception;
+  }
+
+  /** Describes why a download attempt failed, without the class name of its exception. */
+  private static String describeFailure(IOException failure) {
+    return failure.getMessage() != null ? failure.getMessage() : failure.getClass().getSimpleName();
   }
 
   /**

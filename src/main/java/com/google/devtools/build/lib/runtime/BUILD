@@ -375,7 +375,10 @@ java_library(
 
 java_library(
     name = "ui_event_handler",
-    srcs = ["UiEventHandler.java"],
+    srcs = [
+        "FailureSummary.java",
+        "UiEventHandler.java",
+    ],
     deps = [
         ":after_command_event",
         ":crash_event",
@@ -392,8 +395,11 @@ java_library(
         "//src/main/java/com/google/devtools/build/lib/buildeventstream",
         "//src/main/java/com/google/devtools/build/lib/buildtool/buildevent",
         "//src/main/java/com/google/devtools/build/lib/clock",
+        "//src/main/java/com/google/devtools/build/lib/cmdline",
         "//src/main/java/com/google/devtools/build/lib/events",
+        "//src/main/java/com/google/devtools/build/lib/exec:spawn_exec_exception",
         "//src/main/java/com/google/devtools/build/lib/pkgcache",
+        "//src/main/java/com/google/devtools/build/lib/repository:repository_events",
         "//src/main/java/com/google/devtools/build/lib/server:terminal_size_monitor",
         "//src/main/java/com/google/devtools/build/lib/skyframe:configuration_phase_started_event",
         "//src/main/java/com/google/devtools/build/lib/skyframe:loading_phase_started_event",
@@ -410,6 +416,7 @@ java_library(
         "//third_party/java/guava:collect",
         "//third_party/java/guava:concurrent",
         "//third_party/java/guava:eventbus",
+        "//third_party/java/guava:io",
         "//third_party/java/guava:primitives",
         "//third_party/java/jsr305_annotations",
     ],
