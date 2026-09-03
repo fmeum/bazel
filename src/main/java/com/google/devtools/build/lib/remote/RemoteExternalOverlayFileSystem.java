@@ -208,7 +208,7 @@ public final class RemoteExternalOverlayFileSystem extends FileSystem
   public boolean injectRemoteRepo(RepositoryName repo, Tree remoteContents, String markerFile)
       throws IOException, InterruptedException {
     var repoDir = externalDirectory.getChild(repo.getName());
-    deleteTree(repoDir);
+    externalFs.deleteTree(repoDir);
     materializedRepos.remove(repo.getName());
     var unused = delete(externalDirectory.getChild(repo.getMarkerFileName()));
     var childMap =
@@ -227,6 +227,9 @@ public final class RemoteExternalOverlayFileSystem extends FileSystem
         filesToPrefetch::add,
         symlinksToPrefetch::add,
         Instant.now().plus(remoteCacheTtl));
+    // This has to happen before prefetching so that the prefetcher sees a native file system state
+    // in which every remaining file may still be valid.
+    reconcileNativeRepoDir(repoDir);
     addSymlinkTargetsToPrefetch(symlinksToPrefetch, filesToPrefetch);
     try {
       // TODO: This prefetches a large number of small files. Investigate whether BatchReadBlobs
@@ -247,6 +250,65 @@ public final class RemoteExternalOverlayFileSystem extends FileSystem
     // materialized. This doubles as a presence marker for the in-memory repo contents.
     markerFileContents.put(repo.getName(), markerFile);
     return true;
+  }
+
+  /**
+   * Removes every entry below the repo directory on the native file system that can't match the
+   * freshly injected in-memory contents and keeps all others.
+   *
+   * <p>Entries on the native file system at this point were materialized by a previous injection
+   * of the repo, possibly during a previous server lifetime. Keeping them avoids downloading them
+   * again and preserves references to them from outside the overlay, such as the runfiles symlinks
+   * of previously built binaries.
+   *
+   * <p>A kept regular file is never trusted without verification: Bazel reads the in-memory
+   * contents and every use of the native file by an action goes through {@link
+   * AbstractActionInputPrefetcher}, which compares its size and digest to the in-memory metadata
+   * first. The prefetch in {@link #injectRemoteRepo} does the same for the files that are read
+   * directly from the native file system. It is thus sufficient to remove entries that can't match:
+   * those without a counterpart in the injected contents or with a different type, size or symlink
+   * target.
+   */
+  private void reconcileNativeRepoDir(PathFragment repoDir) throws IOException {
+    var nativeRepoDir = nativeFs.getPath(repoDir);
+    var nativeStatus = nativeRepoDir.statIfFound(Symlinks.NOFOLLOW);
+    if (nativeStatus == null) {
+      return;
+    }
+    if (!nativeStatus.isDirectory()) {
+      // The repo directory may be a symlink, e.g. into the local repo contents cache.
+      nativeRepoDir.deleteTree();
+      return;
+    }
+    reconcileNativeDir(nativeRepoDir, externalFs.getPath(repoDir));
+  }
+
+  private static void reconcileNativeDir(Path nativeDir, Path injectedDir) throws IOException {
+    for (var nativeChild : nativeDir.getDirectoryEntries()) {
+      var injectedChild = injectedDir.getChild(nativeChild.getBaseName());
+      var nativeStatus = nativeChild.stat(Symlinks.NOFOLLOW);
+      var injectedStatus = injectedChild.statIfFound(Symlinks.NOFOLLOW);
+      boolean matches;
+      if (injectedStatus == null) {
+        matches = false;
+      } else if (nativeStatus.isDirectory()) {
+        matches = injectedStatus.isDirectory();
+      } else if (nativeStatus.isSymbolicLink()) {
+        matches =
+            injectedStatus.isSymbolicLink()
+                && nativeChild.readSymbolicLink().equals(injectedChild.readSymbolicLink());
+      } else {
+        matches =
+            !nativeStatus.isSpecialFile()
+                && injectedStatus.isFile()
+                && nativeStatus.getSize() == injectedStatus.getSize();
+      }
+      if (!matches) {
+        nativeChild.deleteTree();
+      } else if (nativeStatus.isDirectory()) {
+        reconcileNativeDir(nativeChild, injectedChild);
+      }
+    }
   }
 
   /**

@@ -18,7 +18,9 @@ import static org.junit.Assert.assertThrows;
 
 import build.bazel.remote.execution.v2.Digest;
 import build.bazel.remote.execution.v2.Directory;
+import build.bazel.remote.execution.v2.DirectoryNode;
 import build.bazel.remote.execution.v2.FileNode;
+import build.bazel.remote.execution.v2.SymlinkNode;
 import build.bazel.remote.execution.v2.Tree;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Maps;
@@ -43,6 +45,7 @@ import com.google.devtools.build.lib.vfs.FileSystemUtils;
 import com.google.devtools.build.lib.vfs.OutputPermissions;
 import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.build.lib.vfs.PathFragment;
+import com.google.devtools.build.lib.vfs.Symlinks;
 import com.google.devtools.build.lib.vfs.SyscallCache;
 import com.google.devtools.build.lib.vfs.inmemoryfs.InMemoryFileSystem;
 import java.io.IOException;
@@ -213,6 +216,168 @@ public class RemoteActionInputFetcherTest extends ActionInputPrefetcherTestBase 
               overlayFs.injectRemoteRepo(
                   RepositoryName.createUnvalidated("repo"), tree, "MARKER\n"));
     }
+  }
+
+  @Test
+  public void injectRemoteRepo_reinjection_keepsMatchingNativeEntries() throws Exception {
+    PathFragment externalDir = PathFragment.create("/output_base/external");
+    RepositoryName repo = RepositoryName.createUnvalidated("repo");
+    Path repoDir = fs.getPath("/output_base/external/repo");
+    Map<HashCode, byte[]> cas = new HashMap<>();
+    Digest defsDigest = addBlob(cas, "x = 1\n");
+    Digest aDigest = addBlob(cas, "aaa");
+    Digest bDigest = addBlob(cas, "bbb");
+    Digest cDigest = addBlob(cas, "ccc");
+    Digest eDigest = addBlob(cas, "eee");
+    Directory sub = Directory.newBuilder().addFiles(fileNode("c.txt", cDigest)).build();
+    Directory d = Directory.newBuilder().addFiles(fileNode("e.txt", eDigest)).build();
+    Tree tree =
+        Tree.newBuilder()
+            .setRoot(
+                Directory.newBuilder()
+                    .addFiles(fileNode("defs.bzl", defsDigest))
+                    .addFiles(fileNode("a.txt", aDigest))
+                    .addFiles(fileNode("b.txt", bDigest))
+                    .addSymlinks(SymlinkNode.newBuilder().setName("link").setTarget("a.txt"))
+                    .addDirectories(dirNode("sub", sub))
+                    .addDirectories(dirNode("d", d)))
+            .addChildren(sub)
+            .addChildren(d)
+            .build();
+
+    // Inject the repo and materialize all of it, as if local actions had consumed its files.
+    RemoteExternalOverlayFileSystem overlayFs = newOverlayFs(externalDir, cas);
+    assertThat(overlayFs.injectRemoteRepo(repo, tree, "MARKER\n")).isTrue();
+    overlayFs.ensureSubtreeMaterialized(repoDir.asFragment());
+    overlayFs.afterCommand();
+    assertThat(readNative(repoDir, "b.txt")).isEqualTo("bbb");
+    assertThat(readNative(repoDir, "sub/c.txt")).isEqualTo("ccc");
+    assertThat(repoDir.getChild("link").readSymbolicLink()).isEqualTo(PathFragment.create("a.txt"));
+    // Add entries that no injection would create.
+    FileSystemUtils.writeContent(repoDir.getChild("extra.txt"), StandardCharsets.UTF_8, "extra");
+    repoDir.getChild("extradir").createDirectory();
+    FileSystemUtils.writeContent(
+        repoDir.getRelative("extradir/f.txt"), StandardCharsets.UTF_8, "f");
+
+    // A new server injects changed contents: b.txt has a different size, sub is a file now, link
+    // points elsewhere and n.txt is new. defs.bzl, a.txt and d/e.txt are unchanged.
+    Digest bNewDigest = digestUtil.compute("bbbb".getBytes(StandardCharsets.UTF_8));
+    Digest subDigest = digestUtil.compute("sub".getBytes(StandardCharsets.UTF_8));
+    Digest nDigest = digestUtil.compute("nnn".getBytes(StandardCharsets.UTF_8));
+    Tree newTree =
+        Tree.newBuilder()
+            .setRoot(
+                Directory.newBuilder()
+                    .addFiles(fileNode("defs.bzl", defsDigest))
+                    .addFiles(fileNode("a.txt", aDigest))
+                    .addFiles(fileNode("b.txt", bNewDigest))
+                    .addFiles(fileNode("sub", subDigest))
+                    .addFiles(fileNode("n.txt", nDigest))
+                    .addSymlinks(SymlinkNode.newBuilder().setName("link").setTarget("b.txt"))
+                    .addDirectories(dirNode("d", d)))
+            .addChildren(d)
+            .build();
+    // The empty CAS ensures that the injection can only succeed if the previously materialized
+    // defs.bzl is verified and reused rather than prefetched again.
+    RemoteExternalOverlayFileSystem newOverlayFs = newOverlayFs(externalDir, new HashMap<>());
+    assertThat(newOverlayFs.injectRemoteRepo(repo, newTree, "MARKER\n")).isTrue();
+    newOverlayFs.afterCommand();
+
+    assertThat(readNative(repoDir, "defs.bzl")).isEqualTo("x = 1\n");
+    assertThat(readNative(repoDir, "a.txt")).isEqualTo("aaa");
+    assertThat(readNative(repoDir, "d/e.txt")).isEqualTo("eee");
+    assertThat(repoDir.getChild("b.txt").exists(Symlinks.NOFOLLOW)).isFalse();
+    assertThat(repoDir.getChild("sub").exists(Symlinks.NOFOLLOW)).isFalse();
+    assertThat(repoDir.getChild("link").exists(Symlinks.NOFOLLOW)).isFalse();
+    assertThat(repoDir.getChild("n.txt").exists(Symlinks.NOFOLLOW)).isFalse();
+    assertThat(repoDir.getChild("extra.txt").exists(Symlinks.NOFOLLOW)).isFalse();
+    assertThat(repoDir.getChild("extradir").exists(Symlinks.NOFOLLOW)).isFalse();
+    // The overlay serves the new contents regardless of what was kept.
+    Path overlaidRepoDir = newOverlayFs.getPath(repoDir.asFragment());
+    assertThat(overlaidRepoDir.getChild("b.txt").getFileSize()).isEqualTo(4);
+    assertThat(overlaidRepoDir.getChild("sub").isFile()).isTrue();
+    assertThat(overlaidRepoDir.getChild("n.txt").getFileSize()).isEqualTo(3);
+    assertThat(overlaidRepoDir.getChild("link").readSymbolicLink())
+        .isEqualTo(PathFragment.create("b.txt"));
+  }
+
+  @Test
+  public void injectRemoteRepo_repoDirIsSymlink_replaced() throws Exception {
+    PathFragment externalDir = PathFragment.create("/output_base/external");
+    RepositoryName repo = RepositoryName.createUnvalidated("repo");
+    Path repoDir = fs.getPath("/output_base/external/repo");
+    // The repo directory may be a symlink into the local repo contents cache.
+    Path cacheDir = fs.getPath("/cache/repo");
+    cacheDir.createDirectoryAndParents();
+    FileSystemUtils.writeContent(cacheDir.getChild("a.txt"), StandardCharsets.UTF_8, "aaa");
+    repoDir.getParentDirectory().createDirectoryAndParents();
+    repoDir.createSymbolicLink(cacheDir);
+    Tree tree =
+        Tree.newBuilder()
+            .setRoot(
+                Directory.newBuilder()
+                    .addFiles(
+                        fileNode(
+                            "a.txt", digestUtil.compute("aaa".getBytes(StandardCharsets.UTF_8)))))
+            .build();
+
+    RemoteExternalOverlayFileSystem overlayFs = newOverlayFs(externalDir, new HashMap<>());
+    assertThat(overlayFs.injectRemoteRepo(repo, tree, "MARKER\n")).isTrue();
+    overlayFs.afterCommand();
+
+    assertThat(repoDir.isSymbolicLink()).isFalse();
+    assertThat(repoDir.isDirectory(Symlinks.NOFOLLOW)).isTrue();
+    assertThat(repoDir.getChild("a.txt").exists(Symlinks.NOFOLLOW)).isFalse();
+    assertThat(readNative(cacheDir, "a.txt")).isEqualTo("aaa");
+  }
+
+  private RemoteExternalOverlayFileSystem newOverlayFs(
+      PathFragment externalDir, Map<HashCode, byte[]> cas) {
+    RemoteExternalOverlayFileSystem overlayFs =
+        new RemoteExternalOverlayFileSystem(externalDir, fs);
+    CombinedCache combinedCache = newCombinedCache(digestUtil, cas);
+    RemoteActionInputFetcher actionInputFetcher =
+        new RemoteActionInputFetcher(
+            new Reporter(new EventBusEventHandler(eventBus)),
+            "none",
+            "none",
+            combinedCache,
+            overlayFs.getPath(execRoot.getPathString()),
+            tempPathGenerator,
+            DUMMY_REMOTE_OUTPUT_CHECKER,
+            ActionOutputDirectoryHelper.createForTesting(),
+            OutputPermissions.READONLY);
+    overlayFs.beforeCommand(
+        combinedCache,
+        actionInputFetcher,
+        new Reporter(new EventBusEventHandler(eventBus)),
+        "none",
+        "none",
+        /* evaluator= */ null,
+        /* remoteCacheTtl= */ Duration.ofHours(1));
+    return overlayFs;
+  }
+
+  private Digest addBlob(Map<HashCode, byte[]> cas, String content) {
+    byte[] bytes = content.getBytes(StandardCharsets.UTF_8);
+    Digest digest = digestUtil.compute(bytes);
+    cas.put(HashCode.fromString(digest.getHash()), bytes);
+    return digest;
+  }
+
+  private static FileNode fileNode(String name, Digest digest) {
+    return FileNode.newBuilder().setName(name).setDigest(digest).build();
+  }
+
+  private DirectoryNode dirNode(String name, Directory directory) {
+    return DirectoryNode.newBuilder()
+        .setName(name)
+        .setDigest(digestUtil.compute(directory))
+        .build();
+  }
+
+  private static String readNative(Path repoDir, String relativePath) throws IOException {
+    return FileSystemUtils.readContent(repoDir.getRelative(relativePath), StandardCharsets.UTF_8);
   }
 
   @Test
