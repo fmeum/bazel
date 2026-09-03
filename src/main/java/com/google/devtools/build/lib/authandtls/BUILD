@@ -25,6 +25,7 @@ java_library(
     ),
     deps = [
         "//src/main/java/com/google/devtools/build/lib/unsafe:string",
+        "//src/main/java/com/google/devtools/build/lib/util:os",
         "//src/main/java/com/google/devtools/common/options",
         "//third_party/java/auth_kit",
         "//third_party/java/auto:auto_value",

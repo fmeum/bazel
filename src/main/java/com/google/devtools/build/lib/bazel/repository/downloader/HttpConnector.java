@@ -20,6 +20,7 @@ import com.google.common.base.Strings;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.io.ByteStreams;
+import com.google.devtools.build.lib.authandtls.TrustStore;
 import com.google.devtools.build.lib.analysis.BlazeVersionInfo;
 import com.google.devtools.build.lib.concurrent.ThreadSafety.ThreadSafe;
 import com.google.devtools.build.lib.events.Event;
@@ -41,7 +42,9 @@ import java.util.Locale;
 import java.util.Map;
 import javax.annotation.Nullable;
 import javax.annotation.WillClose;
+import javax.net.ssl.HttpsURLConnection;
 import javax.net.ssl.SSLException;
+import javax.net.ssl.SSLSocketFactory;
 
 /**
  * Class for establishing connections to HTTP servers for downloading files.
@@ -71,6 +74,26 @@ class HttpConnector {
   private final float timeoutScaling;
   private final int maxAttempts;
   private final Duration maxRetryTimeout;
+  private final TrustStore trustStore;
+
+  HttpConnector(
+      Locale locale,
+      EventHandler eventHandler,
+      ProxyHelper proxyHelper,
+      Sleeper sleeper,
+      float timeoutScaling,
+      int maxAttempts,
+      Duration maxRetryTimeout,
+      TrustStore trustStore) {
+    this.locale = locale;
+    this.eventHandler = eventHandler;
+    this.proxyHelper = proxyHelper;
+    this.sleeper = sleeper;
+    this.timeoutScaling = timeoutScaling;
+    this.maxAttempts = maxAttempts > 0 ? maxAttempts : MAX_ATTEMPTS;
+    this.maxRetryTimeout = maxRetryTimeout;
+    this.trustStore = trustStore;
+  }
 
   HttpConnector(
       Locale locale,
@@ -80,13 +103,15 @@ class HttpConnector {
       float timeoutScaling,
       int maxAttempts,
       Duration maxRetryTimeout) {
-    this.locale = locale;
-    this.eventHandler = eventHandler;
-    this.proxyHelper = proxyHelper;
-    this.sleeper = sleeper;
-    this.timeoutScaling = timeoutScaling;
-    this.maxAttempts = maxAttempts > 0 ? maxAttempts : MAX_ATTEMPTS;
-    this.maxRetryTimeout = maxRetryTimeout;
+    this(
+        locale,
+        eventHandler,
+        proxyHelper,
+        sleeper,
+        timeoutScaling,
+        maxAttempts,
+        maxRetryTimeout,
+        TrustStore.jvmDefault());
   }
 
   HttpConnector(
@@ -127,6 +152,10 @@ class HttpConnector {
       try {
         ProxyInfo proxyInfo = proxyHelper.createProxyIfNeeded(url);
         connection = (HttpURLConnection) url.toURL().openConnection(proxyInfo.proxy());
+        SSLSocketFactory sslSocketFactory = trustStore.socketFactory();
+        if (sslSocketFactory != null && connection instanceof HttpsURLConnection httpsConnection) {
+          httpsConnection.setSSLSocketFactory(sslSocketFactory);
+        }
         // For HTTP connections through authenticated proxies, set the Proxy-Authorization header.
         // For HTTPS, Java's HttpURLConnection handles CONNECT tunneling internally using the
         // Authenticator we set in ProxyHelper.
@@ -159,6 +188,7 @@ class HttpConnector {
         // to try and undo any IOException that doesn't appear to be a legitimate I/O exception.
         int code;
         try {
+          TrustStore.clearRejectedChain();
           connection.connect();
           code = connection.getResponseCode();
         } catch (FileNotFoundException ignored) {
@@ -170,7 +200,7 @@ class HttpConnector {
           if (e.getMessage() != null
               && (e.getMessage().contains("certificate")
                   || e.getMessage().contains("CertPathValidatorException"))) {
-            String message = "TLS error: " + e.getMessage();
+            String message = "TLS error: " + e.getMessage() + describeTrust();
             eventHandler.handle(Event.progress(message));
             IOException httpException = new UnrecoverableHttpException(message);
             httpException.addSuppressed(e);
@@ -304,6 +334,22 @@ class HttpConnector {
         throw e;
       }
     }
+  }
+
+  /**
+   * Explains what Bazel trusted and what the server actually presented, which is what turns a bare
+   * "PKIX path building failed" into something the user can act on.
+   */
+  private String describeTrust() {
+    StringBuilder message = new StringBuilder(". Bazel trusted ").append(trustStore.describe());
+    String rejectedChain = TrustStore.describeRejectedChain();
+    if (rejectedChain != null) {
+      message.append("; ").append(rejectedChain);
+    }
+    message.append(
+        ". Install that certificate authority in the system trust store, or pass"
+            + " --experimental_tls_ca_certificate=<path> to trust it directly");
+    return message.toString();
   }
 
   private String describeHttpResponse(HttpURLConnection connection) throws IOException {

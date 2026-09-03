@@ -29,6 +29,7 @@ import com.google.common.util.concurrent.ListenableFuture;
 import com.google.common.util.concurrent.MoreExecutors;
 import com.google.common.util.concurrent.SettableFuture;
 import com.google.devtools.build.lib.authandtls.AuthAndTLSOptions;
+import com.google.devtools.build.lib.authandtls.TrustStore;
 import com.google.devtools.build.lib.remote.RemoteRetrier;
 import com.google.devtools.build.lib.remote.common.ActionKey;
 import com.google.devtools.build.lib.remote.common.CacheNotFoundException;
@@ -99,6 +100,7 @@ import javax.annotation.Nullable;
 import javax.annotation.concurrent.GuardedBy;
 import javax.net.ssl.SSLEngine;
 import javax.net.ssl.SSLParameters;
+import javax.net.ssl.X509ExtendedTrustManager;
 
 /**
  * Implementation of {@link RemoteCacheClient} that can talk to a HTTP/1.1 backend.
@@ -164,7 +166,8 @@ public final class HttpCacheClient extends RemoteCacheClient {
       DigestUtil digestUtil,
       RemoteRetrier retrier,
       @Nullable final Credentials creds,
-      AuthAndTLSOptions authAndTlsOptions)
+      AuthAndTLSOptions authAndTlsOptions,
+      TrustStore trustStore)
       throws Exception {
     return new HttpCacheClient(
         NioEventLoopGroup::new,
@@ -178,6 +181,7 @@ public final class HttpCacheClient extends RemoteCacheClient {
         retrier,
         creds,
         authAndTlsOptions,
+        trustStore,
         null);
   }
 
@@ -191,7 +195,8 @@ public final class HttpCacheClient extends RemoteCacheClient {
       DigestUtil digestUtil,
       RemoteRetrier retrier,
       @Nullable final Credentials creds,
-      AuthAndTLSOptions authAndTlsOptions)
+      AuthAndTLSOptions authAndTlsOptions,
+      TrustStore trustStore)
       throws Exception {
 
     if (KQueue.isAvailable()) {
@@ -207,6 +212,7 @@ public final class HttpCacheClient extends RemoteCacheClient {
           retrier,
           creds,
           authAndTlsOptions,
+          trustStore,
           domainSocketAddress);
     } else if (Epoll.isAvailable()) {
       return new HttpCacheClient(
@@ -221,6 +227,7 @@ public final class HttpCacheClient extends RemoteCacheClient {
           retrier,
           creds,
           authAndTlsOptions,
+          trustStore,
           domainSocketAddress);
     } else {
       throw new Exception("Unix domain sockets are unsupported on this platform");
@@ -239,6 +246,7 @@ public final class HttpCacheClient extends RemoteCacheClient {
       RemoteRetrier retrier,
       @Nullable final Credentials creds,
       AuthAndTLSOptions authAndTlsOptions,
+      TrustStore trustStore,
       @Nullable SocketAddress socketAddress)
       throws Exception {
     useTls = uri.getScheme().equals("https");
@@ -259,7 +267,7 @@ public final class HttpCacheClient extends RemoteCacheClient {
       socketAddress = new InetSocketAddress(uri.getHost(), uri.getPort());
     }
 
-    final SslContext sslCtx = useTls ? createSSLContext(authAndTlsOptions) : null;
+    final SslContext sslCtx = useTls ? createSSLContext(authAndTlsOptions, trustStore) : null;
     final int port = uri.getPort();
     final String hostname = uri.getHost();
     this.eventLoop = newEventLoopGroup.apply(2);
@@ -828,15 +836,19 @@ public final class HttpCacheClient extends RemoteCacheClient {
     }
   }
 
-  private static SslContext createSSLContext(AuthAndTLSOptions authAndTlsOptions)
-      throws IOException {
+  private static SslContext createSSLContext(
+      AuthAndTLSOptions authAndTlsOptions, TrustStore trustStore) throws IOException {
     // OpenSsl gives us a > 2x speed improvement on fast networks, but requires netty tcnative
     // to be there which is not available on all platforms and environments.
     SslProvider sslProvider = OpenSsl.isAvailable() ? SslProvider.OPENSSL : SslProvider.JDK;
     SslContextBuilder sslContextBuilder = SslContextBuilder.forClient().sslProvider(sslProvider);
 
-    // Root CA certificate
-    if (authAndTlsOptions.getTlsCertificate() != null) {
+    // Root CA certificates. The trust store already accounts for --tls_certificate, so it takes
+    // precedence; the option is only read directly for callers that have no trust store.
+    X509ExtendedTrustManager trustManager = trustStore.trustManager();
+    if (trustManager != null) {
+      sslContextBuilder = sslContextBuilder.trustManager(trustManager);
+    } else if (authAndTlsOptions.getTlsCertificate() != null) {
       sslContextBuilder =
           sslContextBuilder.trustManager(new File(authAndTlsOptions.getTlsCertificate()));
     }

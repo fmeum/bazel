@@ -21,6 +21,7 @@ import static org.junit.Assume.assumeTrue;
 import com.google.common.util.concurrent.ListeningScheduledExecutorService;
 import com.google.common.util.concurrent.MoreExecutors;
 import com.google.devtools.build.lib.authandtls.AuthAndTLSOptions;
+import com.google.devtools.build.lib.authandtls.TrustStore;
 import com.google.devtools.build.lib.clock.JavaClock;
 import com.google.devtools.build.lib.remote.Retrier.ResultClassifier.Result;
 import com.google.devtools.build.lib.remote.http.HttpCacheClient;
@@ -78,6 +79,7 @@ public class CombinedCacheClientFactoryTest {
             remoteOptions.getDiskCachePath(workingDirectory),
             /* creds= */ null,
             authAndTlsOptions,
+            TrustStore.jvmDefault(),
             workingDirectory,
             digestUtil,
             retrier,
@@ -99,6 +101,7 @@ public class CombinedCacheClientFactoryTest {
             remoteOptions.getDiskCachePath(workingDirectory),
             /* creds= */ null,
             authAndTlsOptions,
+            TrustStore.jvmDefault(),
             workingDirectory,
             digestUtil,
             retrier,
@@ -125,6 +128,7 @@ public class CombinedCacheClientFactoryTest {
                     : null,
                 /* creds= */ null,
                 authAndTlsOptions,
+                TrustStore.jvmDefault(),
                 /* workingDirectory= */ null,
                 digestUtil,
                 retrier,
@@ -145,6 +149,7 @@ public class CombinedCacheClientFactoryTest {
             remoteOptions.getDiskCachePath(workingDirectory),
             /* creds= */ null,
             authAndTlsOptions,
+            TrustStore.jvmDefault(),
             workingDirectory,
             digestUtil,
             retrier,
@@ -168,6 +173,7 @@ public class CombinedCacheClientFactoryTest {
                         remoteOptions.getDiskCachePath(workingDirectory),
                         /* creds= */ null,
                         authAndTlsOptions,
+                        TrustStore.jvmDefault(),
                         workingDirectory,
                         digestUtil,
                         retrier,
@@ -186,6 +192,7 @@ public class CombinedCacheClientFactoryTest {
             remoteOptions.getDiskCachePath(workingDirectory),
             /* creds= */ null,
             authAndTlsOptions,
+            TrustStore.jvmDefault(),
             workingDirectory,
             digestUtil,
             retrier,
@@ -205,6 +212,7 @@ public class CombinedCacheClientFactoryTest {
             remoteOptions.getDiskCachePath(workingDirectory),
             /* creds= */ null,
             authAndTlsOptions,
+            TrustStore.jvmDefault(),
             workingDirectory,
             digestUtil,
             retrier,
