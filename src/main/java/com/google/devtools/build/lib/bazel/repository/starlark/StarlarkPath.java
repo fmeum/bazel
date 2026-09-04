@@ -53,6 +53,9 @@ public final class StarlarkPath implements StarlarkValue {
   StarlarkPath(StarlarkBaseExternalContext ctx, Path path) {
     this.ctx = ctx;
     this.path = path;
+    if (ctx != null) {
+      ctx.noteAccessedPath(path);
+    }
   }
 
   Path getPath() {

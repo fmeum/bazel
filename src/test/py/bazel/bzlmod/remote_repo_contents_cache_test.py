@@ -18,7 +18,9 @@
 import json
 import os
 import re
+import sys
 import tempfile
+import zipfile
 from absl.testing import absltest
 from src.test.py.bazel import test_base
 
@@ -28,6 +30,13 @@ from src.test.py.bazel import test_base
 # TODO(#30160): Flip to True once the overlay file system supports resolving
 # symlinks across its backing file systems.
 CROSS_REPO_SYMLINKS_CACHEABLE = False
+
+# A repo rule statement that runs a trivial subprocess. This materializes every
+# repo restored from the remote repo contents cache whose files the subprocess
+# could access, i.e. those that the rule obtained a path into.
+MATERIALIZE_ACCESSED_REPOS = '  rctx.execute([%r, "-c", "pass"])' % (
+    sys.executable
+)
 
 
 class RemoteRepoContentsCacheTest(test_base.TestBase):
@@ -602,7 +611,89 @@ class RemoteRepoContentsCacheTest(test_base.TestBase):
         'other_repo.bzl',
         [
             'def _other_repo_impl(rctx):',
+            # Reading files and directories of my_repo doesn't require it to be
+            # materialized.
+            '  build_file = rctx.path(rctx.attr.build_file)',
+            '  rctx.file("BUILD", rctx.read(build_file))',
+            '  entries = sorted([p.basename for p in build_file.dirname.readdir()])',
+            '  entries.append(str(build_file.exists))',
+            '  entries.append(str(build_file.dirname.get_child("nope").exists))',
+            '  rctx.file("entries.txt", "\\n".join(entries))',
+            '  return rctx.repo_metadata()',
+            (
+                'other_repo = repository_rule(_other_repo_impl,'
+                ' attrs={"build_file": attr.label()})'
+            ),
+        ],
+    )
+
+    repo_dir = self.RepoDir('my_repo')
+    other_repo_dir = self.RepoDir('other')
+
+    # First fetch: not cached
+    _, _, stderr = self.RunBazel(['build', '@other//:haha'])
+    self.assertIn('JUST FETCHED', '\n'.join(stderr))
+    self.assertTrue(os.path.exists(os.path.join(repo_dir, 'BUILD')))
+
+    # After expunging: fetch my_repo only, not materialized
+    self.RunBazel(['clean', '--expunge'])
+    _, _, stderr = self.RunBazel(['build', '@my_repo//:haha'])
+    self.assertNotIn('JUST FETCHED', '\n'.join(stderr))
+    self.assertFalse(os.path.exists(os.path.join(repo_dir, 'BUILD')))
+    self.assertFalse(os.path.exists(os.path.join(repo_dir, 'subdir')))
+
+    # Fetch other: my_repo is read from memory and not materialized.
+    _, _, stderr = self.RunBazel(['build', '@other//:haha'])
+    self.assertNotIn('JUST FETCHED', '\n'.join(stderr))
+    self.assertNotIn('Materializing remote repo', '\n'.join(stderr))
+    self.assertFalse(os.path.exists(os.path.join(repo_dir, 'BUILD')))
+    self.assertFalse(os.path.exists(os.path.join(repo_dir, 'subdir')))
+    with open(os.path.join(other_repo_dir, 'BUILD')) as f:
+      self.assertEqual(f.read(), "filegroup(name='haha')")
+    with open(os.path.join(other_repo_dir, 'entries.txt')) as f:
+      self.assertEqual(f.read(), 'BUILD\nREPO.bazel\nsubdir\nTrue\nFalse')
+
+    # The repo is injected again after a shutdown, not refetched.
+    self.RunBazel(['shutdown'])
+    _, _, stderr = self.RunBazel(['build', '@other//:haha'])
+    self.assertNotIn('JUST FETCHED', '\n'.join(stderr))
+    self.assertNotIn('Materializing remote repo', '\n'.join(stderr))
+    self.assertFalse(os.path.exists(os.path.join(repo_dir, 'BUILD')))
+    self.assertTrue(os.path.exists(os.path.join(other_repo_dir, 'BUILD')))
+
+  def testAccessFromOtherRepo_execute(self):
+    self.ScratchFile(
+        'MODULE.bazel',
+        [
+            'repo = use_repo_rule("//:repo.bzl", "repo")',
+            'repo(name = "my_repo")',
+            'other_repo = use_repo_rule("//:other_repo.bzl", "other_repo")',
+            'other_repo(name = "other", build_file = "@my_repo//:BUILD")',
+        ],
+    )
+    self.ScratchFile('BUILD.bazel')
+    self.ScratchFile(
+        'repo.bzl',
+        [
+            'def _repo_impl(rctx):',
+            '  rctx.file("BUILD", "filegroup(name=\'haha\')")',
+            # Verify that directories are materialized correctly.
+            '  rctx.file("subdir/file.txt", "hello")',
+            '  rctx.file("subdir/empty_dir/.keep")',
+            '  rctx.delete("subdir/empty_dir/.keep")',
+            '  print("JUST FETCHED")',
+            '  return rctx.repo_metadata(reproducible=True)',
+            'repo = repository_rule(_repo_impl)',
+        ],
+    )
+    self.ScratchFile(
+        'other_repo.bzl',
+        [
+            'def _other_repo_impl(rctx):',
             '  rctx.file("BUILD", rctx.read(rctx.path(rctx.attr.build_file)))',
+            # Running a subprocess materializes my_repo as it may access any of
+            # its files through the path obtained above.
+            MATERIALIZE_ACCESSED_REPOS,
             '  return rctx.repo_metadata()',
             (
                 'other_repo = repository_rule(_other_repo_impl,'
@@ -629,6 +720,7 @@ class RemoteRepoContentsCacheTest(test_base.TestBase):
     # Fetch other: my_repo materialized
     _, _, stderr = self.RunBazel(['build', '@other//:haha'])
     self.assertNotIn('JUST FETCHED', '\n'.join(stderr))
+    self.assertIn('Materializing remote repo', '\n'.join(stderr))
     self.assertTrue(os.path.exists(os.path.join(repo_dir, 'BUILD')))
     self.assertTrue(os.path.exists(os.path.join(other_repo_dir, 'BUILD')))
     self.assertTrue(os.path.exists(os.path.join(repo_dir, 'subdir/file.txt')))
@@ -806,9 +898,11 @@ class RemoteRepoContentsCacheTest(test_base.TestBase):
     self.assertNotIn('JUST FETCHED', '\n'.join(stderr))
     self.assertFalse(os.path.exists(os.path.join(repo_dir, 'BUILD')))
 
-    # Fetch other: my_repo materialized
+    # Fetch other: my_repo materialized as the symlink target must stay
+    # available on disk across server restarts.
     _, _, stderr = self.RunBazel(['build', '@other//:haha'])
     self.assertNotIn('JUST FETCHED', '\n'.join(stderr))
+    self.assertIn('Materializing remote repo', '\n'.join(stderr))
     self.assertTrue(os.path.exists(os.path.join(repo_dir, 'BUILD')))
     self.assertTrue(os.path.exists(os.path.join(other_repo_dir, 'BUILD')))
 
@@ -1375,8 +1469,10 @@ class RemoteRepoContentsCacheTest(test_base.TestBase):
         'other_repo.bzl',
         [
             'def _other_repo_impl(rctx):',
-            # Reading my_repo's BUILD forces full materialization of my_repo.
+            # Reading my_repo's BUILD and then running a subprocess forces full
+            # materialization of my_repo.
             '  rctx.file("BUILD", rctx.read(rctx.attr.build_file))',
+            MATERIALIZE_ACCESSED_REPOS,
             # other is not reproducible, so it is always fetched and re-triggers
             # materialization of my_repo from the cache.
             '  return rctx.repo_metadata()',
@@ -1617,10 +1713,12 @@ class RemoteRepoContentsCacheTest(test_base.TestBase):
         'other_repo.bzl',
         [
             'def _other_repo_impl(rctx):',
-            # Materialize dep_repo before my_repo so that the external symlink
-            # target exists when my_repo is materialized.
+            # Obtain paths into dep_repo and my_repo, in this order, and then run
+            # a subprocess to materialize both, dep_repo first so that the
+            # external symlink target exists when my_repo is materialized.
             '  rctx.watch(rctx.attr.dep_file)',
             '  rctx.file("BUILD", rctx.read(rctx.attr.build_file))',
+            MATERIALIZE_ACCESSED_REPOS,
             '  return rctx.repo_metadata()',
             (
                 'other_repo_rule = repository_rule(_other_repo_impl,'
@@ -1764,6 +1862,7 @@ class RemoteRepoContentsCacheTest(test_base.TestBase):
             'def _materializer_impl(rctx):',
             '  rctx.file("BUILD", "filegroup(name=\'haha\')")',
             '  rctx.read(rctx.attr.dep_file)',
+            MATERIALIZE_ACCESSED_REPOS,
             '  return rctx.repo_metadata()',
             (
                 'materializer_rule = repository_rule(_materializer_impl,'
@@ -2183,11 +2282,13 @@ class RemoteRepoContentsCacheTest(test_base.TestBase):
         'def _other_repo_impl(rctx):',
     ]
     if watch_dep_file:
-      # Materialize dep_repo before my_repo so that the external
-      # symlink target exists when my_repo is materialized.
+      # Obtain a path into dep_repo before my_repo so that the subprocess
+      # below materializes dep_repo first and the external symlink target
+      # exists when my_repo is materialized.
       other_repo_lines.append('  rctx.watch(rctx.attr.dep_file)')
     other_repo_lines.extend([
         '  rctx.file("BUILD", rctx.read(rctx.attr.build_file))',
+        MATERIALIZE_ACCESSED_REPOS,
         # other_repo is not reproducible, so it is always fetched
         # and triggers materialization of my_repo.
         '  return rctx.repo_metadata()',
@@ -2229,7 +2330,7 @@ class RemoteRepoContentsCacheTest(test_base.TestBase):
       self.assertFalse(os.path.exists(os.path.join(repo_dir, 'BUILD')))
     else:
       # my_repo is refetched, which also materializes dep_repo as its file is
-      # referenced by label.
+      # the target of a symlink.
       self.assertIn('JUST FETCHED MY_REPO', '\n'.join(stderr))
       self.assertNotIn('JUST FETCHED DEP_REPO', '\n'.join(stderr))
       self.assertTrue(os.path.exists(os.path.join(repo_dir, 'BUILD')))
@@ -2532,7 +2633,7 @@ class RemoteRepoContentsCacheTest(test_base.TestBase):
       self.assertFalse(os.path.exists(os.path.join(repo_dir, 'helper.bzl')))
     else:
       # my_repo is refetched, which also materializes helper_repo as its file
-      # is referenced by label.
+      # is the target of a symlink.
       self.assertIn('JUST FETCHED', '\n'.join(stderr))
       self.assertNotIn('JUST FETCHED HELPER', '\n'.join(stderr))
       self.assertTrue(os.path.islink(os.path.join(repo_dir, 'helper.bzl')))
@@ -2657,8 +2758,9 @@ class RemoteRepoContentsCacheTest(test_base.TestBase):
         'other_repo.bzl',
         [
             'def _other_repo_impl(rctx):',
-            # Reading my_repo's data.txt forces full materialization of
-            # my_repo, recording a contents proxy on each materialized file.
+            # Reading my_repo's data.txt and then running a subprocess forces
+            # full materialization of my_repo, recording a contents proxy on
+            # each materialized file.
             # other is not reproducible, so it is always refetched
             # and re-triggers materialization.
             '  rctx.file("BUILD", "filegroup(name=\'haha\')")',
@@ -2666,6 +2768,7 @@ class RemoteRepoContentsCacheTest(test_base.TestBase):
                 '  rctx.file("data_copy.txt",'
                 ' rctx.read(rctx.path(rctx.attr.data_file)))'
             ),
+            MATERIALIZE_ACCESSED_REPOS,
             '  return rctx.repo_metadata()',
             (
                 'other_repo = repository_rule(_other_repo_impl,'
@@ -2711,6 +2814,184 @@ class RemoteRepoContentsCacheTest(test_base.TestBase):
     # via its contents proxy, so my_repo is neither invalidated nor refetched.
     _, _, stderr = self.RunBazel(['build', '//main:use_data'])
     self.assertNotIn('JUST FETCHED', '\n'.join(stderr))
+
+
+  def testExtractFromOtherRepo(self):
+    # Extracting an archive from a repo restored from the remote repo contents
+    # cache materializes just the archive, not the entire repo.
+    self.ScratchFile(
+        'MODULE.bazel',
+        [
+            'repo = use_repo_rule("//:repo.bzl", "repo")',
+            'repo(name = "my_repo")',
+            'other_repo = use_repo_rule("//:other_repo.bzl", "other_repo")',
+            'other_repo(name = "other", archive = "@my_repo//:archive.zip")',
+        ],
+    )
+    self.ScratchFile('BUILD.bazel')
+    with zipfile.ZipFile(self.Path('archive.zip'), 'w') as zf:
+      zf.writestr('hello.txt', 'hello')
+    self.ScratchFile(
+        'repo.bzl',
+        [
+            'def _repo_impl(rctx):',
+            '  rctx.file("BUILD", "exports_files([\'archive.zip\'])")',
+            # read() and file() round-trip binary contents.
+            '  rctx.file("archive.zip", rctx.read(Label("//:archive.zip")))',
+            '  print("JUST FETCHED")',
+            '  return rctx.repo_metadata(reproducible=True)',
+            'repo = repository_rule(_repo_impl)',
+        ],
+    )
+    self.ScratchFile(
+        'other_repo.bzl',
+        [
+            'def _other_repo_impl(rctx):',
+            '  rctx.extract(rctx.path(rctx.attr.archive), "out")',
+            '  rctx.file("BUILD", "exports_files([\'out/hello.txt\'])")',
+            '  return rctx.repo_metadata()',
+            (
+                'other_repo = repository_rule(_other_repo_impl,'
+                ' attrs={"archive": attr.label()})'
+            ),
+        ],
+    )
+    repo_dir = self.RepoDir('my_repo')
+    other_repo_dir = self.RepoDir('other')
+
+    _, _, stderr = self.RunBazel(['build', '@other//:out/hello.txt'])
+    self.assertIn('JUST FETCHED', '\n'.join(stderr))
+
+    self.RunBazel(['clean', '--expunge'])
+    _, _, stderr = self.RunBazel(['build', '@other//:out/hello.txt'])
+    self.assertNotIn('JUST FETCHED', '\n'.join(stderr))
+    self.assertNotIn('Materializing remote repo', '\n'.join(stderr))
+    self.assertTrue(os.path.exists(os.path.join(repo_dir, 'archive.zip')))
+    self.assertFalse(os.path.exists(os.path.join(repo_dir, 'BUILD')))
+    with open(os.path.join(other_repo_dir, 'out/hello.txt')) as f:
+      self.assertEqual(f.read(), 'hello')
+
+  def testDownloadFileUrlFromOtherRepo(self):
+    # Downloading a file:// URL that points into a repo restored from the
+    # remote repo contents cache materializes just that file.
+    self.ScratchFile(
+        'MODULE.bazel',
+        [
+            'repo = use_repo_rule("//:repo.bzl", "repo")',
+            'repo(name = "my_repo")',
+            'other_repo = use_repo_rule("//:other_repo.bzl", "other_repo")',
+            'other_repo(name = "other", data_file = "@my_repo//:data.txt")',
+        ],
+    )
+    self.ScratchFile('BUILD.bazel')
+    self.ScratchFile(
+        'repo.bzl',
+        [
+            'def _repo_impl(rctx):',
+            '  rctx.file("BUILD", "exports_files([\'data.txt\'])")',
+            '  rctx.file("data.txt", "hello")',
+            '  print("JUST FETCHED")',
+            '  return rctx.repo_metadata(reproducible=True)',
+            'repo = repository_rule(_repo_impl)',
+        ],
+    )
+    self.ScratchFile(
+        'other_repo.bzl',
+        [
+            'def _other_repo_impl(rctx):',
+            '  url = "%s" + str(rctx.path(rctx.attr.data_file))'
+            % ('file:///' if self.IsWindows() else 'file://'),
+            '  rctx.download(url = url, output = "copy.txt")',
+            '  rctx.file("BUILD", "exports_files([\'copy.txt\'])")',
+            '  return rctx.repo_metadata()',
+            (
+                'other_repo = repository_rule(_other_repo_impl,'
+                ' attrs={"data_file": attr.label()})'
+            ),
+        ],
+    )
+    repo_dir = self.RepoDir('my_repo')
+    other_repo_dir = self.RepoDir('other')
+
+    _, _, stderr = self.RunBazel(['build', '@other//:copy.txt'])
+    self.assertIn('JUST FETCHED', '\n'.join(stderr))
+
+    self.RunBazel(['clean', '--expunge'])
+    _, _, stderr = self.RunBazel(['build', '@other//:copy.txt'])
+    self.assertNotIn('JUST FETCHED', '\n'.join(stderr))
+    self.assertNotIn('Materializing remote repo', '\n'.join(stderr))
+    self.assertTrue(os.path.exists(os.path.join(repo_dir, 'data.txt')))
+    self.assertFalse(os.path.exists(os.path.join(repo_dir, 'BUILD')))
+    with open(os.path.join(other_repo_dir, 'copy.txt')) as f:
+      self.assertEqual(f.read(), 'hello')
+
+  def testExecuteMaterializesReposReferencedByAttributes(self):
+    # A module extension can turn a path into another repo into a string and
+    # pass it to a repo rule, which runs a subprocess on it. The repo rule
+    # never obtains a path into that repo itself, so it is materialized based
+    # on the attribute value.
+    self.ScratchFile(
+        'MODULE.bazel',
+        [
+            'repo = use_repo_rule("//:repo.bzl", "repo")',
+            'repo(name = "my_repo")',
+            'ext = use_extension("//:ext.bzl", "ext")',
+            'use_repo(ext, "other")',
+        ],
+    )
+    self.ScratchFile('BUILD.bazel')
+    self.ScratchFile(
+        'repo.bzl',
+        [
+            'def _repo_impl(rctx):',
+            '  rctx.file("BUILD", "exports_files([\'data.txt\'])")',
+            '  rctx.file("data.txt", "hello")',
+            '  print("JUST FETCHED")',
+            '  return rctx.repo_metadata(reproducible=True)',
+            'repo = repository_rule(_repo_impl)',
+        ],
+    )
+    self.ScratchFile(
+        'ext.bzl',
+        [
+            'def _other_impl(rctx):',
+            '  result = rctx.execute([',
+            '      %r,' % sys.executable,
+            '      "-c",',
+            '      "import sys; print(open(sys.argv[1]).read())",',
+            '      rctx.attr.data_path,',
+            '  ])',
+            '  if result.return_code != 0:',
+            '    fail(result.stderr)',
+            '  rctx.file("data_copy.txt", result.stdout.strip())',
+            '  rctx.file("BUILD", "exports_files([\'data_copy.txt\'])")',
+            '  return rctx.repo_metadata()',
+            (
+                'other = repository_rule(_other_impl,'
+                ' attrs={"data_path": attr.string()})'
+            ),
+            'def _ext_impl(mctx):',
+            '  data_path = mctx.path(Label("@my_repo//:data.txt"))',
+            '  other(name = "other", data_path = str(data_path))',
+            'ext = module_extension(_ext_impl)',
+        ],
+    )
+    other_repo_dir = self.RepoDir('other')
+
+    _, _, stderr = self.RunBazel(['build', '@other//:data_copy.txt'])
+    self.assertIn('JUST FETCHED', '\n'.join(stderr))
+
+    # The extension has to be evaluated again so that it fetches my_repo, which
+    # is then injected from the cache. If its result were reused from the
+    # lockfile, nothing would fetch my_repo and the subprocess would fail, but
+    # that isn't specific to the remote repo contents cache.
+    self.RunBazel(['clean', '--expunge'])
+    os.remove(self.Path('MODULE.bazel.lock'))
+    _, _, stderr = self.RunBazel(['build', '@other//:data_copy.txt'])
+    self.assertNotIn('JUST FETCHED', '\n'.join(stderr))
+    self.assertIn('Materializing remote repo', '\n'.join(stderr))
+    with open(os.path.join(other_repo_dir, 'data_copy.txt')) as f:
+      self.assertEqual(f.read(), 'hello')
 
 
 if __name__ == '__main__':

@@ -478,7 +478,11 @@ public final class RemoteExternalOverlayFileSystem extends FileSystem
       symlinks.add(path);
       root = root.resolveSymbolicLinks();
     }
-    collectAndCreateDirectories(root, files, symlinks, new HashSet<>());
+    if (root.isDirectory()) {
+      collectAndCreateDirectories(root, files, symlinks, new HashSet<>());
+    } else if (root.isFile()) {
+      files.add(root.asFragment());
+    }
     prefetch(files);
     // Create symlinks last as some platforms don't allow creating a symlink to a non-existent
     // target.

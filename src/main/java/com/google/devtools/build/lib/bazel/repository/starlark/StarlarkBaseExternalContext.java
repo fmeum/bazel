@@ -25,6 +25,7 @@ import com.google.common.base.Strings;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSortedMap;
+import com.google.common.collect.Iterables;
 import com.google.common.collect.Maps;
 import com.google.common.flogger.GoogleLogger;
 import com.google.common.util.concurrent.Futures;
@@ -83,6 +84,7 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Base64;
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -94,6 +96,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.Phaser;
+import java.util.function.Consumer;
 import javax.annotation.Nullable;
 import net.starlark.java.annot.Param;
 import net.starlark.java.annot.ParamType;
@@ -157,6 +160,9 @@ public abstract class StarlarkBaseExternalContext implements AutoCloseable, Star
 
   protected final Path workingDirectory;
   protected final BlazeDirectories directories;
+  // Insertion-ordered so that repos are materialized in the order in which they were accessed.
+  private final Set<RepositoryName> reposAccessedByPath =
+      Collections.synchronizedSet(new LinkedHashSet<>());
   protected final Environment env;
   protected final ImmutableMap<String, String> repoEnv;
   protected final ImmutableMap<String, String> nonstrictRepoEnv;
@@ -818,6 +824,7 @@ When <code>sha256</code> or <code>integrity</code> is user specified, setting an
             /* ensureNonEmpty= */ !allowFail,
             /* checksumGiven= */ !Strings.isNullOrEmpty(sha256)
                 || !Strings.isNullOrEmpty(integrity));
+    materializeFileUrls(urls);
     Optional<Checksum> checksum = null;
     RepositoryFunctionException checksumValidation = null;
     try {
@@ -1092,6 +1099,7 @@ Strip the given number of leading components from file paths on extraction. Only
             /* ensureNonEmpty= */ !allowFail,
             /* checksumGiven= */ !Strings.isNullOrEmpty(sha256)
                 || !Strings.isNullOrEmpty(integrity));
+    materializeFileUrls(urls);
     Optional<Checksum> checksum;
     RepositoryFunctionException checksumValidation = null;
     try {
@@ -1388,6 +1396,9 @@ Strip the given number of leading components from file paths on extraction. Only
         .post(
             new ExtractProgress(
                 outputPath.getPath().toString(), "Extracting " + archivePath.getBasename()));
+    // Some archive formats are read via java.io, which requires the archive to be available on
+    // the local file system.
+    materializeIfRemote(archivePath.getPath());
     DecompressorDescriptor.Builder descriptorBuilder =
         DecompressorDescriptor.builder()
             .setContext(identifyingStringForLogging)
@@ -2056,6 +2067,13 @@ Strip the given number of leading components from file paths on extraction. Only
         args.add(arg.toString());
       }
     }
+    materializeReposAccessedBySubprocess(
+        Iterables.concat(
+            args,
+            forceRepoEnvVariables.values(),
+            overrideWorkingDirectory == null
+                ? ImmutableList.of()
+                : ImmutableList.of(overrideWorkingDirectory)));
 
     WorkspaceRuleEvent w =
         WorkspaceRuleEvent.newExecuteEvent(
@@ -2392,21 +2410,177 @@ func(
     return null;
   }
 
+  /**
+   * Records that the given path has been exposed to Starlark code running in this context.
+   *
+   * <p>Starlark code can pass the string form of the path to a subprocess, which accesses the file
+   * system directly rather than through Bazel's view of it. If the path lies in a repo whose
+   * contents are only available in memory (see {@link RemoteExternalOverlayFileSystem}), that repo
+   * has to be materialized to the local file system before this context starts a subprocess. Every
+   * other way to access files from Starlark goes through Bazel's file system and thus doesn't
+   * require materialization.
+   */
+  void noteAccessedPath(Path path) {
+    var repoName = getExternalRepoName(path.asFragment());
+    if (repoName != null) {
+      reposAccessedByPath.add(repoName);
+    }
+  }
+
+  /** Returns the strings that this context received from outside of it and may contain paths. */
+  protected ImmutableList<String> getStringsPossiblyContainingPaths() {
+    return ImmutableList.of();
+  }
+
+  /** Collects all strings in the given Starlark value, descending into sequences and dicts. */
+  protected static void collectStrings(Object value, Consumer<String> consumer) {
+    switch (value) {
+      case String s -> consumer.accept(s);
+      case Sequence<?> sequence -> sequence.forEach(element -> collectStrings(element, consumer));
+      case Dict<?, ?> dict ->
+          dict.forEach(
+              (key, dictValue) -> {
+                collectStrings(key, consumer);
+                collectStrings(dictValue, consumer);
+              });
+      default -> {}
+    }
+  }
+
+  /**
+   * Materializes all repos whose files may be accessed by a subprocess started by this context.
+   *
+   * <p>This covers every repo for which a path was exposed to the Starlark code of this context
+   * (see {@link #noteAccessedPath}) as well as every repo whose directory is mentioned in the given
+   * strings, e.g. the arguments and environment of the subprocess or the attributes of a repo rule,
+   * which may have been computed from a path by another context.
+   */
+  private void materializeReposAccessedBySubprocess(Iterable<String> strings)
+      throws EvalException, InterruptedException {
+    if (!(directories.getOutputBase().getFileSystem()
+        instanceof RemoteExternalOverlayFileSystem remoteFs)) {
+      return;
+    }
+    LinkedHashSet<RepositoryName> repos;
+    synchronized (reposAccessedByPath) {
+      repos = new LinkedHashSet<>(reposAccessedByPath);
+    }
+    String externalDirPrefix = getExternalDirectory().getPathString() + PathFragment.SEPARATOR_CHAR;
+    for (String string : Iterables.concat(strings, getStringsPossiblyContainingPaths())) {
+      int start = string.indexOf(externalDirPrefix);
+      while (start >= 0) {
+        int nameStart = start + externalDirPrefix.length();
+        int nameEnd = nameStart;
+        while (nameEnd < string.length() && isRepoNameChar(string.charAt(nameEnd))) {
+          nameEnd++;
+        }
+        if (nameEnd > nameStart) {
+          try {
+            repos.add(RepositoryName.create(string.substring(nameStart, nameEnd)));
+          } catch (LabelSyntaxException e) {
+            // Not a path into a repo.
+          }
+        }
+        start = string.indexOf(externalDirPrefix, nameEnd);
+      }
+    }
+    for (RepositoryName repo : repos) {
+      try {
+        remoteFs.ensureMaterialized(repo, env.getListener());
+      } catch (IOException e) {
+        throw Starlark.errorf("Failed to materialize remote repo %s: %s", repo, e.getMessage());
+      }
+    }
+  }
+
+  private static boolean isRepoNameChar(char c) {
+    return (c >= 'a' && c <= 'z')
+        || (c >= 'A' && c <= 'Z')
+        || (c >= '0' && c <= '9')
+        || c == '_'
+        || c == '-'
+        || c == '.'
+        || c == '+';
+  }
+
+  /** Materializes the files behind {@code file://} URLs that point into a remote repo. */
+  private void materializeFileUrls(List<URI> urls) throws EvalException, InterruptedException {
+    for (URI url : urls) {
+      if (!"file".equalsIgnoreCase(url.getScheme())) {
+        continue;
+      }
+      String localPath;
+      try {
+        localPath = new File(url).getPath();
+      } catch (IllegalArgumentException e) {
+        // Let the downloader report the malformed URL.
+        continue;
+      }
+      materializeIfRemote(directories.getOutputBase().getFileSystem().getPath(localPath));
+    }
+  }
+
+  /**
+   * Materializes the entire repo containing the given path to the local file system if its contents
+   * are only available in memory.
+   */
+  protected void materializeRepoIfRemote(Path path) throws EvalException, InterruptedException {
+    if (!(directories.getOutputBase().getFileSystem()
+        instanceof RemoteExternalOverlayFileSystem remoteFs)) {
+      return;
+    }
+    var repo = getExternalRepoName(path.asFragment());
+    if (repo == null) {
+      return;
+    }
+    try {
+      remoteFs.ensureMaterialized(repo, env.getListener());
+    } catch (IOException e) {
+      throw Starlark.errorf("Failed to materialize remote repo %s: %s", repo, e.getMessage());
+    }
+  }
+
+  /**
+   * Materializes the given file or directory to the local file system if it lies in a remote repo
+   * whose contents are only available in memory.
+   *
+   * <p>The materialized files don't survive a server restart, after which the repo is injected
+   * again, so this is only suitable for files that are consumed right away.
+   */
+  protected void materializeIfRemote(Path path) throws EvalException, InterruptedException {
+    if (!(directories.getOutputBase().getFileSystem()
+        instanceof RemoteExternalOverlayFileSystem remoteFs)) {
+      return;
+    }
+    try {
+      remoteFs.ensureSubtreeMaterialized(path.asFragment());
+    } catch (IOException e) {
+      throw Starlark.errorf("Failed to materialize %s: %s", path, e.getMessage());
+    }
+  }
+
+  private Path getExternalDirectory() {
+    return directories.getOutputBase().getRelative(LabelConstants.EXTERNAL_REPOSITORY_LOCATION);
+  }
+
+  @Nullable
+  private RepositoryName getExternalRepoName(PathFragment path) {
+    PathFragment externalDir = getExternalDirectory().asFragment();
+    if (!path.startsWith(externalDir) || path.equals(externalDir)) {
+      return null;
+    }
+    try {
+      return RepositoryName.create(path.relativeTo(externalDir).getSegment(0));
+    } catch (LabelSyntaxException e) {
+      return null;
+    }
+  }
+
   // Resolve the label given by value into a file path.
   protected StarlarkPath getPathFromLabel(Label label) throws EvalException, InterruptedException {
     RootedPath rootedPath = RepositoryUtils.getRootedPathFromLabel(label, env);
     if (rootedPath == null) {
       throw new NeedsSkyframeRestartException();
-    }
-    if (!label.getRepository().isMain()
-        && directories.getOutputBase().getFileSystem()
-            instanceof RemoteExternalOverlayFileSystem remoteFs) {
-      try {
-        remoteFs.ensureMaterialized(label.getRepository(), env.getListener());
-      } catch (IOException e) {
-        throw Starlark.errorf(
-            "Failed to materialize remote repo %s: %s", label.getRepository(), e.getMessage());
-      }
     }
     StarlarkPath starlarkPath = new StarlarkPath(this, rootedPath.asPath());
     try {

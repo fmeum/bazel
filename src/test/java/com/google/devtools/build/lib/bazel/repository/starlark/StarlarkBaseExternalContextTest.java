@@ -22,6 +22,7 @@ import static org.mockito.Mockito.when;
 
 import com.google.common.collect.ImmutableMap;
 import com.google.devtools.build.lib.analysis.BlazeDirectories;
+import com.google.devtools.build.lib.analysis.ServerDirectories;
 import com.google.devtools.build.lib.bazel.repository.decompressor.DecompressorValue;
 import com.google.devtools.build.lib.bazel.repository.downloader.DownloadManager;
 import com.google.devtools.build.lib.events.ExtendedEventHandler;
@@ -172,6 +173,15 @@ public class StarlarkBaseExternalContextTest {
 
   /** Creates a StarlarkContext with the given path. */
   private TestStarlarkBaseExternalContext setupStarlarkContext(Path testPath) {
+    FileSystem fs = testPath.getFileSystem();
+    blazeDirectories =
+        new BlazeDirectories(
+            new ServerDirectories(
+                /* installBase= */ fs.getPath("/install_base"),
+                /* outputBase= */ fs.getPath("/output_base"),
+                /* outputUserRoot= */ fs.getPath("/output_user_root")),
+            /* workspace= */ fs.getPath("/workspace"),
+            /* productName= */ "bazel");
     return new TestStarlarkBaseExternalContext(
         /* workingDirectory= */ testPath,
         /* directories= */ blazeDirectories,

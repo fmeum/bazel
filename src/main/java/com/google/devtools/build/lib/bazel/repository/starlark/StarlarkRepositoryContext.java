@@ -123,6 +123,16 @@ public class StarlarkRepositoryContext extends StarlarkBaseExternalContext {
     return !successful;
   }
 
+  @Override
+  protected ImmutableList<String> getStringsPossiblyContainingPaths() {
+    // Attribute values may have been computed from paths by a module extension.
+    var strings = ImmutableList.<String>builder();
+    for (Object value : repoDefinition.attrValues().attributes().values()) {
+      collectStrings(value, strings::add);
+    }
+    return strings.build();
+  }
+
   @StarlarkMethod(
       name = "name",
       structField = true,
@@ -221,6 +231,10 @@ public class StarlarkRepositoryContext extends StarlarkBaseExternalContext {
       throws RepositoryFunctionException, EvalException, InterruptedException {
     StarlarkPath targetPath = getPath(target);
     StarlarkPath linkPath = getPath(linkName);
+    // Everything that reads through the symlink on the local file system, including Bazel itself
+    // if this repo is stored on it, resolves the symlink there. The target's repo thus has to be
+    // materialized fully so that it stays available across server restarts.
+    materializeRepoIfRemote(targetPath.getPath());
     WorkspaceRuleEvent w =
         WorkspaceRuleEvent.newSymlinkEvent(
             targetPath.toString(),
