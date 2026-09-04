@@ -458,6 +458,27 @@ public abstract class FileStateValue extends RegularFileValue implements HasDige
       return metadata;
     }
 
+    /**
+     * Returns whether {@code onDisk}, a value computed from the local file system, describes the
+     * local copy of the remote file this value refers to.
+     *
+     * <p>When a remote file is materialized in the local file system, the contents proxy of the
+     * local copy is recorded on its metadata (see {@link FileArtifactValue#setContentsProxy}).
+     * Unlike {@link FileStateValue#equalsIgnoringChangeTime}, this comparison is exact: it only
+     * succeeds if the file on disk is the very copy that was materialized, or has the same digest.
+     */
+    public boolean describesMaterializedFile(FileStateValue onDisk) {
+      if (onDisk.getType() != FileStateType.REGULAR_FILE || onDisk.getSize() != getSize()) {
+        return false;
+      }
+      byte[] onDiskDigest = onDisk.getDigest();
+      if (onDiskDigest != null) {
+        return Arrays.equals(onDiskDigest, getDigest());
+      }
+      FileContentsProxy proxy = getContentsProxy();
+      return proxy != null && proxy.equals(onDisk.getContentsProxy());
+    }
+
     @Override
     public boolean equals(Object obj) {
       if (obj == this) {

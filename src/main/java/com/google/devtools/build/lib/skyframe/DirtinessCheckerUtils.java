@@ -20,6 +20,7 @@ import com.google.common.base.Objects;
 import com.google.common.base.Preconditions;
 import com.google.common.collect.ImmutableList;
 import com.google.devtools.build.lib.actions.FileStateValue;
+import com.google.devtools.build.lib.actions.FileStateValue.RegularFileStateValueWithMetadata;
 import com.google.devtools.build.lib.cmdline.RepositoryName;
 import com.google.devtools.build.lib.skyframe.ExternalFilesHelper.FileType;
 import com.google.devtools.build.lib.util.io.TimestampGranularityMonitor;
@@ -148,15 +149,27 @@ public class DirtinessCheckerUtils {
       if (cacheable) {
         return SkyValueDirtinessChecker.DirtyResult.dirtyWithNewValue(newValue);
       }
-      // The hermetic Linux sandbox uses hardlinks to stage inputs, which affects ctimes. Don't
-      // report files as modified and trigger a refetch of the repo just due to that.
-      if (fileType == FileType.EXTERNAL_REPO
-          && !(oldValue instanceof FileStateValue oldFileState
-              && newValue instanceof FileStateValue newFileState
-              && newFileState.equalsIgnoringChangeTime(oldFileState))) {
-        var repositoryName = externalFilesHelper.getExternalRepoName(rootedPath);
-        if (repositoryName != null) {
-          dirtyExternalRepos.putIfAbsent(repositoryName, rootedPath);
+      if (fileType == FileType.EXTERNAL_REPO) {
+        if (oldValue instanceof RegularFileStateValueWithMetadata oldWithMetadata
+            && newValue instanceof FileStateValue newFileState
+            && oldWithMetadata.describesMaterializedFile(newFileState)) {
+          // A file in a repo restored from the remote repo contents cache is represented by its
+          // remote metadata while the repo is served from memory. Materializing the repo records
+          // the contents proxy of the local copy on that metadata and makes the file be served from
+          // disk, which yields a value that isn't equal to the old one even though the file is
+          // unchanged. The old value still describes the file exactly, so keep it: re-evaluating
+          // the node would needlessly invalidate every package and .bzl file loaded from the repo.
+          return SkyValueDirtinessChecker.DirtyResult.notDirty();
+        }
+        // The hermetic Linux sandbox uses hardlinks to stage inputs, which affects ctimes. Don't
+        // report files as modified and trigger a refetch of the repo just due to that.
+        if (!(oldValue instanceof FileStateValue oldFileState
+            && newValue instanceof FileStateValue newFileState
+            && newFileState.equalsIgnoringChangeTime(oldFileState))) {
+          var repositoryName = externalFilesHelper.getExternalRepoName(rootedPath);
+          if (repositoryName != null) {
+            dirtyExternalRepos.putIfAbsent(repositoryName, rootedPath);
+          }
         }
       }
       // Files under output_base/external have a dependency on the WORKSPACE file, so we don't add

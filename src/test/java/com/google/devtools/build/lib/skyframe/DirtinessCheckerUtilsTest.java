@@ -23,16 +23,21 @@ import static org.mockito.Mockito.verifyNoMoreInteractions;
 
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
+import com.google.devtools.build.lib.actions.FileArtifactValue;
+import com.google.devtools.build.lib.actions.FileContentsProxy;
 import com.google.devtools.build.lib.actions.FileStateValue;
 import com.google.devtools.build.lib.analysis.BlazeDirectories;
 import com.google.devtools.build.lib.analysis.ServerDirectories;
 import com.google.devtools.build.lib.cmdline.LabelConstants;
+import com.google.devtools.build.lib.cmdline.RepositoryName;
 import com.google.devtools.build.lib.pkgcache.PathPackageLocator;
 import com.google.devtools.build.lib.skyframe.DirtinessCheckerUtils.UnionDirtinessChecker;
 import com.google.devtools.build.lib.skyframe.ExternalFilesHelper.ExternalFileAction;
+import com.google.devtools.build.lib.testutil.ManualClock;
 import com.google.devtools.build.lib.testutil.TestConstants;
 import com.google.devtools.build.lib.vfs.DigestHashFunction;
 import com.google.devtools.build.lib.vfs.FileSystem;
+import com.google.devtools.build.lib.vfs.FileSystemUtils;
 import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.build.lib.vfs.PathFragment;
 import com.google.devtools.build.lib.vfs.Root;
@@ -55,7 +60,8 @@ import org.mockito.Mockito;
 /** Tests for {@link DirtinessCheckerUtils}. */
 @RunWith(TestParameterInjector.class)
 public final class DirtinessCheckerUtilsTest {
-  private final FileSystem fs = new InMemoryFileSystem(DigestHashFunction.SHA256);
+  private final ManualClock clock = new ManualClock();
+  private final FileSystem fs = new InMemoryFileSystem(clock, DigestHashFunction.SHA256);
   private final Path pkgRoot = fs.getPath("/testroot");
   private final Root srcRoot = Root.fromPath(pkgRoot);
   private final Path outputBase = fs.getPath("/outputroot/user/outputBase");
@@ -156,6 +162,136 @@ public final class DirtinessCheckerUtilsTest {
         .isEqualTo(SkyValueDirtinessChecker.DirtyResult.dirty());
 
     Mockito.verifyNoInteractions(mockCache);
+  }
+
+  @Test
+  public void externalRepoFile_onlyChangeTimeDiffers_dirtyButNotRefetched() throws Exception {
+    DirtinessCheckerUtils.ExternalDirtinessChecker underTest = createExternalRepoChecker();
+    RootedPath rootedPath = makeExternalRepoRootedPath("extrepo/file");
+    Path path = rootedPath.asPath();
+    path.getParentDirectory().createDirectoryAndParents();
+    FileSystemUtils.writeContentAsLatin1(path, "contents");
+    FileStateValue oldValue = FileStateValue.create(rootedPath, SyscallCache.NO_CACHE, null);
+
+    // Changing the permissions updates the ctime but not the mtime, just like the hermetic Linux
+    // sandbox does by hardlinking the file.
+    clock.advanceMillis(1000);
+    path.setExecutable(true);
+    assertThat(FileStateValue.create(rootedPath, SyscallCache.NO_CACHE, null))
+        .isNotEqualTo(oldValue);
+
+    assertThat(
+            underTest.check(rootedPath, oldValue, /* oldMtsv= */ null, SyscallCache.NO_CACHE, null))
+        .isEqualTo(SkyValueDirtinessChecker.DirtyResult.dirty());
+    assertThat(underTest.getDirtyExternalRepos()).isEmpty();
+  }
+
+  @Test
+  public void externalRepoFile_materializedRemoteFile_notDirty() throws Exception {
+    DirtinessCheckerUtils.ExternalDirtinessChecker underTest = createExternalRepoChecker();
+    RootedPath rootedPath = makeExternalRepoRootedPath("extrepo/file");
+    Path path = rootedPath.asPath();
+    path.getParentDirectory().createDirectoryAndParents();
+    FileSystemUtils.writeContentAsLatin1(path, "contents");
+    // A file in a repo restored from the remote repo contents cache is represented by its remote
+    // metadata, on which the contents proxy of the local copy is recorded when it is materialized.
+    // The repo is served from disk afterwards, which yields a contents proxy representation.
+    FileStateValue oldValue = materializedRemoteFileStateValue(path);
+    assertThat(FileStateValue.create(rootedPath, SyscallCache.NO_CACHE, null))
+        .isNotEqualTo(oldValue);
+
+    assertThat(
+            underTest.check(rootedPath, oldValue, /* oldMtsv= */ null, SyscallCache.NO_CACHE, null))
+        .isEqualTo(SkyValueDirtinessChecker.DirtyResult.notDirty());
+    assertThat(underTest.getDirtyExternalRepos()).isEmpty();
+  }
+
+  @Test
+  public void externalRepoFile_materializedRemoteFile_onlyChangeTimeDiffers_dirtyButNotRefetched()
+      throws Exception {
+    DirtinessCheckerUtils.ExternalDirtinessChecker underTest = createExternalRepoChecker();
+    RootedPath rootedPath = makeExternalRepoRootedPath("extrepo/file");
+    Path path = rootedPath.asPath();
+    path.getParentDirectory().createDirectoryAndParents();
+    FileSystemUtils.writeContentAsLatin1(path, "contents");
+    FileStateValue oldValue = materializedRemoteFileStateValue(path);
+
+    // The contents proxy recorded on materialization is compared exactly, so a metadata-only
+    // change is noticed just like for a locally fetched repo, but doesn't cause a refetch.
+    clock.advanceMillis(1000);
+    path.setExecutable(true);
+
+    assertThat(
+            underTest.check(rootedPath, oldValue, /* oldMtsv= */ null, SyscallCache.NO_CACHE, null))
+        .isEqualTo(SkyValueDirtinessChecker.DirtyResult.dirty());
+    assertThat(underTest.getDirtyExternalRepos()).isEmpty();
+  }
+
+  @Test
+  public void externalRepoFile_materializedRemoteFile_contentsChanged_dirtyAndRepoRefetched()
+      throws Exception {
+    DirtinessCheckerUtils.ExternalDirtinessChecker underTest = createExternalRepoChecker();
+    RootedPath rootedPath = makeExternalRepoRootedPath("extrepo/file");
+    Path path = rootedPath.asPath();
+    path.getParentDirectory().createDirectoryAndParents();
+    FileSystemUtils.writeContentAsLatin1(path, "contents");
+    FileStateValue oldValue = materializedRemoteFileStateValue(path);
+
+    // Same size, different contents.
+    clock.advanceMillis(1000);
+    FileSystemUtils.writeContentAsLatin1(path, "modified");
+
+    assertThat(
+            underTest.check(rootedPath, oldValue, /* oldMtsv= */ null, SyscallCache.NO_CACHE, null))
+        .isEqualTo(SkyValueDirtinessChecker.DirtyResult.dirty());
+    assertThat(underTest.getDirtyExternalRepos())
+        .containsExactly(RepositoryName.createUnvalidated("extrepo"), rootedPath);
+  }
+
+  @Test
+  public void externalRepoFile_contentsChanged_dirtyAndRepoRefetched() throws Exception {
+    DirtinessCheckerUtils.ExternalDirtinessChecker underTest = createExternalRepoChecker();
+    RootedPath rootedPath = makeExternalRepoRootedPath("extrepo/file");
+    Path path = rootedPath.asPath();
+    path.getParentDirectory().createDirectoryAndParents();
+    FileSystemUtils.writeContentAsLatin1(path, "contents");
+    FileStateValue oldValue = FileStateValue.create(rootedPath, SyscallCache.NO_CACHE, null);
+
+    clock.advanceMillis(1000);
+    FileSystemUtils.writeContentAsLatin1(path, "modified");
+
+    assertThat(
+            underTest.check(rootedPath, oldValue, /* oldMtsv= */ null, SyscallCache.NO_CACHE, null))
+        .isEqualTo(SkyValueDirtinessChecker.DirtyResult.dirty());
+    assertThat(underTest.getDirtyExternalRepos())
+        .containsExactly(RepositoryName.createUnvalidated("extrepo"), rootedPath);
+  }
+
+  /**
+   * Returns the file state value of a remote file in a repo restored from the remote repo contents
+   * cache that has since been materialized at the given path.
+   */
+  private static FileStateValue materializedRemoteFileStateValue(Path path) throws IOException {
+    FileArtifactValue metadata =
+        FileArtifactValue.createForRemoteFileWithMaterializationData(
+            path.getDigest(),
+            path.getFileSize(),
+            /* locationIndex= */ 1,
+            /* expirationTime= */ null,
+            /* inMemoryOutput= */ false);
+    metadata.setContentsProxy(FileContentsProxy.create(path.stat()));
+    return new FileStateValue.RegularFileStateValueWithMetadata(metadata);
+  }
+
+  private DirtinessCheckerUtils.ExternalDirtinessChecker createExternalRepoChecker() {
+    return new DirtinessCheckerUtils.ExternalDirtinessChecker(
+        externalFilesHelper, EnumSet.of(ExternalFilesHelper.FileType.EXTERNAL_REPO));
+  }
+
+  private RootedPath makeExternalRepoRootedPath(String repoRelativePath) {
+    return RootedPath.toRootedPath(
+        Root.fromPath(outputBase),
+        LabelConstants.EXTERNAL_REPOSITORY_LOCATION.getRelative(repoRelativePath));
   }
 
   @Test
