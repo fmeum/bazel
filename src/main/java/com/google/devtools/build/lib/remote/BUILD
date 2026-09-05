@@ -1163,7 +1163,10 @@ java_library(
 
 java_library(
     name = "remote_rewound_action_synchronizer",
-    srcs = ["RemoteRewoundActionSynchronizer.java"],
+    srcs = [
+        "ReadersOrWritersLock.java",
+        "RemoteRewoundActionSynchronizer.java",
+    ],
     deps = [
         ":abstract_action_input_prefetcher",
         "//src/main/java/com/google/devtools/build/lib/actions",
@@ -1172,6 +1175,8 @@ java_library(
         "//src/main/java/com/google/devtools/build/lib/profiler",
         "//src/main/java/com/google/devtools/build/lib/vfs:output_service",
         "//third_party/java/caffeine",
+        "//third_party/java/error_prone:annotations",
+        "//third_party/java/guava:annotations",
         "//third_party/java/guava:collect",
         "//third_party/java/jsr305_annotations",
     ],
@@ -1243,6 +1248,7 @@ java_library(
         "//src/main/java/com/google/devtools/build/lib/analysis/platform:platform_utils",
         "//src/main/java/com/google/devtools/build/lib/authandtls/credentialhelper",
         "//src/main/java/com/google/devtools/build/lib/buildtool/buildevent",
+        "//src/main/java/com/google/devtools/build/lib/concurrent:cancellable_task",
         "//src/main/java/com/google/devtools/build/lib/events",
         "//src/main/java/com/google/devtools/build/lib/exec:execution_options",
         "//src/main/java/com/google/devtools/build/lib/exec:spawn_runner",
