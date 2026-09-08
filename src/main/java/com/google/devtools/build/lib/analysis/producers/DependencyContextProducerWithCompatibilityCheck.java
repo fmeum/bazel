@@ -19,10 +19,14 @@ import com.google.devtools.build.lib.analysis.ToolchainCollection;
 import com.google.devtools.build.lib.analysis.TransitiveDependencyState;
 import com.google.devtools.build.lib.analysis.config.ConfigConditions;
 import com.google.devtools.build.lib.analysis.config.CoreOptions;
+import com.google.devtools.build.lib.analysis.config.StarlarkTransitionCache;
 import com.google.devtools.build.lib.analysis.constraints.IncompatibleTargetChecker.IncompatibleTargetException;
 import com.google.devtools.build.lib.analysis.constraints.IncompatibleTargetChecker.IncompatibleTargetProducer;
 import com.google.devtools.build.lib.analysis.platform.PlatformInfo;
 import com.google.devtools.build.lib.analysis.platform.PlatformValue;
+import com.google.devtools.build.lib.analysis.producers.UnloadedToolchainContextsProducer.ToolchainTypeTransitionData;
+import com.google.devtools.build.lib.events.ExtendedEventHandler;
+import com.google.devtools.build.lib.packages.ConfiguredAttributeMapper;
 import com.google.devtools.build.lib.packages.ConfiguredAttributeMapper.ValidationException;
 import com.google.devtools.build.lib.skyframe.ConfiguredTargetKey;
 import com.google.devtools.build.lib.skyframe.ConfiguredValueCreationException;
@@ -53,6 +57,8 @@ public final class DependencyContextProducerWithCompatibilityCheck
   private final UnloadedToolchainContextsInputs unloadedToolchainContextsInputs;
 
   private final TransitiveDependencyState transitiveState;
+  private final StarlarkTransitionCache transitionCache;
+  private final ExtendedEventHandler eventHandler;
 
   // -------------------- Output --------------------
   private final DependencyContextProducer.ResultSink sink;
@@ -69,11 +75,15 @@ public final class DependencyContextProducerWithCompatibilityCheck
       ConfiguredTargetKey configuredTargetKey,
       UnloadedToolchainContextsInputs unloadedToolchainContextsInputs,
       TransitiveDependencyState transitiveState,
+      StarlarkTransitionCache transitionCache,
+      ExtendedEventHandler eventHandler,
       DependencyContextProducer.ResultSink sink) {
     this.targetAndConfiguration = targetAndConfiguration;
     this.configuredTargetKey = configuredTargetKey;
     this.unloadedToolchainContextsInputs = unloadedToolchainContextsInputs;
     this.transitiveState = transitiveState;
+    this.transitionCache = transitionCache;
+    this.eventHandler = eventHandler;
     this.sink = sink;
   }
 
@@ -191,8 +201,33 @@ public final class DependencyContextProducerWithCompatibilityCheck
       return DONE;
     }
 
+    ToolchainTypeTransitionData transitionData = null;
+    if (unloadedToolchainContextsInputs.hasToolchainTypeTransitions()) {
+      // The transitions may read the configured attributes of the rule, which are only known now
+      // that the config conditions have been computed.
+      ConfiguredAttributeMapper attributes =
+          ConfiguredAttributeMapper.of(
+              targetAndConfiguration.getTarget().getAssociatedRule(),
+              configConditions.asProviders(),
+              targetAndConfiguration.getConfiguration());
+      try {
+        attributes.validateAttributes();
+      } catch (ValidationException e) {
+        hasError = true;
+        sink.acceptDependencyContextError(DependencyContextError.of(e));
+        return DONE;
+      }
+      transitionData =
+          new ToolchainTypeTransitionData(
+              targetAndConfiguration.getTarget().getLabel(),
+              attributes,
+              transitionCache,
+              eventHandler);
+    }
+
     return new UnloadedToolchainContextsProducer(
         unloadedToolchainContextsInputs,
+        transitionData,
         (UnloadedToolchainContextsProducer.ResultSink) this,
         /* runAfter= */ this::constructResult);
   }

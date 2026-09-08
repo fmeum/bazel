@@ -56,6 +56,7 @@ java_library(
         "//src/main/java/com/google/devtools/build/lib/analysis/config:dependency_evaluation_exception",
         "//src/main/java/com/google/devtools/build/lib/analysis/config:invalid_configuration_exception",
         "//src/main/java/com/google/devtools/build/lib/analysis/config:starlark_transition_cache",
+        "//src/main/java/com/google/devtools/build/lib/analysis/config:toolchain_type_requirement",
         "//src/main/java/com/google/devtools/build/lib/analysis/config/transitions:composing_transition_factory",
         "//src/main/java/com/google/devtools/build/lib/analysis/config/transitions:configuration_transition",
         "//src/main/java/com/google/devtools/build/lib/analysis/config/transitions:patch_transition",
@@ -159,6 +160,7 @@ java_library(
     srcs = ["UnloadedToolchainContextsInputs.java"],
     deps = [
         "//src/main/java/com/google/devtools/build/lib/analysis:exec_group_collection",
+        "//src/main/java/com/google/devtools/build/lib/analysis/config:toolchain_type_requirement",
         "//src/main/java/com/google/devtools/build/lib/packages:declared_exec_group",
         "//src/main/java/com/google/devtools/build/lib/skyframe/toolchains:toolchain_context_key",
         "//third_party/java/auto:auto_value",

@@ -21,6 +21,7 @@ import com.google.devtools.build.lib.analysis.config.ToolchainTypeRequirement;
 import com.google.devtools.build.lib.analysis.platform.PlatformInfo;
 import com.google.devtools.build.lib.analysis.platform.ToolchainTypeInfo;
 import com.google.devtools.build.lib.cmdline.Label;
+import com.google.devtools.build.lib.skyframe.config.BuildConfigurationKey;
 import com.google.devtools.build.skyframe.SkyValue;
 import java.util.Set;
 
@@ -37,6 +38,7 @@ public abstract class UnloadedToolchainContextImpl implements SkyValue, Unloaded
         .setToolchainTypes(ImmutableSet.of())
         .setRequestedLabelToToolchainType(ImmutableMap.of())
         .setToolchainTypeToResolved(ImmutableSetMultimap.of())
+        .setToolchainTypeConfigurations(ImmutableMap.of())
         .setErrorData(null);
   }
 
@@ -70,6 +72,13 @@ public abstract class UnloadedToolchainContextImpl implements SkyValue, Unloaded
      */
     Builder setRequestedLabelToToolchainType(
         ImmutableMap<Label, ToolchainTypeInfo> requestedLabelToToolchainType);
+
+    /**
+     * Sets the configurations in which toolchain types with a configuration transition were
+     * resolved and should be built.
+     */
+    Builder setToolchainTypeConfigurations(
+        ImmutableMap<ToolchainTypeInfo, BuildConfigurationKey> toolchainTypeConfigurations);
 
     /** Stores an exception that occurred during resolution of this toolchain. */
     Builder setErrorData(NoMatchingPlatformData errorData);

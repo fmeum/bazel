@@ -27,13 +27,13 @@ import net.starlark.java.eval.Starlark;
  * transition.and_then}) into a single {@link TransitionFactory} for a specific use context (rule
  * vs. attribute).
  */
-final class ComposedTransitionMaterializer {
+public final class ComposedTransitionMaterializer {
 
   private ComposedTransitionMaterializer() {}
 
   /** Converts one element of a composed transition into a {@link TransitionFactory}. */
   @FunctionalInterface
-  interface ElementConverter<T extends TransitionFactory.Data> {
+  public interface ElementConverter<T extends TransitionFactory.Data> {
     TransitionFactory<T> convert(ConfigurationTransitionApi element) throws EvalException;
   }
 
@@ -44,7 +44,7 @@ final class ComposedTransitionMaterializer {
    * @param incompatibleElementMessage error suffix used when an element can't be converted in this
    *     context (e.g. a native attribute-only transition used as a rule {@code cfg})
    */
-  static <T extends TransitionFactory.Data> TransitionFactory<T> fold(
+  public static <T extends TransitionFactory.Data> TransitionFactory<T> fold(
       ComposedConfigurationTransition composition,
       ElementConverter<T> converter,
       String incompatibleElementMessage)

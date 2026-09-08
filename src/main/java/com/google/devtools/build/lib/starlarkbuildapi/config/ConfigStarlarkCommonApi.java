@@ -22,6 +22,7 @@ import net.starlark.java.annot.ParamType;
 import net.starlark.java.annot.StarlarkBuiltin;
 import net.starlark.java.annot.StarlarkMethod;
 import net.starlark.java.eval.EvalException;
+import net.starlark.java.eval.NoneType;
 import net.starlark.java.eval.StarlarkThread;
 import net.starlark.java.eval.StarlarkValue;
 
@@ -68,9 +69,34 @@ public interface ConfigStarlarkCommonApi extends StarlarkValue {
             named = true,
             positional = false,
             defaultValue = "True",
-            doc = "Whether the toolchain type is mandatory or optional.")
+            doc = "Whether the toolchain type is mandatory or optional."),
+        @Param(
+            name = "cfg",
+            allowedTypes = {
+              @ParamType(type = String.class),
+              @ParamType(type = ConfigurationTransitionApi.class),
+              @ParamType(type = NoneType.class),
+            },
+            named = true,
+            positional = false,
+            defaultValue = "None",
+            doc =
+                "The configuration transition to apply to the toolchain dependency. Either"
+                    + " <code>\"target\"</code> (or <code>None</code>) to resolve and build the"
+                    + " toolchain in the configuration of the depending target, or a transition"
+                    + " created by <code>transition()</code>. The toolchain is resolved in the"
+                    + " transitioned configuration, so the target platform, the registered"
+                    + " toolchains and the <code>target_settings</code> of candidate toolchains"
+                    + " are all evaluated after the transition has been applied, and the selected"
+                    + " toolchain is built in that configuration. The execution platform is"
+                    + " still selected once for the execution group that requires this toolchain"
+                    + " type, so it is shared with the other toolchain types of the same execution"
+                    + " group. The transition may read the configured attributes of the target"
+                    + " (except in aspects), but must not be a split transition. Exec transitions"
+                    + " are not supported since the execution platform is only known after"
+                    + " toolchain resolution.")
       },
       useStarlarkThread = true)
   StarlarkToolchainTypeRequirement toolchainType(
-      Object name, boolean mandatory, StarlarkThread thread) throws EvalException;
+      Object name, boolean mandatory, Object cfg, StarlarkThread thread) throws EvalException;
 }

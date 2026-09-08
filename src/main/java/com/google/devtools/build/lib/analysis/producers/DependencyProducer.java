@@ -164,7 +164,14 @@ final class DependencyProducer
     BuildConfigurationKey configurationKey = checkNotNull(parameters.configurationKey());
 
     if (DependencyKind.isToolchain(kind)) {
-      // There's no attribute so no attribute transition.
+      // There's no attribute so no attribute transition. Toolchain types with a configuration
+      // transition have already had it applied during toolchain resolution, so that the toolchain
+      // was selected in the same configuration it is built in.
+      ToolchainDependencyKind toolchainKind = (ToolchainDependencyKind) kind;
+      BuildConfigurationKey toolchainConfigurationKey =
+          toolchainKind.getConfigurationKey() != null
+              ? toolchainKind.getConfigurationKey()
+              : configurationKey;
 
       // This dependency is a toolchain. Its package has not been loaded and therefore we can't
       // determine which aspects and which rule configuration transition we should use, so just
@@ -174,10 +181,9 @@ final class DependencyProducer
       // This logic needs to stay in sync with the dep finding logic in
       // //third_party/bazel/src/main/java/com/google/devtools/build/lib/analysis/Util.java#findImplicitDeps.
       return computePrerequisites(
-          AttributeConfiguration.ofUnary(configurationKey),
+          AttributeConfiguration.ofUnary(toolchainConfigurationKey),
           parameters.getExecutionPlatformLabel(
-              ((ToolchainDependencyKind) kind).getExecGroupName(),
-              DependencyKind.isBaseTargetToolchain(kind)));
+              toolchainKind.getExecGroupName(), DependencyKind.isBaseTargetToolchain(kind)));
     }
 
     if (kind == OUTPUT_FILE_RULE_DEPENDENCY) {

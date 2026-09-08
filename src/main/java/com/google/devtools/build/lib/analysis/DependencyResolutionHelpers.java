@@ -94,7 +94,7 @@ public final class DependencyResolutionHelpers {
       TargetAndConfiguration node,
       ImmutableList<Aspect> aspects,
       ImmutableMap<Label, ConfigMatchingProvider> configConditions,
-      @Nullable ToolchainCollection<ToolchainContext> toolchainContexts,
+      @Nullable ToolchainCollection<UnloadedToolchainContext> toolchainContexts,
       @Nullable ToolchainCollection<UnloadedToolchainContext> baseTargetUnloadedToolchainContexts)
       throws Failure, InterruptedException {
     Target target = node.getTarget();
@@ -298,7 +298,7 @@ public final class DependencyResolutionHelpers {
       TargetAndConfiguration node,
       ImmutableList<Aspect> aspects,
       ConfiguredAttributeMapper attributeMap,
-      @Nullable ToolchainCollection<ToolchainContext> toolchainContexts,
+      @Nullable ToolchainCollection<UnloadedToolchainContext> toolchainContexts,
       @Nullable ToolchainCollection<UnloadedToolchainContext> baseTargetUnloadedToolchainContexts,
       OrderedSetMultimap<DependencyKind, Label> outgoingLabels)
       throws Failure, InterruptedException {
@@ -362,13 +362,27 @@ public final class DependencyResolutionHelpers {
   }
 
   private static void addToolchainDeps(
-      ToolchainCollection<ToolchainContext> toolchainContexts,
+      @Nullable ToolchainCollection<UnloadedToolchainContext> toolchainContexts,
       OrderedSetMultimap<DependencyKind, Label> outgoingLabels) {
-    if (toolchainContexts != null) {
-      for (Map.Entry<String, ToolchainContext> entry : toolchainContexts.contextMap().entrySet()) {
+    if (toolchainContexts == null) {
+      return;
+    }
+    for (Map.Entry<String, UnloadedToolchainContext> execGroup :
+        toolchainContexts.contextMap().entrySet()) {
+      UnloadedToolchainContext toolchainContext = execGroup.getValue();
+      for (var toolchainTypeToResolved :
+          toolchainContext.toolchainTypeToResolved().asMap().entrySet()) {
+        // Toolchains of toolchain types with a configuration transition are built in the
+        // transitioned configuration, so they get a separate dependency kind. The same toolchain
+        // target may thus be depended on in multiple configurations if it was resolved for
+        // multiple toolchain types.
         outgoingLabels.putAll(
-            DependencyKind.forExecGroup(entry.getKey()),
-            entry.getValue().resolvedToolchainLabels());
+            DependencyKind.forExecGroup(
+                execGroup.getKey(),
+                toolchainContext
+                    .toolchainTypeConfigurations()
+                    .get(toolchainTypeToResolved.getKey())),
+            toolchainTypeToResolved.getValue());
       }
     }
   }
@@ -381,8 +395,9 @@ public final class DependencyResolutionHelpers {
     }
     for (Map.Entry<String, UnloadedToolchainContext> execGroup :
         toolchainContexts.contextMap().entrySet()) {
+      UnloadedToolchainContext toolchainContext = execGroup.getValue();
       for (var toolchainTypeToResolved :
-          execGroup.getValue().toolchainTypeToResolved().asMap().entrySet()) {
+          toolchainContext.toolchainTypeToResolved().asMap().entrySet()) {
         // map entries from (exec group, toolchain type) to resolved toolchain labels. We need to
         // distinguish the resolved toolchains per type because aspects propagate on toolchains
         // based on the types specified in `toolchains_aspects`. So even if 2 types resolved to the
@@ -390,7 +405,11 @@ public final class DependencyResolutionHelpers {
         // not the other.
         outgoingLabels.putAll(
             DependencyKind.forBaseTargetExecGroup(
-                execGroup.getKey(), toolchainTypeToResolved.getKey().typeLabel()),
+                execGroup.getKey(),
+                toolchainTypeToResolved.getKey().typeLabel(),
+                toolchainContext
+                    .toolchainTypeConfigurations()
+                    .get(toolchainTypeToResolved.getKey())),
             toolchainTypeToResolved.getValue());
       }
     }

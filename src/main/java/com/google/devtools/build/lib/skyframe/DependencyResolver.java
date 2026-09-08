@@ -368,8 +368,19 @@ public final class DependencyResolver {
     //  would exit this SkyFunction and restart it when permits were available.
     semaphoreLocker.acquireSemaphore();
     try {
-      var dependencyContext =
-          getDependencyContext(state, configuredTargetKey, ruleClassProvider, env, listener);
+      DependencyContext dependencyContext;
+      try {
+        dependencyContext =
+            getDependencyContext(
+                state, configuredTargetKey, ruleClassProvider, transitionCache, env, listener);
+      } catch (ToolchainException
+          | ConfiguredValueCreationException
+          | ExecGroupCollection.InvalidExecGroupException e) {
+        // Events emitted while computing the dependency context (e.g. by toolchain type
+        // transitions) are otherwise only replayed by computeDependencies.
+        state.storedEvents.replayOn(listener);
+        throw e;
+      }
       if (dependencyContext == null) {
         return false;
       }
@@ -482,6 +493,7 @@ public final class DependencyResolver {
       State state,
       ConfiguredTargetKey configuredTargetKey,
       RuleClassProvider ruleClassProvider,
+      StarlarkTransitionCache transitionCache,
       LookupEnvironment env,
       ExtendedEventHandler listener)
       throws InterruptedException,
@@ -509,6 +521,11 @@ public final class DependencyResolver {
                   configuredTargetKey,
                   unloadedToolchainContextsInputs,
                   state.transitiveState,
+                  transitionCache,
+                  // Events are replayed by computeDependencies, which shares the state. The
+                  // listener must not be used since it may be bound to a previous Skyframe
+                  // environment when the state machine resumes after a restart.
+                  state.storedEvents,
                   (DependencyContextProducer.ResultSink) state));
     }
     if (state.dependencyContextProducer.drive(env)) {
@@ -703,7 +720,7 @@ public final class DependencyResolver {
                   ctgValue,
                   aspects,
                   dependencyContext.configConditions().asProviders(),
-                  toolchainContexts,
+                  dependencyContext.unloadedToolchainContexts(),
                   baseTargetUnloadedToolchainContexts);
         } catch (DependencyResolutionHelpers.Failure e) {
           throw handleDependencyRootCauseError(ctgValue, e.getLocation(), e.getMessage(), listener);

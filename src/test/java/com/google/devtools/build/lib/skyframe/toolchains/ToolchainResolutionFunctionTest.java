@@ -18,6 +18,7 @@ import static com.google.devtools.build.lib.analysis.testing.ToolchainContextSub
 import static com.google.devtools.build.skyframe.EvaluationResultSubjectFactory.assertThatEvaluationResult;
 
 import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableMap;
 import com.google.devtools.build.lib.analysis.PlatformOptions;
 import com.google.devtools.build.lib.analysis.config.BuildOptions;
 import com.google.devtools.build.lib.analysis.config.ToolchainTypeRequirement;
@@ -46,7 +47,7 @@ public class ToolchainResolutionFunctionTest extends ToolchainTestCase {
     try {
       getSkyframeExecutor().getSkyframeBuildView().enableAnalysis(true);
       return SkyframeExecutorTestUtils.evaluate(
-          getSkyframeExecutor(), key, /*keepGoing=*/ false, reporter);
+          getSkyframeExecutor(), key, /* keepGoing= */ false, reporter);
     } finally {
       getSkyframeExecutor().getSkyframeBuildView().enableAnalysis(false);
     }
@@ -391,7 +392,7 @@ public class ToolchainResolutionFunctionTest extends ToolchainTestCase {
         .hasExceptionThat()
         .hasMessageThat()
         .isEqualTo(
-"""
+            """
 No matching toolchains found for types:
   //toolchain:test_toolchain
 To debug, rerun with --toolchain_resolution_debug='//toolchain:test_toolchain'
@@ -418,7 +419,7 @@ For more information on platforms or toolchains see https://bazel.build/concepts
     assertThat(exception)
         .hasMessageThat()
         .isEqualTo(
-"""
+            """
 No matching toolchains found for types:
   @@repo+//toolchain:test_toolchain
 To debug, rerun with --toolchain_resolution_debug='\\Q@@repo+//toolchain:test_toolchain\\E'
@@ -1569,5 +1570,155 @@ To debug, rerun with --toolchain_resolution_debug='\\Q@@repo+//toolchain:test_to
 
     // The platform doesn't have any toolchains specified, but the request does.
     assertThat(unloadedToolchainContext).hasExecutionPlatform("//allowed:allows_all");
+  }
+
+  @Test
+  public void resolve_toolchainTypeConfiguration_targetPlatform() throws Exception {
+    scratch.file("aliases/BUILD", "alias(name = 'mac', actual = '//platforms:mac')");
+    // toolchain_1 targets mac and toolchain_2 targets linux, both are registered by default.
+    rewriteModuleDotBazel(
+        """
+        register_toolchains("//toolchain:toolchain_1", "//toolchain:toolchain_2")
+        register_execution_platforms("//platforms:linux", "//platforms:mac")
+        """);
+    useConfiguration("--platforms=//platforms:linux");
+    BuildOptions transitionedOptions = targetConfig.getOptions().clone();
+    transitionedOptions
+        .get(PlatformOptions.class)
+        .setPlatforms(ImmutableList.of(Label.parseCanonicalUnchecked("//aliases:mac")));
+    BuildConfigurationKey transitionedConfigKey = BuildConfigurationKey.create(transitionedOptions);
+
+    ToolchainContextKey key =
+        ToolchainContextKey.key()
+            .configurationKey(targetConfigKey)
+            .toolchainTypes(testToolchainType)
+            .toolchainTypeConfigurationKeys(
+                ImmutableMap.of(testToolchainTypeLabel, transitionedConfigKey))
+            .build();
+
+    EvaluationResult<UnloadedToolchainContext> result = invokeToolchainResolution(key);
+
+    assertThatEvaluationResult(result).hasNoError();
+    UnloadedToolchainContext unloadedToolchainContext = result.get(key);
+    assertThat(unloadedToolchainContext).isNotNull();
+
+    // The toolchain type is resolved for the target platform of the transitioned configuration...
+    assertThat(unloadedToolchainContext).hasResolvedToolchain("//toolchain:toolchain_1_impl");
+    // ...using the execution platforms of the base configuration...
+    assertThat(unloadedToolchainContext).hasExecutionPlatform("//platforms:linux");
+    // ...while the toolchain context still reports the target platform of the base configuration.
+    assertThat(unloadedToolchainContext).hasTargetPlatform("//platforms:linux");
+    assertThat(unloadedToolchainContext.toolchainTypeConfigurations())
+        .containsExactly(testToolchainTypeInfo, transitionedConfigKey);
+  }
+
+  @Test
+  public void resolve_toolchainTypeConfiguration_targetSettings() throws Exception {
+    scratch.file(
+        "settings/BUILD",
+        """
+        load("//toolchain:toolchain_def.bzl", "test_toolchain")
+
+        config_setting(
+            name = "is_mac",
+            constraint_values = ["//constraints:mac"],
+        )
+
+        toolchain(
+            name = "mac_toolchain",
+            target_settings = [":is_mac"],
+            toolchain = ":mac_toolchain_impl",
+            toolchain_type = "//toolchain:test_toolchain",
+        )
+
+        test_toolchain(
+            name = "mac_toolchain_impl",
+            data = "mac",
+        )
+
+        toolchain(
+            name = "default_toolchain",
+            toolchain = ":default_toolchain_impl",
+            toolchain_type = "//toolchain:test_toolchain",
+        )
+
+        test_toolchain(
+            name = "default_toolchain_impl",
+            data = "default",
+        )
+        """);
+    rewriteModuleDotBazel(
+        """
+        register_toolchains("//settings:mac_toolchain", "//settings:default_toolchain")
+        """);
+    useConfiguration("--platforms=//platforms:linux");
+    BuildOptions transitionedOptions = targetConfig.getOptions().clone();
+    transitionedOptions
+        .get(PlatformOptions.class)
+        .setPlatforms(ImmutableList.of(Label.parseCanonicalUnchecked("//platforms:mac")));
+    BuildConfigurationKey transitionedConfigKey = BuildConfigurationKey.create(transitionedOptions);
+
+    // Without a transition, target_settings are evaluated in the base configuration.
+    ToolchainContextKey key =
+        ToolchainContextKey.key()
+            .configurationKey(targetConfigKey)
+            .toolchainTypes(testToolchainType)
+            .build();
+    EvaluationResult<UnloadedToolchainContext> result = invokeToolchainResolution(key);
+    assertThatEvaluationResult(result).hasNoError();
+    assertThat(result.get(key)).hasResolvedToolchain("//settings:default_toolchain_impl");
+    assertThat(result.get(key).toolchainTypeConfigurations()).isEmpty();
+
+    // With a transition, target_settings are evaluated in the transitioned configuration.
+    ToolchainContextKey transitionedKey =
+        ToolchainContextKey.key()
+            .configurationKey(targetConfigKey)
+            .toolchainTypes(testToolchainType)
+            .toolchainTypeConfigurationKeys(
+                ImmutableMap.of(testToolchainTypeLabel, transitionedConfigKey))
+            .build();
+    result = invokeToolchainResolution(transitionedKey);
+    assertThatEvaluationResult(result).hasNoError();
+    assertThat(result.get(transitionedKey)).hasResolvedToolchain("//settings:mac_toolchain_impl");
+    assertThat(result.get(transitionedKey).toolchainTypeConfigurations())
+        .containsExactly(testToolchainTypeInfo, transitionedConfigKey);
+  }
+
+  @Test
+  public void resolve_toolchainTypeConfiguration_noMatchingToolchain() throws Exception {
+    addToolchain(
+        "extra",
+        "extra_toolchain_linux",
+        ImmutableList.of(),
+        ImmutableList.of("//constraints:linux"),
+        "baz");
+    rewriteModuleDotBazel(
+        """
+        register_toolchains("//extra:extra_toolchain_linux")
+        """);
+    useConfiguration("--platforms=//platforms:linux");
+    BuildOptions transitionedOptions = targetConfig.getOptions().clone();
+    transitionedOptions
+        .get(PlatformOptions.class)
+        .setPlatforms(ImmutableList.of(Label.parseCanonicalUnchecked("//platforms:mac")));
+    BuildConfigurationKey transitionedConfigKey = BuildConfigurationKey.create(transitionedOptions);
+
+    ToolchainContextKey key =
+        ToolchainContextKey.key()
+            .configurationKey(targetConfigKey)
+            .toolchainTypes(testToolchainType)
+            .toolchainTypeConfigurationKeys(
+                ImmutableMap.of(testToolchainTypeLabel, transitionedConfigKey))
+            .build();
+
+    EvaluationResult<UnloadedToolchainContext> result = invokeToolchainResolution(key);
+
+    // The only registered toolchain does not match the target platform of the transitioned
+    // configuration.
+    assertThatEvaluationResult(result)
+        .hasErrorEntryForKeyThat(key)
+        .hasExceptionThat()
+        .hasMessageThat()
+        .contains("No matching toolchains found for types:\n  //toolchain:test_toolchain");
   }
 }

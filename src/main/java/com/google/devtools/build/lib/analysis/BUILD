@@ -661,6 +661,7 @@ java_library(
         "//src/main/java/com/google/devtools/build/lib/cmdline",
         "//src/main/java/com/google/devtools/build/lib/packages",
         "//src/main/java/com/google/devtools/build/lib/packages:declared_exec_group",
+        "//src/main/java/com/google/devtools/build/lib/skyframe/config",
         "//third_party/java/auto:auto_value",
         "//third_party/java/guava:base",
         "//third_party/java/jsr305_annotations",
@@ -949,6 +950,7 @@ java_library(
     name = "resolved_toolchain_context",
     srcs = ["ResolvedToolchainContext.java"],
     deps = [
+        ":dependency_kind",
         ":resolved_toolchain_data_interface",
         ":template_variable_info",
         "//src/main/java/com/google/devtools/build/lib/analysis/config:toolchain_type_requirement",

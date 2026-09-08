@@ -17,7 +17,10 @@ import com.google.devtools.build.lib.analysis.TargetAndConfiguration;
 import com.google.devtools.build.lib.analysis.ToolchainCollection;
 import com.google.devtools.build.lib.analysis.TransitiveDependencyState;
 import com.google.devtools.build.lib.analysis.config.ConfigConditions;
+import com.google.devtools.build.lib.analysis.config.StarlarkTransitionCache;
 import com.google.devtools.build.lib.analysis.platform.PlatformInfo;
+import com.google.devtools.build.lib.analysis.producers.UnloadedToolchainContextsProducer.ToolchainTypeTransitionData;
+import com.google.devtools.build.lib.events.ExtendedEventHandler;
 import com.google.devtools.build.lib.skyframe.ConfiguredValueCreationException;
 import com.google.devtools.build.lib.skyframe.config.BuildConfigurationKey;
 import com.google.devtools.build.lib.skyframe.toolchains.ToolchainException;
@@ -39,6 +42,11 @@ import javax.annotation.Nullable;
  *
  * <p>This producer optimizes for the case where no compatibility check is needed and saves memory
  * by using the {@link PlatformInfo} computed as a side effect of the unloaded toolchain contexts.
+ *
+ * <p>Since the {@link ConfigConditions} are only computed after the unloaded toolchain contexts,
+ * the configuration transitions of toolchain types (see {@link
+ * com.google.devtools.build.lib.analysis.config.ToolchainTypeRequirement#transitionFactory()})
+ * can't read the attributes of the target.
  */
 public final class DependencyContextProducer
     implements StateMachine,
@@ -59,6 +67,8 @@ public final class DependencyContextProducer
   private final TargetAndConfiguration targetAndConfiguration;
   private final BuildConfigurationKey buildConfigurationKey;
   private final TransitiveDependencyState transitiveState;
+  private final StarlarkTransitionCache transitionCache;
+  private final ExtendedEventHandler eventHandler;
 
   // -------------------- Output --------------------
   private final ResultSink sink;
@@ -74,12 +84,16 @@ public final class DependencyContextProducer
       TargetAndConfiguration targetAndConfiguration,
       BuildConfigurationKey buildConfigurationKey,
       TransitiveDependencyState transitiveState,
+      StarlarkTransitionCache transitionCache,
+      ExtendedEventHandler eventHandler,
       ResultSink sink) {
     this.unloadedToolchainContextsInputs = unloadedToolchainContextsInputs;
     this.buildConfigurationKey = buildConfigurationKey;
     this.unloadedToolchainContexts = null;
     this.targetAndConfiguration = targetAndConfiguration;
     this.transitiveState = transitiveState;
+    this.transitionCache = transitionCache;
+    this.eventHandler = eventHandler;
     this.sink = sink;
   }
 
@@ -87,6 +101,13 @@ public final class DependencyContextProducer
   public StateMachine step(Tasks tasks) {
     return new UnloadedToolchainContextsProducer(
         unloadedToolchainContextsInputs,
+        new ToolchainTypeTransitionData(
+            targetAndConfiguration.getTarget().getLabel(),
+            // The config conditions haven't been computed yet, so the configured attributes aren't
+            // available to the transitions.
+            /* attributes= */ null,
+            transitionCache,
+            eventHandler),
         (UnloadedToolchainContextsProducer.ResultSink) this,
         /* runAfter= */ this::computeConfigConditions);
   }

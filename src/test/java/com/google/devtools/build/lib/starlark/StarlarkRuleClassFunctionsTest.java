@@ -66,6 +66,7 @@ import com.google.devtools.build.lib.packages.AspectPropagationEdgesSupplier.Fix
 import com.google.devtools.build.lib.packages.Attribute;
 import com.google.devtools.build.lib.packages.BuildType;
 import com.google.devtools.build.lib.packages.DeclaredExecGroup;
+import com.google.devtools.build.lib.packages.FunctionSplitTransitionAllowlist;
 import com.google.devtools.build.lib.packages.ImplicitOutputsFunction;
 import com.google.devtools.build.lib.packages.MacroClass;
 import com.google.devtools.build.lib.packages.NoSuchPackageException;
@@ -3416,6 +3417,176 @@ public final class StarlarkRuleClassFunctionsTest extends BuildViewTestCase {
     assertThat(c).toolchainType("//test:my_toolchain_type2").isMandatory();
     assertThat(c).hasToolchainType("//test:my_toolchain_type3");
     assertThat(c).toolchainType("//test:my_toolchain_type3").isOptional();
+  }
+
+  @Test
+  public void testRuleAddToolchain_cfg() throws Exception {
+    evalAndExport(
+        ev,
+        "def impl(ctx): return None",
+        "def _trans_impl(settings, attr):",
+        "    return {'//command_line_option:compilation_mode': 'opt'}",
+        "trans = transition(",
+        "    implementation = _trans_impl,",
+        "    inputs = [],",
+        "    outputs = ['//command_line_option:compilation_mode'],",
+        ")",
+        "r1 = rule(impl,",
+        "    toolchains=[",
+        "        '//test:my_toolchain_type1',",
+        "        config_common.toolchain_type('//test:my_toolchain_type2', cfg = 'target'),",
+        "        config_common.toolchain_type('//test:my_toolchain_type3', cfg = trans),",
+        "        config_common.toolchain_type('//test:my_toolchain_type4', mandatory = False,",
+        "            cfg = trans),",
+        // The same toolchain type may be listed multiple times with the same transition.
+        "        config_common.toolchain_type('//test:my_toolchain_type4', cfg = trans),",
+        "    ],",
+        ")");
+
+    RuleClass c = ((StarlarkRuleFunction) ev.lookup("r1")).getRuleClass();
+    assertThat(c).toolchainType("//test:my_toolchain_type1").hasNoTransition();
+    assertThat(c).toolchainType("//test:my_toolchain_type2").hasNoTransition();
+    assertThat(c).toolchainType("//test:my_toolchain_type3").hasTransition();
+    assertThat(c).toolchainType("//test:my_toolchain_type3").isMandatory();
+    assertThat(c).toolchainType("//test:my_toolchain_type4").hasTransition();
+    assertThat(c).toolchainType("//test:my_toolchain_type4").isMandatory();
+    // Toolchain type transitions are subject to the same allowlist as attribute transitions.
+    assertThat(
+            c.getAttributeProvider()
+                .hasAttr(FunctionSplitTransitionAllowlist.ATTRIBUTE_NAME, BuildType.LABEL))
+        .isTrue();
+  }
+
+  @Test
+  public void testRuleAddToolchain_cfgWithoutTransition_noAllowlist() throws Exception {
+    evalAndExport(
+        ev,
+        "def impl(ctx): return None",
+        "r1 = rule(impl,",
+        "    toolchains=[",
+        "        config_common.toolchain_type('//test:my_toolchain_type1', cfg = 'target'),",
+        "    ],",
+        ")");
+
+    RuleClass c = ((StarlarkRuleFunction) ev.lookup("r1")).getRuleClass();
+    assertThat(c).toolchainType("//test:my_toolchain_type1").hasNoTransition();
+    assertThat(
+            c.getAttributeProvider()
+                .hasAttr(FunctionSplitTransitionAllowlist.ATTRIBUTE_NAME, BuildType.LABEL))
+        .isFalse();
+  }
+
+  @Test
+  public void testRuleAddToolchain_cfgConflictingTransitions() throws Exception {
+    ev.checkEvalErrorContains(
+        "toolchain type '//test:my_toolchain_type1' is required multiple times with different"
+            + " 'cfg' transitions",
+        "def impl(ctx): return None",
+        "def _trans_impl(settings, attr):",
+        "    return {'//command_line_option:compilation_mode': 'opt'}",
+        "trans = transition(",
+        "    implementation = _trans_impl,",
+        "    inputs = [],",
+        "    outputs = ['//command_line_option:compilation_mode'],",
+        ")",
+        "r1 = rule(impl,",
+        "    toolchains=[",
+        "        '//test:my_toolchain_type1',",
+        "        config_common.toolchain_type('//test:my_toolchain_type1', cfg = trans),",
+        "    ],",
+        ")");
+  }
+
+  @Test
+  public void testToolchainType_cfgExecString_fails() throws Exception {
+    ev.checkEvalErrorContains(
+        "cfg = \"exec\" is not supported for toolchain types",
+        "config_common.toolchain_type('//test:my_toolchain_type1', cfg = 'exec')");
+  }
+
+  @Test
+  public void testToolchainType_cfgExecTransition_fails() throws Exception {
+    ev.checkEvalErrorContains(
+        "exec transitions are not supported for toolchain types",
+        "config_common.toolchain_type('//test:my_toolchain_type1', cfg = config.exec())");
+  }
+
+  @Test
+  public void testToolchainType_cfgNone_fails() throws Exception {
+    ev.checkEvalErrorContains(
+        "config.none() is not supported for toolchain types",
+        "config_common.toolchain_type('//test:my_toolchain_type1', cfg = config.none())");
+  }
+
+  @Test
+  public void testToolchainType_cfgInvalidString_fails() throws Exception {
+    ev.checkEvalErrorContains(
+        "cfg must be either 'target' or a Starlark-defined transition",
+        "config_common.toolchain_type('//test:my_toolchain_type1', cfg = 'foo')");
+  }
+
+  @Test
+  public void testToolchainType_cfgAnalysisTestTransition_fails() throws Exception {
+    ev.checkEvalErrorContains(
+        "analysis_test_transition() is not supported for toolchain types",
+        "trans = analysis_test_transition(",
+        "    settings = {'//command_line_option:compilation_mode': 'opt'},",
+        ")",
+        "config_common.toolchain_type('//test:my_toolchain_type1', cfg = trans)");
+  }
+
+  @Test
+  public void testExecGroup_toolchainCfg() throws Exception {
+    evalAndExport(
+        ev,
+        "def _trans_impl(settings, attr):",
+        "    return {'//command_line_option:compilation_mode': 'opt'}",
+        "trans = transition(",
+        "    implementation = _trans_impl,",
+        "    inputs = [],",
+        "    outputs = ['//command_line_option:compilation_mode'],",
+        ")",
+        "eg = exec_group(",
+        "    toolchains=[",
+        "        '//test:my_toolchain_type1',",
+        "        config_common.toolchain_type('//test:my_toolchain_type2', cfg = trans),",
+        "    ],",
+        ")",
+        "def impl(ctx): return None",
+        "r1 = rule(impl, exec_groups = {'eg': eg})");
+
+    DeclaredExecGroup declaredExecGroup = (DeclaredExecGroup) ev.lookup("eg");
+    assertThat(declaredExecGroup).toolchainType("//test:my_toolchain_type1").hasNoTransition();
+    assertThat(declaredExecGroup).toolchainType("//test:my_toolchain_type2").hasTransition();
+    // Toolchain type transitions in exec groups are subject to the allowlist as well.
+    RuleClass c = ((StarlarkRuleFunction) ev.lookup("r1")).getRuleClass();
+    assertThat(
+            c.getAttributeProvider()
+                .hasAttr(FunctionSplitTransitionAllowlist.ATTRIBUTE_NAME, BuildType.LABEL))
+        .isTrue();
+  }
+
+  @Test
+  public void testAspectAddToolchain_cfg() throws Exception {
+    evalAndExport(
+        ev,
+        "def _trans_impl(settings, attr):",
+        "    return {'//command_line_option:compilation_mode': 'opt'}",
+        "trans = transition(",
+        "    implementation = _trans_impl,",
+        "    inputs = [],",
+        "    outputs = ['//command_line_option:compilation_mode'],",
+        ")",
+        "def _impl(ctx): pass",
+        "a1 = aspect(_impl,",
+        "    toolchains=[",
+        "        '//test:my_toolchain_type1',",
+        "        config_common.toolchain_type('//test:my_toolchain_type2', cfg = trans),",
+        "    ],",
+        ")");
+    StarlarkDefinedAspect a = (StarlarkDefinedAspect) ev.lookup("a1");
+    assertThat(a).toolchainType("//test:my_toolchain_type1").hasNoTransition();
+    assertThat(a).toolchainType("//test:my_toolchain_type2").hasTransition();
   }
 
   @Test

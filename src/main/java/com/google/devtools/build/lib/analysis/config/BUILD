@@ -464,11 +464,13 @@ java_library(
     name = "toolchain_type_requirement",
     srcs = ["ToolchainTypeRequirement.java"],
     deps = [
+        "//src/main/java/com/google/devtools/build/lib/analysis/config/transitions:transition_factory",
         "//src/main/java/com/google/devtools/build/lib/cmdline",
         "//src/main/java/com/google/devtools/build/lib/skyframe/serialization/autocodec",
         "//src/main/java/com/google/devtools/build/lib/starlarkbuildapi/config:starlark_toolchain_type_requirement",
         "//third_party/java/auto:auto_value",
         "//third_party/java/guava:base",
+        "//third_party/java/jsr305_annotations",
     ],
 )
 

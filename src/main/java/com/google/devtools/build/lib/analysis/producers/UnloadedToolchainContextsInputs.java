@@ -16,6 +16,7 @@ package com.google.devtools.build.lib.analysis.producers;
 import com.google.auto.value.AutoValue;
 import com.google.common.collect.ImmutableMap;
 import com.google.devtools.build.lib.analysis.ExecGroupCollection;
+import com.google.devtools.build.lib.analysis.config.ToolchainTypeRequirement;
 import com.google.devtools.build.lib.packages.DeclaredExecGroup;
 import com.google.devtools.build.lib.skyframe.toolchains.ToolchainContextKey;
 import javax.annotation.Nullable;
@@ -25,6 +26,24 @@ import javax.annotation.Nullable;
 public abstract class UnloadedToolchainContextsInputs extends ExecGroupCollection.Builder {
   @Nullable // Null if no toolchain resolution is required.
   public abstract ToolchainContextKey targetToolchainContextKey();
+
+  /**
+   * Returns whether any of the required toolchain types has a configuration transition that needs
+   * to be applied before toolchain resolution.
+   */
+  public final boolean hasToolchainTypeTransitions() {
+    ToolchainContextKey targetToolchainContextKey = targetToolchainContextKey();
+    if (targetToolchainContextKey == null) {
+      return false;
+    }
+    if (targetToolchainContextKey.toolchainTypes().stream()
+        .anyMatch(ToolchainTypeRequirement::hasTransition)) {
+      return true;
+    }
+    return execGroups().values().stream()
+        .flatMap(execGroup -> execGroup.toolchainTypes().stream())
+        .anyMatch(ToolchainTypeRequirement::hasTransition);
+  }
 
   public static UnloadedToolchainContextsInputs create(
       ImmutableMap<String, DeclaredExecGroup> processedExecGroups,
