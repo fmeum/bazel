@@ -19,6 +19,7 @@ import static com.google.devtools.build.lib.analysis.testing.ToolchainCollection
 import static com.google.devtools.build.lib.analysis.testing.ToolchainContextSubject.assertThat;
 import static com.google.devtools.build.lib.skyframe.DependencyResolver.getDependencyContext;
 import static java.util.Objects.requireNonNull;
+import static org.junit.Assert.assertThrows;
 
 import com.google.auto.value.AutoValue;
 import com.google.common.collect.ImmutableList;
@@ -34,7 +35,9 @@ import com.google.devtools.build.lib.analysis.ExecGroupCollection;
 import com.google.devtools.build.lib.analysis.TargetAndConfiguration;
 import com.google.devtools.build.lib.analysis.ToolchainCollection;
 import com.google.devtools.build.lib.analysis.ToolchainContext;
+import com.google.devtools.build.lib.analysis.ViewCreationFailedException;
 import com.google.devtools.build.lib.analysis.config.DependencyEvaluationException;
+import com.google.devtools.build.lib.analysis.config.StarlarkTransitionCache;
 import com.google.devtools.build.lib.analysis.config.ToolchainTypeRequirement;
 import com.google.devtools.build.lib.analysis.configuredtargets.RuleConfiguredTarget;
 import com.google.devtools.build.lib.analysis.constraints.IncompatibleTargetChecker.IncompatibleTargetException;
@@ -50,6 +53,7 @@ import com.google.devtools.build.lib.skyframe.ConfiguredTargetFunction;
 import com.google.devtools.build.lib.skyframe.ConfiguredTargetKey;
 import com.google.devtools.build.lib.skyframe.ConfiguredValueCreationException;
 import com.google.devtools.build.lib.skyframe.DependencyResolver;
+import com.google.devtools.build.lib.skyframe.config.BuildConfigurationKey;
 import com.google.devtools.build.lib.skyframe.serialization.autocodec.AutoCodec;
 import com.google.devtools.build.lib.skyframe.util.SkyframeExecutorTestUtils;
 import com.google.devtools.build.skyframe.EvaluationResult;
@@ -59,6 +63,7 @@ import com.google.devtools.build.skyframe.SkyFunctionName;
 import com.google.devtools.build.skyframe.SkyKey;
 import com.google.devtools.build.skyframe.SkyValue;
 import com.google.errorprone.annotations.CanIgnoreReturnValue;
+import javax.annotation.Nullable;
 import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
@@ -147,6 +152,7 @@ public final class ToolchainsForTargetsTest extends AnalysisTestCase {
                 state,
                 key.configuredTargetKey(),
                 stateProvider.lateBoundRuleClassProvider(),
+                stateProvider.lateBoundTransitionCache(),
                 env,
                 env.getListener());
       } catch (ToolchainException
@@ -183,6 +189,10 @@ public final class ToolchainsForTargetsTest extends AnalysisTestCase {
   private class LateBoundStateProvider {
     RuleClassProvider lateBoundRuleClassProvider() {
       return ruleClassProvider;
+    }
+
+    StarlarkTransitionCache lateBoundTransitionCache() {
+      return skyframeExecutor.getSkyframeBuildView().getStarlarkTransitionCache();
     }
   }
 
@@ -1165,5 +1175,318 @@ public final class ToolchainsForTargetsTest extends AnalysisTestCase {
   private ImmutableList<Action> getActions(String label) throws InterruptedException {
     return ((RuleConfiguredTarget) getConfiguredTarget(label))
         .getActions().stream().map(Action.class::cast).collect(toImmutableList());
+  }
+
+  /**
+   * Sets up a Starlark string flag, toolchains for a new toolchain type that are selected based on
+   * its value via {@code target_settings}, and rules that apply transitions on the flag to the
+   * toolchain type.
+   */
+  private void setUpToolchainTypeTransitions() throws Exception {
+    scratch.file(
+        "flags/defs.bzl",
+        """
+        ModeInfo = provider(fields = ["mode"])
+
+        def _string_flag_impl(ctx):
+            return [ModeInfo(mode = ctx.build_setting_value)]
+
+        string_flag = rule(
+            implementation = _string_flag_impl,
+            build_setting = config.string(flag = True),
+        )
+
+        def _to_b_impl(settings, attr):
+            return {"//flags:mode": "b"}
+
+        to_b = transition(
+            implementation = _to_b_impl,
+            inputs = [],
+            outputs = ["//flags:mode"],
+        )
+
+        def _from_attr_impl(settings, attr):
+            return {"//flags:mode": attr.mode}
+
+        from_attr = transition(
+            implementation = _from_attr_impl,
+            inputs = [],
+            outputs = ["//flags:mode"],
+        )
+
+        def _noop_impl(settings, attr):
+            return {"//flags:mode": settings["//flags:mode"]}
+
+        noop = transition(
+            implementation = _noop_impl,
+            inputs = ["//flags:mode"],
+            outputs = ["//flags:mode"],
+        )
+
+        def _split_impl(settings, attr):
+            return [{"//flags:mode": "a"}, {"//flags:mode": "b"}]
+
+        split = transition(
+            implementation = _split_impl,
+            inputs = [],
+            outputs = ["//flags:mode"],
+        )
+        """);
+    scratch.file(
+        "flags/BUILD",
+        """
+        load("//flags:defs.bzl", "string_flag")
+
+        string_flag(
+            name = "mode",
+            build_setting_default = "a",
+        )
+
+        config_setting(
+            name = "mode_a",
+            flag_values = {":mode": "a"},
+        )
+
+        config_setting(
+            name = "mode_b",
+            flag_values = {":mode": "b"},
+        )
+        """);
+    scratch.file(
+        "tc/BUILD",
+        """
+        load("//toolchain:toolchain_def.bzl", "test_toolchain")
+
+        toolchain_type(name = "mode_toolchain_type")
+
+        toolchain(
+            name = "tc_a",
+            target_settings = ["//flags:mode_a"],
+            toolchain = ":tc_a_impl",
+            toolchain_type = ":mode_toolchain_type",
+        )
+
+        test_toolchain(
+            name = "tc_a_impl",
+            data = "a",
+        )
+
+        toolchain(
+            name = "tc_b",
+            target_settings = ["//flags:mode_b"],
+            toolchain = ":tc_b_impl",
+            toolchain_type = ":mode_toolchain_type",
+        )
+
+        test_toolchain(
+            name = "tc_b_impl",
+            data = "b",
+        )
+        """);
+    scratch.file(
+        "tc/rules.bzl",
+        """
+        load("//flags:defs.bzl", "from_attr", "noop", "split", "to_b")
+
+        def _impl(ctx):
+            return []
+
+        transitioned_rule = rule(
+            implementation = _impl,
+            toolchains = [config_common.toolchain_type("//tc:mode_toolchain_type", cfg = to_b)],
+        )
+
+        attr_rule = rule(
+            implementation = _impl,
+            attrs = {"mode": attr.string()},
+            toolchains = [
+                config_common.toolchain_type("//tc:mode_toolchain_type", cfg = from_attr),
+            ],
+        )
+
+        noop_rule = rule(
+            implementation = _impl,
+            toolchains = [config_common.toolchain_type("//tc:mode_toolchain_type", cfg = noop)],
+        )
+
+        split_rule = rule(
+            implementation = _impl,
+            toolchains = [config_common.toolchain_type("//tc:mode_toolchain_type", cfg = split)],
+        )
+
+        exec_group_rule = rule(
+            implementation = _impl,
+            toolchains = ["//tc:mode_toolchain_type"],
+            exec_groups = {
+                "transitioned": exec_group(
+                    toolchains = [
+                        config_common.toolchain_type("//tc:mode_toolchain_type", cfg = to_b),
+                    ],
+                ),
+            },
+        )
+        """);
+    scratch.appendFile("MODULE.bazel", "register_toolchains('//tc:all')");
+  }
+
+  private static final Label MODE_TOOLCHAIN_TYPE =
+      Label.parseCanonicalUnchecked("//tc:mode_toolchain_type");
+  private static final Label MODE_FLAG = Label.parseCanonicalUnchecked("//flags:mode");
+
+  /** Returns the value of the mode flag in the transitioned configuration of the toolchain type. */
+  @Nullable
+  private static Object getTransitionedMode(UnloadedToolchainContext toolchainContext) {
+    BuildConfigurationKey configurationKey =
+        toolchainContext
+            .toolchainTypeConfigurations()
+            .get(toolchainContext.requestedLabelToToolchainType().get(MODE_TOOLCHAIN_TYPE));
+    return configurationKey == null
+        ? null
+        : configurationKey.getOptions().getStarlarkOptions().get(MODE_FLAG);
+  }
+
+  @Test
+  public void toolchainTypeTransition_resolvesInTransitionedConfiguration() throws Exception {
+    setUpToolchainTypeTransitions();
+    scratch.file(
+        "a/BUILD",
+        """
+        load("//tc:rules.bzl", "transitioned_rule")
+
+        transitioned_rule(name = "a")
+        """);
+
+    ToolchainCollection<UnloadedToolchainContext> toolchainCollection =
+        getToolchainCollection("//a");
+    assertThat(toolchainCollection)
+        .defaultToolchainContext()
+        .hasResolvedToolchain("//tc:tc_b_impl");
+    assertThat(getTransitionedMode(toolchainCollection.getDefaultToolchainContext()))
+        .isEqualTo("b");
+  }
+
+  @Test
+  public void toolchainTypeTransition_readsAttributes() throws Exception {
+    setUpToolchainTypeTransitions();
+    scratch.file(
+        "a/BUILD",
+        """
+        load("//tc:rules.bzl", "attr_rule")
+
+        attr_rule(
+            name = "a",
+            mode = "a",
+        )
+
+        attr_rule(
+            name = "b",
+            mode = "b",
+        )
+        """);
+
+    ToolchainCollection<UnloadedToolchainContext> toolchainCollection =
+        getToolchainCollection("//a:a");
+    assertThat(toolchainCollection)
+        .defaultToolchainContext()
+        .hasResolvedToolchain("//tc:tc_a_impl");
+    // The transition didn't change the configuration, so it is treated as if there were none.
+    assertThat(getTransitionedMode(toolchainCollection.getDefaultToolchainContext())).isNull();
+
+    toolchainCollection = getToolchainCollection("//a:b");
+    assertThat(toolchainCollection)
+        .defaultToolchainContext()
+        .hasResolvedToolchain("//tc:tc_b_impl");
+    assertThat(getTransitionedMode(toolchainCollection.getDefaultToolchainContext()))
+        .isEqualTo("b");
+  }
+
+  @Test
+  public void toolchainTypeTransition_noop() throws Exception {
+    setUpToolchainTypeTransitions();
+    scratch.file(
+        "a/BUILD",
+        """
+        load("//tc:rules.bzl", "noop_rule")
+
+        noop_rule(name = "a")
+        """);
+
+    ToolchainCollection<UnloadedToolchainContext> toolchainCollection =
+        getToolchainCollection("//a");
+    assertThat(toolchainCollection)
+        .defaultToolchainContext()
+        .hasResolvedToolchain("//tc:tc_a_impl");
+    assertThat(toolchainCollection.getDefaultToolchainContext().toolchainTypeConfigurations())
+        .isEmpty();
+  }
+
+  @Test
+  public void toolchainTypeTransition_execGroup() throws Exception {
+    setUpToolchainTypeTransitions();
+    scratch.file(
+        "a/BUILD",
+        """
+        load("//tc:rules.bzl", "exec_group_rule")
+
+        exec_group_rule(name = "a")
+        """);
+
+    ToolchainCollection<UnloadedToolchainContext> toolchainCollection =
+        getToolchainCollection("//a");
+    // The default exec group requires the toolchain type without a transition.
+    assertThat(toolchainCollection)
+        .defaultToolchainContext()
+        .hasResolvedToolchain("//tc:tc_a_impl");
+    assertThat(toolchainCollection.getDefaultToolchainContext().toolchainTypeConfigurations())
+        .isEmpty();
+    // The exec group requires the same toolchain type with a transition.
+    assertThat(toolchainCollection).hasExecGroup("transitioned");
+    assertThat(toolchainCollection)
+        .execGroup("transitioned")
+        .hasResolvedToolchain("//tc:tc_b_impl");
+    assertThat(getTransitionedMode(toolchainCollection.getToolchainContext("transitioned")))
+        .isEqualTo("b");
+  }
+
+  @Test
+  public void toolchainTypeTransition_autoExecGroups() throws Exception {
+    setUpToolchainTypeTransitions();
+    scratch.file(
+        "a/BUILD",
+        """
+        load("//tc:rules.bzl", "transitioned_rule")
+
+        transitioned_rule(name = "a")
+        """);
+    useConfiguration("--incompatible_auto_exec_groups");
+
+    ToolchainCollection<UnloadedToolchainContext> toolchainCollection =
+        getToolchainCollection("//a");
+    assertThat(toolchainCollection).hasExecGroup("//tc:mode_toolchain_type");
+    assertThat(toolchainCollection)
+        .execGroup("//tc:mode_toolchain_type")
+        .hasResolvedToolchain("//tc:tc_b_impl");
+    assertThat(
+            getTransitionedMode(
+                toolchainCollection.getToolchainContext("//tc:mode_toolchain_type")))
+        .isEqualTo("b");
+  }
+
+  @Test
+  public void toolchainTypeTransition_split_fails() throws Exception {
+    setUpToolchainTypeTransitions();
+    scratch.file(
+        "a/BUILD",
+        """
+        load("//tc:rules.bzl", "split_rule")
+
+        split_rule(name = "a")
+        """);
+
+    reporter.removeHandler(failFastHandler);
+    assertThrows(ViewCreationFailedException.class, () -> update("//a"));
+    assertContainsEvent(
+        "Error applying the 'cfg' transition of toolchain type //tc:mode_toolchain_type: the"
+            + " transition must not be a split transition, but it produced 2 configurations");
   }
 }

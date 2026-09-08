@@ -233,6 +233,60 @@ You can mix and match forms in the same rule, also. However, if the same
 toolchain type is listed multiple times, it will take the most strict version,
 where mandatory is more strict than optional.
 
+### Transitioning toolchain dependencies {:#toolchain-transitions}
+
+By default, a toolchain is resolved in and built for the configuration of the
+target that requires it. If a rule needs a toolchain in a different
+configuration, for example one that differs in a
+[build setting](/extending/config), it can pass a
+[transition](/extending/config#user-defined-transitions) as the `cfg` parameter
+of `config_common.toolchain_type`:
+
+```python
+def _opt_impl(settings, attr):
+    return {"//command_line_option:compilation_mode": "opt"}
+
+_opt_transition = transition(
+    implementation = _opt_impl,
+    inputs = [],
+    outputs = ["//command_line_option:compilation_mode"],
+)
+
+bar_binary = rule(
+    ...
+    toolchains = [
+        config_common.toolchain_type("//bar_tools:toolchain_type", cfg = _opt_transition),
+    ],
+)
+```
+
+The transition is applied to the configuration of the target before toolchain
+resolution, so the toolchain type is resolved in the transitioned configuration:
+the target platform, the registered toolchains and the `target_settings` of
+candidate toolchains are all evaluated after the transition, and the selected
+toolchain is built in that configuration. This makes it possible to select a
+different toolchain than the one that would be selected for the target itself.
+Like an attribute transition, the transition can read the attributes of the
+target, except when the toolchain type is required by an aspect.
+
+The execution platform is still selected once for the execution group that
+requires the toolchain type, so a transitioned toolchain type shares its
+execution platform with the other toolchain types of the same execution group
+and participates in the selection of that platform.
+
+The following restrictions apply:
+
+-  The transition must not be a split transition. A transition that returns a
+   list or a dictionary of dictionaries with more than one entry is an error.
+-  `cfg = "exec"` and other exec transitions are not supported: toolchains are
+   always resolved for the execution platform of the execution group that
+   requires them, and that platform is only known after toolchain resolution.
+-  The same toolchain type cannot be listed multiple times with different
+   transitions.
+
+As with attribute transitions, rules that use Starlark transitions on toolchain
+types are subject to the [transition allowlist](/extending/config#user-defined-transitions).
+
 ### Writing aspects that use toolchains {:#writing-aspects-toolchains}
 
 Aspects have access to the same toolchain API as rules: you can define required

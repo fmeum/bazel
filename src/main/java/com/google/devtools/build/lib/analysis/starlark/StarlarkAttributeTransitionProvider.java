@@ -65,6 +65,15 @@ public class StarlarkAttributeTransitionProvider
   }
 
   @Override
+  public boolean equals(Object object) {
+    if (object == this) {
+      return true;
+    }
+    return object instanceof StarlarkAttributeTransitionProvider other
+        && starlarkDefinedConfigTransition.equals(other.starlarkDefinedConfigTransition);
+  }
+
+  @Override
   public int hashCode() {
     return starlarkDefinedConfigTransition.hashCode();
   }

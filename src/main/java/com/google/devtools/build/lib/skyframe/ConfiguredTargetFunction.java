@@ -20,7 +20,6 @@ import static com.google.devtools.build.lib.skyframe.SkyValueRetrieverUtils.retr
 
 import com.google.common.base.Preconditions;
 import com.google.common.base.Stopwatch;
-import com.google.common.collect.ImmutableSet;
 import com.google.common.flogger.GoogleLogger;
 import com.google.devtools.build.lib.actions.ActionConflictException;
 import com.google.devtools.build.lib.analysis.AnalysisRootCauseEvent;
@@ -354,15 +353,13 @@ public final class ConfiguredTargetFunction implements SkyFunction {
             ToolchainCollection.builder();
         for (Map.Entry<String, UnloadedToolchainContext> unloadedContext :
             prereqs.getUnloadedToolchainContexts().contextMap().entrySet()) {
-          ImmutableSet<ConfiguredTargetAndData> toolchainDependencies =
-              ImmutableSet.copyOf(
-                  prereqs
-                      .getDepValueMap()
-                      .get(DependencyKind.forExecGroup(unloadedContext.getKey())));
           contextsBuilder.addContext(
               unloadedContext.getKey(),
               ResolvedToolchainContext.load(
-                  unloadedContext.getValue(), targetDescription, toolchainDependencies));
+                  unloadedContext.getValue(),
+                  targetDescription,
+                  unloadedContext.getKey(),
+                  prereqs.getDepValueMap()));
         }
         toolchainContexts = contextsBuilder.build();
       }

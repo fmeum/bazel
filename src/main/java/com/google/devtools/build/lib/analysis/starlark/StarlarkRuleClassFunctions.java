@@ -1063,17 +1063,23 @@ public class StarlarkRuleClassFunctions implements StarlarkRuleFunctionsApi {
     // includes the code that determines the helper function's argument values.
     builder.setRuleDefinitionEnvironmentLabelAndDigest(bzlFile, transitiveDigest);
 
-    builder.addToolchainTypes(parseToolchainTypes(toolchains, labelConverter));
+    ImmutableSet<ToolchainTypeRequirement> toolchainTypes =
+        parseToolchainTypes(toolchains, labelConverter);
+    builder.addToolchainTypes(toolchainTypes);
+    // Toolchain type transitions are subject to the same allowlist as attribute transitions.
+    hasStarlarkDefinedTransition |= hasStarlarkDefinedToolchainTypeTransition(toolchainTypes);
 
     if (execGroups != Starlark.NONE) {
       boolean override = parent != null;
       Map<String, DeclaredExecGroup> execGroupDict =
           Dict.cast(execGroups, String.class, DeclaredExecGroup.class, "exec_group");
-      for (String group : execGroupDict.keySet()) {
+      for (Map.Entry<String, DeclaredExecGroup> group : execGroupDict.entrySet()) {
         // TODO(b/151742236): document this in the param documentation.
-        if (!StarlarkExecGroupCollection.isValidGroupName(group)) {
-          throw Starlark.errorf("Exec group name '%s' is not a valid name.", group);
+        if (!StarlarkExecGroupCollection.isValidGroupName(group.getKey())) {
+          throw Starlark.errorf("Exec group name '%s' is not a valid name.", group.getKey());
         }
+        hasStarlarkDefinedTransition |=
+            hasStarlarkDefinedToolchainTypeTransition(group.getValue().toolchainTypes());
       }
       builder.addExecGroups(execGroupDict, override);
     }
@@ -2222,6 +2228,23 @@ public class StarlarkRuleClassFunctions implements StarlarkRuleFunctionsApi {
         ImmutableSet.copyOf(Sequence.cast(subrulesUnchecked, StarlarkSubrule.class, "subrules")));
   }
 
+  /** Returns whether any of the toolchain types has a Starlark-defined configuration transition. */
+  private static boolean hasStarlarkDefinedToolchainTypeTransition(
+      ImmutableSet<ToolchainTypeRequirement> toolchainTypes) {
+    boolean[] hasStarlarkDefinedTransition = new boolean[1];
+    for (ToolchainTypeRequirement toolchainType : toolchainTypes) {
+      if (toolchainType.transitionFactory() != null) {
+        toolchainType
+            .transitionFactory()
+            .visit(
+                factory ->
+                    hasStarlarkDefinedTransition[0] |=
+                        factory instanceof StarlarkAttributeTransitionProvider);
+      }
+    }
+    return hasStarlarkDefinedTransition[0];
+  }
+
   private static ImmutableSet<ToolchainTypeRequirement> parseToolchainTypes(
       Sequence<?> rawToolchains, LabelConverter labelConverter) throws EvalException {
     Map<Label, ToolchainTypeRequirement> toolchainTypes = new LinkedHashMap<>();
@@ -2231,6 +2254,11 @@ public class StarlarkRuleClassFunctions implements StarlarkRuleFunctionsApi {
       Label typeLabel = toolchainType.toolchainType();
       ToolchainTypeRequirement previous = toolchainTypes.get(typeLabel);
       if (previous != null) {
+        if (!Objects.equals(previous.transitionFactory(), toolchainType.transitionFactory())) {
+          throw Starlark.errorf(
+              "toolchain type '%s' is required multiple times with different 'cfg' transitions",
+              typeLabel);
+        }
         // Keep the one with the strictest requirements.
         toolchainType = ToolchainTypeRequirement.strictest(previous, toolchainType);
       }

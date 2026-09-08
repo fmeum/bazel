@@ -14,6 +14,7 @@
 package com.google.devtools.build.lib.skyframe.toolchains;
 
 import static com.google.common.collect.ImmutableList.toImmutableList;
+import static com.google.common.collect.ImmutableMap.toImmutableMap;
 import static com.google.common.collect.ImmutableSet.toImmutableSet;
 
 import com.google.common.base.Preconditions;
@@ -25,6 +26,7 @@ import com.google.common.collect.ImmutableSetMultimap;
 import com.google.common.collect.Table;
 import com.google.devtools.build.lib.analysis.PlatformConfiguration;
 import com.google.devtools.build.lib.analysis.config.BuildConfigurationValue;
+import com.google.devtools.build.lib.analysis.config.CommonOptions;
 import com.google.devtools.build.lib.analysis.config.ToolchainTypeRequirement;
 import com.google.devtools.build.lib.analysis.platform.PlatformInfo;
 import com.google.devtools.build.lib.analysis.platform.ToolchainTypeInfo;
@@ -43,6 +45,8 @@ import com.google.devtools.build.skyframe.SkyKey;
 import com.google.devtools.build.skyframe.SkyframeLookupResult;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -101,13 +105,27 @@ public class ToolchainResolutionFunction implements SkyFunction {
         return null;
       }
 
+      // Determine the target platforms of toolchain types that are resolved in a transitioned
+      // configuration.
+      ImmutableMap<BuildConfigurationKey, ConfiguredTargetKey> transitionedTargetPlatformKeys =
+          loadTransitionedTargetPlatformKeys(
+              env,
+              ImmutableSet.copyOf(key.toolchainTypeConfigurationKeys().values()),
+              platformConfiguration.getTargetPlatform(),
+              platformKeys.targetPlatformKey());
+
       // Load the configured target for the toolchain types to ensure that they are valid and
       // resolve aliases.
       ImmutableMap<Label, ToolchainTypeInfo> resolvedToolchainTypeInfos =
           loadToolchainTypeInfos(env, configuration, key.toolchainTypes());
       builder.setRequestedLabelToToolchainType(resolvedToolchainTypeInfos);
       ImmutableSet<ToolchainType> resolvedToolchainTypes =
-          loadToolchainTypes(resolvedToolchainTypeInfos, key.toolchainTypes());
+          loadToolchainTypes(
+              resolvedToolchainTypeInfos,
+              key.toolchainTypes(),
+              key.toolchainTypeConfigurationKeys(),
+              transitionedTargetPlatformKeys,
+              platformKeys.targetPlatformKey());
 
       // Determine the actual toolchain implementations to use.
       determineToolchainImplementations(
@@ -132,17 +150,99 @@ public class ToolchainResolutionFunction implements SkyFunction {
     }
   }
 
+  /**
+   * A toolchain type to resolve.
+   *
+   * @param configurationKey the configuration to resolve the toolchain type in, or {@code null} to
+   *     use the configuration of the {@link ToolchainContextKey}
+   * @param targetPlatformKey the target platform of the configuration to resolve the toolchain type
+   *     in
+   */
   record ToolchainType(
-      ToolchainTypeRequirement toolchainTypeRequirement, ToolchainTypeInfo toolchainTypeInfo) {
+      ToolchainTypeRequirement toolchainTypeRequirement,
+      ToolchainTypeInfo toolchainTypeInfo,
+      @Nullable BuildConfigurationKey configurationKey,
+      ConfiguredTargetKey targetPlatformKey) {
 
     ToolchainType {
       Objects.requireNonNull(toolchainTypeRequirement, "toolchainTypeRequirement");
       Objects.requireNonNull(toolchainTypeInfo, "toolchainTypeInfo");
+      Objects.requireNonNull(targetPlatformKey, "targetPlatformKey");
     }
 
     public boolean mandatory() {
       return toolchainTypeRequirement.mandatory();
     }
+  }
+
+  /**
+   * Returns the (alias-resolved) target platform keys of the given transitioned configurations,
+   * keyed by configuration.
+   */
+  private static ImmutableMap<BuildConfigurationKey, ConfiguredTargetKey>
+      loadTransitionedTargetPlatformKeys(
+          Environment env,
+          ImmutableSet<BuildConfigurationKey> configurationKeys,
+          Label targetPlatformLabel,
+          ConfiguredTargetKey targetPlatformKey)
+          throws InterruptedException, ValueMissingException, InvalidPlatformException {
+    if (configurationKeys.isEmpty()) {
+      return ImmutableMap.of();
+    }
+
+    SkyframeLookupResult configurations = env.getValuesAndExceptions(configurationKeys);
+    Map<BuildConfigurationKey, Label> transitionedTargetPlatformLabels = new LinkedHashMap<>();
+    for (BuildConfigurationKey configurationKey : configurationKeys) {
+      BuildConfigurationValue configuration =
+          (BuildConfigurationValue) configurations.get(configurationKey);
+      if (configuration == null) {
+        throw new ValueMissingException();
+      }
+      transitionedTargetPlatformLabels.put(
+          configurationKey,
+          Preconditions.checkNotNull(configuration.getFragment(PlatformConfiguration.class))
+              .getTargetPlatform());
+    }
+
+    // Load the platforms that differ from the target platform of the base configuration. Platforms
+    // are configured in the empty configuration, so the configured target keys are the same as
+    // those used for the base configuration.
+    Map<Label, ConfiguredTargetKey> platformKeysByLabel = new HashMap<>();
+    platformKeysByLabel.put(targetPlatformLabel, targetPlatformKey);
+    ImmutableList<ConfiguredTargetKey> keysToLoad =
+        transitionedTargetPlatformLabels.values().stream()
+            .distinct()
+            .filter(label -> !label.equals(targetPlatformLabel))
+            .map(
+                label ->
+                    ConfiguredTargetKey.builder()
+                        .setLabel(label)
+                        .setConfigurationKey(
+                            BuildConfigurationKey.create(CommonOptions.EMPTY_OPTIONS))
+                        .build())
+            .collect(toImmutableList());
+    if (!keysToLoad.isEmpty()) {
+      Map<ConfiguredTargetKey, PlatformInfo> platforms =
+          PlatformLookupUtil.getPlatformInfo(keysToLoad, env);
+      if (platforms == null) {
+        throw new ValueMissingException();
+      }
+      for (ConfiguredTargetKey platformKey : keysToLoad) {
+        // Use the actual label of the platform in case the requested label was an alias.
+        platformKeysByLabel.put(
+            platformKey.getLabel(),
+            ConfiguredTargetKey.builder()
+                .setLabel(platforms.get(platformKey).label())
+                .setConfigurationKey(BuildConfigurationKey.create(CommonOptions.EMPTY_OPTIONS))
+                .build());
+      }
+    }
+
+    ImmutableMap.Builder<BuildConfigurationKey, ConfiguredTargetKey> result =
+        ImmutableMap.builderWithExpectedSize(configurationKeys.size());
+    transitionedTargetPlatformLabels.forEach(
+        (configurationKey, label) -> result.put(configurationKey, platformKeysByLabel.get(label)));
+    return result.buildOrThrow();
   }
 
   /**
@@ -165,12 +265,18 @@ public class ToolchainResolutionFunction implements SkyFunction {
   }
 
   /**
-   * Returns a map from the actual post-alias Label to the ToolchainTypeRequirement for that type.
+   * Returns the toolchain types to resolve, with the requirement rebuilt to use the actual
+   * post-alias label and the configuration to resolve the type in.
    */
   private ImmutableSet<ToolchainType> loadToolchainTypes(
       ImmutableMap<Label, ToolchainTypeInfo> resolvedToolchainTypeInfos,
-      ImmutableSet<ToolchainTypeRequirement> toolchainTypes) {
+      ImmutableSet<ToolchainTypeRequirement> toolchainTypes,
+      ImmutableMap<Label, BuildConfigurationKey> toolchainTypeConfigurationKeys,
+      ImmutableMap<BuildConfigurationKey, ConfiguredTargetKey> transitionedTargetPlatformKeys,
+      ConfiguredTargetKey targetPlatformKey)
+      throws ConflictingToolchainTypeConfigurationsException {
     ImmutableSet.Builder<ToolchainType> resolved = new ImmutableSet.Builder<>();
+    Map<ToolchainTypeInfo, Optional<BuildConfigurationKey>> configurationsByType = new HashMap<>();
 
     for (ToolchainTypeRequirement toolchainTypeRequirement : toolchainTypes) {
       // Find the actual Label.
@@ -180,6 +286,17 @@ public class ToolchainResolutionFunction implements SkyFunction {
         continue;
       }
 
+      // The configuration is keyed by the requested label, so look it up before resolving aliases.
+      BuildConfigurationKey configurationKey =
+          toolchainTypeConfigurationKeys.get(toolchainTypeRequirement.toolchainType());
+      Optional<BuildConfigurationKey> previous =
+          configurationsByType.putIfAbsent(
+              toolchainTypeInfo, Optional.ofNullable(configurationKey));
+      if (previous != null && !previous.equals(Optional.ofNullable(configurationKey))) {
+        // The same type was requested through different labels with different transitions.
+        throw new ConflictingToolchainTypeConfigurationsException(toolchainTypeInfo);
+      }
+
       // If the labels don't match, re-build the TTR.
       toolchainTypeLabel = toolchainTypeInfo.typeLabel();
       if (!toolchainTypeLabel.equals(toolchainTypeRequirement.toolchainType())) {
@@ -187,7 +304,14 @@ public class ToolchainResolutionFunction implements SkyFunction {
             toolchainTypeRequirement.toBuilder().toolchainType(toolchainTypeLabel).build();
       }
 
-      resolved.add(new ToolchainType(toolchainTypeRequirement, toolchainTypeInfo));
+      resolved.add(
+          new ToolchainType(
+              toolchainTypeRequirement,
+              toolchainTypeInfo,
+              configurationKey,
+              configurationKey == null
+                  ? targetPlatformKey
+                  : transitionedTargetPlatformKeys.get(configurationKey)));
     }
     return resolved.build();
   }
@@ -207,15 +331,20 @@ public class ToolchainResolutionFunction implements SkyFunction {
           InvalidToolchainLabelException,
           InvalidConfigurationDuringToolchainResolutionException {
 
-    // Find the toolchains for the requested toolchain types.
+    // Find the toolchains for the requested toolchain types. Toolchain types with a configuration
+    // transition are resolved in the transitioned configuration (which determines the registered
+    // toolchains, their target_settings and the target platform), but share the execution
+    // platforms with the other toolchain types so that a single execution platform can be selected.
     List<SingleToolchainResolutionKey> registeredToolchainKeys = new ArrayList<>();
     for (ToolchainType toolchainType : toolchainTypes) {
       registeredToolchainKeys.add(
           SingleToolchainResolutionValue.key(
-              configurationKey,
+              toolchainType.configurationKey() != null
+                  ? toolchainType.configurationKey()
+                  : configurationKey,
               toolchainType.toolchainTypeRequirement(),
               toolchainType.toolchainTypeInfo(),
-              platformKeys.targetPlatformKey(),
+              toolchainType.targetPlatformKey(),
               platformKeys.executionPlatformKeys(),
               debugTarget));
     }
@@ -269,6 +398,17 @@ public class ToolchainResolutionFunction implements SkyFunction {
         toolchainTypes.stream()
             .map(ToolchainType::toolchainTypeRequirement)
             .collect(toImmutableSet());
+    ImmutableMap<ToolchainTypeInfo, BuildConfigurationKey> toolchainTypeConfigurations =
+        toolchainTypes.stream()
+            .filter(toolchainType -> toolchainType.configurationKey() != null)
+            .collect(
+                toImmutableMap(
+                    ToolchainType::toolchainTypeInfo,
+                    ToolchainType::configurationKey,
+                    // The same type may be requested via an alias; both have the same
+                    // configuration, as verified in loadToolchainTypes.
+                    (first, second) -> first));
+    builder.setToolchainTypeConfigurations(toolchainTypeConfigurations);
     if (selectedExecutionPlatformKey.isEmpty()) {
       builder.setToolchainTypes(toolchainTypeRequirements);
       builder.setExecutionPlatform(PlatformInfo.EMPTY_PLATFORM_INFO);
@@ -420,6 +560,25 @@ public class ToolchainResolutionFunction implements SkyFunction {
           String.join("\n", missingToolchainRows),
           String.join("|", labelStrings),
           platformSpecificMessage);
+    }
+  }
+
+  /**
+   * Exception used when the same toolchain type is requested through different labels (aliases)
+   * with different configuration transitions.
+   */
+  static final class ConflictingToolchainTypeConfigurationsException extends ToolchainException {
+    ConflictingToolchainTypeConfigurationsException(ToolchainTypeInfo toolchainType) {
+      super(
+          String.format(
+              "Toolchain type %s is required multiple times (through aliases) with different 'cfg'"
+                  + " transitions",
+              toolchainType.typeLabel()));
+    }
+
+    @Override
+    protected Code getDetailedCode() {
+      return Code.INVALID_TOOLCHAIN_TYPE;
     }
   }
 

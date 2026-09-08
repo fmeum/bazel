@@ -19,6 +19,7 @@ import com.google.common.collect.ImmutableSetMultimap;
 import com.google.devtools.build.lib.analysis.ToolchainContext;
 import com.google.devtools.build.lib.analysis.platform.ToolchainTypeInfo;
 import com.google.devtools.build.lib.cmdline.Label;
+import com.google.devtools.build.lib.skyframe.config.BuildConfigurationKey;
 import com.google.devtools.build.skyframe.SkyValue;
 import javax.annotation.Nullable;
 
@@ -39,6 +40,13 @@ public interface UnloadedToolchainContext extends ToolchainContext, SkyValue {
    * labels} for the same {@link ToolchainTypeInfo}.
    */
   ImmutableMap<Label, ToolchainTypeInfo> requestedLabelToToolchainType();
+
+  /**
+   * The configurations in which the toolchains of toolchain types with a configuration transition
+   * were resolved and should be built. Toolchain types that are not present are resolved and built
+   * in the configuration of the target that requires them.
+   */
+  ImmutableMap<ToolchainTypeInfo, BuildConfigurationKey> toolchainTypeConfigurations();
 
   @Override
   ImmutableSet<Label> resolvedToolchainLabels();

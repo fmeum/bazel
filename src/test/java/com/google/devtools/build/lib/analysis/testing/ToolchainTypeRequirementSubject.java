@@ -58,4 +58,12 @@ public class ToolchainTypeRequirementSubject extends Subject {
   public void isOptional() {
     check("mandatory").that(actual.mandatory()).isFalse();
   }
+
+  public void hasTransition() {
+    check("transitionFactory").that(actual.transitionFactory()).isNotNull();
+  }
+
+  public void hasNoTransition() {
+    check("transitionFactory").that(actual.transitionFactory()).isNull();
+  }
 }

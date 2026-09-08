@@ -19,6 +19,7 @@ import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.packages.AspectClass;
 import com.google.devtools.build.lib.packages.Attribute;
 import com.google.devtools.build.lib.packages.DeclaredExecGroup;
+import com.google.devtools.build.lib.skyframe.config.BuildConfigurationKey;
 import javax.annotation.Nullable;
 
 /**
@@ -102,45 +103,81 @@ public interface DependencyKind {
 
     /** Returns true if this toolchain dependency is for the default exec group. */
     public boolean isDefaultExecGroup();
+
+    /**
+     * The configuration in which the toolchain should be built, or {@code null} to use the
+     * configuration of the depending entity. Non-null only for toolchains of toolchain types with a
+     * configuration transition.
+     */
+    @Nullable
+    public BuildConfigurationKey getConfigurationKey();
   }
 
   /**
    * A dependency of an entity (target or aspect) on a toolchain context, identified by the
-   * execution group name.
+   * execution group name and the configuration to build the toolchain in.
    */
   @AutoValue
-  abstract class ToolchainDependencyKindImpl implements ToolchainDependencyKind {}
+  abstract class ToolchainDependencyKindImpl implements ToolchainDependencyKind {
+    @Override
+    @Nullable
+    public abstract BuildConfigurationKey getConfigurationKey();
+  }
 
   /**
    * A dependency for the aspect on its target's toolchain context, used for aspects propagating to
-   * toolchains, identified by the execution group name and the toolchain type.
+   * toolchains, identified by the execution group name, the toolchain type and the configuration to
+   * build the toolchain in.
    */
   @AutoValue
   abstract class BaseTargetToolchainDependencyKind implements ToolchainDependencyKind {
     /** The toolchain type of the toolchain dependency. */
     public abstract Label getToolchainType();
+
+    @Override
+    @Nullable
+    public abstract BuildConfigurationKey getConfigurationKey();
   }
 
   /** Returns a {@link DependencyKind} for the given execution group. */
   static DependencyKind forExecGroup(String execGroupName) {
-    if (DeclaredExecGroup.DEFAULT_EXEC_GROUP_NAME.equals(execGroupName)) {
-      return defaultExecGroupToolchain();
-    }
-    return new AutoValue_DependencyKind_ToolchainDependencyKindImpl(execGroupName, false);
+    return forExecGroup(execGroupName, /* configurationKey= */ null);
+  }
+
+  /**
+   * Returns a {@link DependencyKind} for the given execution group and the configuration to build
+   * the toolchain in ({@code null} for the configuration of the depending entity).
+   */
+  static DependencyKind forExecGroup(
+      String execGroupName, @Nullable BuildConfigurationKey configurationKey) {
+    return new AutoValue_DependencyKind_ToolchainDependencyKindImpl(
+        execGroupName,
+        DeclaredExecGroup.DEFAULT_EXEC_GROUP_NAME.equals(execGroupName),
+        configurationKey);
   }
 
   /** Returns a {@link DependencyKind} for the default execution group. */
   static DependencyKind defaultExecGroupToolchain() {
-    return new AutoValue_DependencyKind_ToolchainDependencyKindImpl(
-        DeclaredExecGroup.DEFAULT_EXEC_GROUP_NAME, true);
+    return forExecGroup(DeclaredExecGroup.DEFAULT_EXEC_GROUP_NAME);
   }
 
   /** Returns a {@link DependencyKind} for the given execution group. */
   static DependencyKind forBaseTargetExecGroup(String execGroupName, Label toolchainType) {
+    return forBaseTargetExecGroup(execGroupName, toolchainType, /* configurationKey= */ null);
+  }
+
+  /**
+   * Returns a {@link DependencyKind} for the given execution group, toolchain type and the
+   * configuration to build the toolchain in ({@code null} for the configuration of the depending
+   * entity).
+   */
+  static DependencyKind forBaseTargetExecGroup(
+      String execGroupName, Label toolchainType, @Nullable BuildConfigurationKey configurationKey) {
     return new AutoValue_DependencyKind_BaseTargetToolchainDependencyKind(
         execGroupName,
         execGroupName.equals(DeclaredExecGroup.DEFAULT_EXEC_GROUP_NAME),
-        toolchainType);
+        toolchainType,
+        configurationKey);
   }
 
   /** Predicate to check if a dependency represents an aspect's base target toolchain. */

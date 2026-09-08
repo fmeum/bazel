@@ -14,6 +14,7 @@
 package com.google.devtools.build.lib.skyframe.toolchains;
 
 import com.google.auto.value.AutoValue;
+import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.devtools.build.lib.analysis.config.ToolchainTypeRequirement;
 import com.google.devtools.build.lib.cmdline.Label;
@@ -36,6 +37,7 @@ public abstract class ToolchainContextKey implements SkyKey {
   public static Builder key() {
     return new AutoValue_ToolchainContextKey.Builder()
         .toolchainTypes(ImmutableSet.of())
+        .toolchainTypeConfigurationKeys(ImmutableMap.of())
         .execConstraintLabels(ImmutableSet.of())
         .debugTarget(false);
   }
@@ -52,13 +54,23 @@ public abstract class ToolchainContextKey implements SkyKey {
 
   public abstract BuildConfigurationKey configurationKey();
 
-  abstract ImmutableSet<ToolchainTypeRequirement> toolchainTypes();
+  public abstract ImmutableSet<ToolchainTypeRequirement> toolchainTypes();
+
+  /**
+   * The configurations in which to resolve toolchain types that have a configuration transition,
+   * keyed by the (requested, pre-alias) toolchain type label. Toolchain types that are not present
+   * are resolved in {@link #configurationKey()}.
+   */
+  public abstract ImmutableMap<Label, BuildConfigurationKey> toolchainTypeConfigurationKeys();
 
   abstract ImmutableSet<Label> execConstraintLabels();
 
   abstract Optional<Label> forceExecutionPlatform();
 
   public abstract boolean debugTarget();
+
+  /** Returns a builder initialized with the values of this key. */
+  public abstract Builder toBuilder();
 
   /** Builder for {@link ToolchainContextKey}. */
   @AutoValue.Builder
@@ -68,6 +80,9 @@ public abstract class ToolchainContextKey implements SkyKey {
     public abstract Builder toolchainTypes(ImmutableSet<ToolchainTypeRequirement> toolchainTypes);
 
     public abstract Builder toolchainTypes(ToolchainTypeRequirement... toolchainTypes);
+
+    public abstract Builder toolchainTypeConfigurationKeys(
+        ImmutableMap<Label, BuildConfigurationKey> toolchainTypeConfigurationKeys);
 
     public abstract Builder execConstraintLabels(ImmutableSet<Label> execConstraintLabels);
 

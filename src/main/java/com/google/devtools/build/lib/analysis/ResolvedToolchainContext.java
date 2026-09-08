@@ -15,9 +15,12 @@
 package com.google.devtools.build.lib.analysis;
 
 import com.google.auto.value.AutoValue;
+import com.google.common.base.Preconditions;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
+import com.google.common.collect.ImmutableSetMultimap;
+import com.google.common.collect.Multimap;
 import com.google.devtools.build.lib.analysis.config.ToolchainTypeRequirement;
 import com.google.devtools.build.lib.analysis.platform.PlatformProviderUtils;
 import com.google.devtools.build.lib.analysis.platform.ToolchainInfo;
@@ -44,11 +47,78 @@ public abstract class ResolvedToolchainContext
   /**
    * Finishes preparing the {@link ResolvedToolchainContext} by finding the specific toolchain
    * providers to be used for each toolchain type.
+   *
+   * @param toolchainTargets the toolchain dependencies, all in the configuration of the depending
+   *     target. This overload can only be used if none of the toolchain types have a configuration
+   *     transition, use {@link #load(UnloadedToolchainContext, String, String, Multimap)}
+   *     otherwise.
    */
   public static ResolvedToolchainContext load(
       UnloadedToolchainContext unloadedToolchainContext,
       String targetDescription,
       ImmutableSet<ConfiguredTargetAndData> toolchainTargets)
+      throws ToolchainException {
+    Preconditions.checkArgument(
+        unloadedToolchainContext.toolchainTypeConfigurations().isEmpty(),
+        "Toolchain types with a configuration transition require loading by dependency kind: %s",
+        unloadedToolchainContext.toolchainTypeConfigurations());
+    ImmutableSetMultimap.Builder<ToolchainTypeInfo, ConfiguredTargetAndData> toolchainsByType =
+        ImmutableSetMultimap.builder();
+    for (ConfiguredTargetAndData target : toolchainTargets) {
+      // Aliases are in toolchainTypeToResolved by the original alias label, not via the final
+      // target's label.
+      Label discoveredLabel = target.getConfiguredTarget().getOriginalLabel();
+      for (ToolchainTypeInfo toolchainType :
+          unloadedToolchainContext.toolchainTypeToResolved().inverse().get(discoveredLabel)) {
+        toolchainsByType.put(toolchainType, target);
+      }
+    }
+    return load(unloadedToolchainContext, targetDescription, toolchainsByType.build());
+  }
+
+  /**
+   * Finishes preparing the {@link ResolvedToolchainContext} by finding the specific toolchain
+   * providers to be used for each toolchain type among the dependencies of the depending target.
+   *
+   * <p>Toolchains of toolchain types with a configuration transition are built in the transitioned
+   * configuration and thus have a different {@link DependencyKind} than the other toolchains of the
+   * same execution group.
+   *
+   * @param execGroupName the name of the execution group of the {@code unloadedToolchainContext}
+   * @param dependencies the dependencies of the depending target, keyed by dependency kind
+   */
+  public static ResolvedToolchainContext load(
+      UnloadedToolchainContext unloadedToolchainContext,
+      String targetDescription,
+      String execGroupName,
+      Multimap<DependencyKind, ConfiguredTargetAndData> dependencies)
+      throws ToolchainException {
+    ImmutableSetMultimap.Builder<ToolchainTypeInfo, ConfiguredTargetAndData> toolchainsByType =
+        ImmutableSetMultimap.builder();
+    for (var toolchainTypeToResolved :
+        unloadedToolchainContext.toolchainTypeToResolved().asMap().entrySet()) {
+      ToolchainTypeInfo toolchainType = toolchainTypeToResolved.getKey();
+      DependencyKind dependencyKind =
+          DependencyKind.forExecGroup(
+              execGroupName,
+              unloadedToolchainContext.toolchainTypeConfigurations().get(toolchainType));
+      for (ConfiguredTargetAndData target : dependencies.get(dependencyKind)) {
+        // Aliases are in toolchainTypeToResolved by the original alias label, not via the final
+        // target's label.
+        if (toolchainTypeToResolved
+            .getValue()
+            .contains(target.getConfiguredTarget().getOriginalLabel())) {
+          toolchainsByType.put(toolchainType, target);
+        }
+      }
+    }
+    return load(unloadedToolchainContext, targetDescription, toolchainsByType.build());
+  }
+
+  private static ResolvedToolchainContext load(
+      UnloadedToolchainContext unloadedToolchainContext,
+      String targetDescription,
+      ImmutableSetMultimap<ToolchainTypeInfo, ConfiguredTargetAndData> toolchainTargets)
       throws ToolchainException {
 
     ImmutableMap.Builder<ToolchainTypeInfo, ToolchainInfo> toolchainsBuilder =
@@ -56,32 +126,26 @@ public abstract class ResolvedToolchainContext
     ImmutableList.Builder<TemplateVariableInfo> templateVariableProviders =
         new ImmutableList.Builder<>();
 
-    for (ConfiguredTargetAndData target : toolchainTargets) {
-      // Aliases are in toolchainTypeToResolved by the original alias label, not via the final
-      // target's label.
-      Label discoveredLabel = target.getConfiguredTarget().getOriginalLabel();
+    for (var entry : toolchainTargets.entries()) {
+      ToolchainTypeInfo toolchainType = entry.getKey();
+      ConfiguredTargetAndData target = entry.getValue();
+
+      // If the toolchainType hadn't been resolved to an actual target, resolution would have
+      // failed with an error much earlier. However, the target might still not be an actual
+      // toolchain.
       ToolchainInfo toolchainInfo = PlatformProviderUtils.toolchain(target.getConfiguredTarget());
+      if (toolchainInfo != null) {
+        toolchainsBuilder.put(toolchainType, toolchainInfo);
+      } else {
+        throw new TargetNotToolchainException(
+            toolchainType, target.getConfiguredTarget().getOriginalLabel());
+      }
 
-      for (ToolchainTypeInfo toolchainType :
-          unloadedToolchainContext.toolchainTypeToResolved().inverse().get(discoveredLabel)) {
-
-        // If the toolchainType hadn't been resolved to an actual target, resolution would have
-        // failed with an error much earlier. However, the target might still not be an actual
-        // toolchain.
-        if (toolchainType != null) {
-          if (toolchainInfo != null) {
-            toolchainsBuilder.put(toolchainType, toolchainInfo);
-          } else {
-            throw new TargetNotToolchainException(toolchainType, discoveredLabel);
-          }
-        }
-
-        // Find any template variables present for this toolchain.
-        TemplateVariableInfo templateVariableInfo =
-            target.getConfiguredTarget().get(TemplateVariableInfo.PROVIDER);
-        if (templateVariableInfo != null) {
-          templateVariableProviders.add(templateVariableInfo);
-        }
+      // Find any template variables present for this toolchain.
+      TemplateVariableInfo templateVariableInfo =
+          target.getConfiguredTarget().get(TemplateVariableInfo.PROVIDER);
+      if (templateVariableInfo != null) {
+        templateVariableProviders.add(templateVariableInfo);
       }
     }
 
@@ -112,7 +176,7 @@ public abstract class ResolvedToolchainContext
         unloadedToolchainContext.requestedLabelToToolchainType(),
         toolchains,
         templateVariableProviders.build(),
-        ImmutableSet.copyOf(toolchainTargets));
+        ImmutableSet.copyOf(toolchainTargets.values()));
   }
 
   public abstract ImmutableMap<ToolchainTypeInfo, ToolchainInfo> toolchains();
