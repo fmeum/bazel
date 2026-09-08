@@ -38,6 +38,20 @@ import org.junit.runners.JUnit4;
 @RunWith(JUnit4.class)
 public class ResolvedToolchainContextTest extends ToolchainTestCase {
 
+  private static ResolvedToolchainContext load(
+      UnloadedToolchainContext unloadedToolchainContext,
+      String targetDescription,
+      ImmutableSet<ConfiguredTargetAndData> toolchainTargets)
+      throws ToolchainException {
+    return ResolvedToolchainContext.load(
+        unloadedToolchainContext,
+        targetDescription,
+        "test",
+        ImmutableSetMultimap.<DependencyKind, ConfiguredTargetAndData>builder()
+            .putAll(DependencyKind.forExecGroup("test"), toolchainTargets)
+            .build());
+  }
+
   @Test
   public void load() throws Exception {
     addToolchain(
@@ -76,7 +90,7 @@ public class ResolvedToolchainContextTest extends ToolchainTestCase {
 
     // Resolve toolchains.
     ResolvedToolchainContext toolchainContext =
-        ResolvedToolchainContext.load(unloadedToolchainContext, "test", ImmutableSet.of(toolchain));
+        load(unloadedToolchainContext, "test", ImmutableSet.of(toolchain));
     assertThat(toolchainContext).isNotNull();
     assertThat(toolchainContext).hasToolchainType(testToolchainTypeLabel);
     assertThat(toolchainContext)
@@ -105,8 +119,7 @@ public class ResolvedToolchainContextTest extends ToolchainTestCase {
 
     // Resolve toolchains.
     assertThrows(
-        ToolchainException.class,
-        () -> ResolvedToolchainContext.load(unloadedToolchainContext, "test", ImmutableSet.of()));
+        ToolchainException.class, () -> load(unloadedToolchainContext, "test", ImmutableSet.of()));
   }
 
   @Test
@@ -147,7 +160,7 @@ public class ResolvedToolchainContextTest extends ToolchainTestCase {
 
     // Resolve toolchains.
     ResolvedToolchainContext toolchainContext =
-        ResolvedToolchainContext.load(unloadedToolchainContext, "test", ImmutableSet.of(toolchain));
+        load(unloadedToolchainContext, "test", ImmutableSet.of(toolchain));
     assertThat(toolchainContext).isNotNull();
     assertThat(toolchainContext).hasToolchainType(optionalToolchainTypeLabel);
     assertThat(toolchainContext)
@@ -176,7 +189,7 @@ public class ResolvedToolchainContextTest extends ToolchainTestCase {
 
     // Resolve toolchains.
     ResolvedToolchainContext toolchainContext =
-        ResolvedToolchainContext.load(unloadedToolchainContext, "test", ImmutableSet.of());
+        load(unloadedToolchainContext, "test", ImmutableSet.of());
     assertThat(toolchainContext).isNotNull();
 
     // Missing optional toolchain type requirement is present.
@@ -226,8 +239,7 @@ public class ResolvedToolchainContextTest extends ToolchainTestCase {
 
     // Resolve toolchains.
     ResolvedToolchainContext toolchainContext =
-        ResolvedToolchainContext.load(
-            unloadedToolchainContext, "test", ImmutableSet.of(testToolchain));
+        load(unloadedToolchainContext, "test", ImmutableSet.of(testToolchain));
     assertThat(toolchainContext).isNotNull();
 
     // Test toolchain is present.
@@ -281,7 +293,7 @@ public class ResolvedToolchainContextTest extends ToolchainTestCase {
 
     // Resolve toolchains.
     ResolvedToolchainContext toolchainContext =
-        ResolvedToolchainContext.load(unloadedToolchainContext, "test", ImmutableSet.of(toolchain));
+        load(unloadedToolchainContext, "test", ImmutableSet.of(toolchain));
     assertThat(toolchainContext).isNotNull();
     assertThat(toolchainContext).hasToolchainType(testToolchainTypeLabel);
     assertThat(toolchainContext)
@@ -322,9 +334,7 @@ public class ResolvedToolchainContextTest extends ToolchainTestCase {
             Label.parseCanonicalUnchecked("//foo:not_a_toolchain"), targetConfig);
     assertThrows(
         ToolchainException.class,
-        () ->
-            ResolvedToolchainContext.load(
-                unloadedToolchainContext, "test", ImmutableSet.of(toolchain)));
+        () -> load(unloadedToolchainContext, "test", ImmutableSet.of(toolchain)));
   }
 
   @Test
@@ -392,7 +402,7 @@ public class ResolvedToolchainContextTest extends ToolchainTestCase {
         getConfiguredTargetAndData(
             Label.parseCanonicalUnchecked("//variable:variable_toolchain_impl"), targetConfig);
     ResolvedToolchainContext toolchainContext =
-        ResolvedToolchainContext.load(unloadedToolchainContext, "test", ImmutableSet.of(toolchain));
+        load(unloadedToolchainContext, "test", ImmutableSet.of(toolchain));
     assertThat(toolchainContext).isNotNull();
     assertThat(toolchainContext).hasToolchainType(variableToolchainTypeLabel);
     assertThat(toolchainContext.templateVariableProviders()).hasSize(1);

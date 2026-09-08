@@ -109,10 +109,7 @@ public class ToolchainResolutionFunction implements SkyFunction {
       // configuration.
       ImmutableMap<BuildConfigurationKey, ConfiguredTargetKey> transitionedTargetPlatformKeys =
           loadTransitionedTargetPlatformKeys(
-              env,
-              ImmutableSet.copyOf(key.toolchainTypeConfigurationKeys().values()),
-              platformConfiguration.getTargetPlatform(),
-              platformKeys.targetPlatformKey());
+              env, ImmutableSet.copyOf(key.toolchainTypeConfigurationKeys().values()));
 
       // Load the configured target for the toolchain types to ensure that they are valid and
       // resolve aliases.
@@ -181,67 +178,46 @@ public class ToolchainResolutionFunction implements SkyFunction {
    */
   private static ImmutableMap<BuildConfigurationKey, ConfiguredTargetKey>
       loadTransitionedTargetPlatformKeys(
-          Environment env,
-          ImmutableSet<BuildConfigurationKey> configurationKeys,
-          Label targetPlatformLabel,
-          ConfiguredTargetKey targetPlatformKey)
+          Environment env, ImmutableSet<BuildConfigurationKey> configurationKeys)
           throws InterruptedException, ValueMissingException, InvalidPlatformException {
     if (configurationKeys.isEmpty()) {
       return ImmutableMap.of();
     }
 
     SkyframeLookupResult configurations = env.getValuesAndExceptions(configurationKeys);
-    Map<BuildConfigurationKey, Label> transitionedTargetPlatformLabels = new LinkedHashMap<>();
+    Map<BuildConfigurationKey, ConfiguredTargetKey> platformKeys = new LinkedHashMap<>();
     for (BuildConfigurationKey configurationKey : configurationKeys) {
       BuildConfigurationValue configuration =
           (BuildConfigurationValue) configurations.get(configurationKey);
       if (configuration == null) {
         throw new ValueMissingException();
       }
-      transitionedTargetPlatformLabels.put(
+      platformKeys.put(
           configurationKey,
-          Preconditions.checkNotNull(configuration.getFragment(PlatformConfiguration.class))
-              .getTargetPlatform());
+          ConfiguredTargetKey.builder()
+              .setLabel(
+                  Preconditions.checkNotNull(configuration.getFragment(PlatformConfiguration.class))
+                      .getTargetPlatform())
+              .setConfigurationKey(BuildConfigurationKey.create(CommonOptions.EMPTY_OPTIONS))
+              .build());
     }
 
-    // Load the platforms that differ from the target platform of the base configuration. Platforms
-    // are configured in the empty configuration, so the configured target keys are the same as
-    // those used for the base configuration.
-    Map<Label, ConfiguredTargetKey> platformKeysByLabel = new HashMap<>();
-    platformKeysByLabel.put(targetPlatformLabel, targetPlatformKey);
-    ImmutableList<ConfiguredTargetKey> keysToLoad =
-        transitionedTargetPlatformLabels.values().stream()
-            .distinct()
-            .filter(label -> !label.equals(targetPlatformLabel))
-            .map(
-                label ->
-                    ConfiguredTargetKey.builder()
-                        .setLabel(label)
-                        .setConfigurationKey(
-                            BuildConfigurationKey.create(CommonOptions.EMPTY_OPTIONS))
-                        .build())
-            .collect(toImmutableList());
-    if (!keysToLoad.isEmpty()) {
-      Map<ConfiguredTargetKey, PlatformInfo> platforms =
-          PlatformLookupUtil.getPlatformInfo(keysToLoad, env);
-      if (platforms == null) {
-        throw new ValueMissingException();
-      }
-      for (ConfiguredTargetKey platformKey : keysToLoad) {
-        // Use the actual label of the platform in case the requested label was an alias.
-        platformKeysByLabel.put(
-            platformKey.getLabel(),
-            ConfiguredTargetKey.builder()
-                .setLabel(platforms.get(platformKey).label())
-                .setConfigurationKey(BuildConfigurationKey.create(CommonOptions.EMPTY_OPTIONS))
-                .build());
-      }
+    // Platforms use the empty configuration, so Skyframe reuses any already loaded platforms.
+    Map<ConfiguredTargetKey, PlatformInfo> platforms =
+        PlatformLookupUtil.getPlatformInfo(
+            ImmutableSet.copyOf(platformKeys.values()).asList(), env);
+    if (platforms == null) {
+      throw new ValueMissingException();
     }
 
     ImmutableMap.Builder<BuildConfigurationKey, ConfiguredTargetKey> result =
         ImmutableMap.builderWithExpectedSize(configurationKeys.size());
-    transitionedTargetPlatformLabels.forEach(
-        (configurationKey, label) -> result.put(configurationKey, platformKeysByLabel.get(label)));
+    platformKeys.forEach(
+        (configurationKey, platformKey) ->
+            result.put(
+                configurationKey,
+                // Use the actual label in case the requested platform was an alias.
+                platformKey.toBuilder().setLabel(platforms.get(platformKey).label()).build()));
     return result.buildOrThrow();
   }
 

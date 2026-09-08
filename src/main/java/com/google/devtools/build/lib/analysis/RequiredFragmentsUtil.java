@@ -24,6 +24,7 @@ import com.google.devtools.build.lib.analysis.config.CoreOptions;
 import com.google.devtools.build.lib.analysis.config.CoreOptions.IncludeConfigFragmentsEnum;
 import com.google.devtools.build.lib.analysis.config.Fragment;
 import com.google.devtools.build.lib.analysis.config.FragmentClassSet;
+import com.google.devtools.build.lib.analysis.config.ToolchainTypeRequirement;
 import com.google.devtools.build.lib.analysis.config.transitions.TransitionFactory;
 import com.google.devtools.build.lib.analysis.starlark.StarlarkAttributeTransitionProvider;
 import com.google.devtools.build.lib.packages.Aspect;
@@ -220,7 +221,8 @@ public final class RequiredFragmentsUtil {
   /**
    * Adds required fragments from transitions "attached" to a target.
    *
-   * <p>"Attached" means the transition is attached to the target itself or one of its attributes.
+   * <p>"Attached" means the transition is attached to the target itself, one of its attributes, or
+   * one of its toolchain types.
    *
    * <p>These are the transitions required for a target to successfully analyze. Technically,
    * transitions attached to the target are evaluated during its parent's analysis, which is where
@@ -256,13 +258,22 @@ public final class RequiredFragmentsUtil {
             .addRequiredFragments(requiredFragments, optionDetails);
       }
     }
+    addRequiredFragmentsFromToolchainTransitions(
+        target.getRuleClassObject().getToolchainTypes(),
+        attributeTransitionData,
+        requiredFragments,
+        optionDetails);
+    for (var execGroup : target.getRuleClassObject().getDeclaredExecGroups().values()) {
+      addRequiredFragmentsFromToolchainTransitions(
+          execGroup.toolchainTypes(), attributeTransitionData, requiredFragments, optionDetails);
+    }
   }
 
   /**
    * Adds required fragments from transitions "attached" to an aspect.
    *
-   * <p>"Attached" means the transition is attached to one of the aspect's attributes. Transitions
-   * can't be attached directly to aspects themselves.
+   * <p>"Attached" means the transition is attached to one of the aspect's attributes or toolchain
+   * types. Transitions can't be attached directly to aspects themselves.
    */
   private static void addRequiredFragmentsFromAspectTransitions(
       RequiredConfigFragmentsProvider.Builder requiredFragments,
@@ -281,6 +292,33 @@ public final class RequiredFragmentsUtil {
             .getTransitionFactory()
             .create(attributeTransitionData)
             .addRequiredFragments(requiredFragments, optionDetails);
+      }
+    }
+    // Aspect toolchain transitions cannot read attributes.
+    AttributeTransitionData toolchainTransitionData = AttributeTransitionData.builder().build();
+    addRequiredFragmentsFromToolchainTransitions(
+        aspect.getDefinition().getToolchainTypes(),
+        toolchainTransitionData,
+        requiredFragments,
+        optionDetails);
+    for (var execGroup : aspect.getDefinition().execGroups().values()) {
+      addRequiredFragmentsFromToolchainTransitions(
+          execGroup.toolchainTypes(), toolchainTransitionData, requiredFragments, optionDetails);
+    }
+  }
+
+  private static void addRequiredFragmentsFromToolchainTransitions(
+      Iterable<ToolchainTypeRequirement> toolchainTypes,
+      AttributeTransitionData data,
+      RequiredConfigFragmentsProvider.Builder requiredFragments,
+      BuildOptionDetails optionDetails) {
+    for (ToolchainTypeRequirement toolchainType : toolchainTypes) {
+      if (toolchainType.hasTransition()) {
+        // See ToolchainTypeRequirement#transitionFactory() for why this cast is safe.
+        @SuppressWarnings("unchecked")
+        var factory =
+            (TransitionFactory<AttributeTransitionData>) toolchainType.transitionFactory();
+        factory.create(data).addRequiredFragments(requiredFragments, optionDetails);
       }
     }
   }

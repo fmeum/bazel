@@ -17,6 +17,7 @@ import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.devtools.build.lib.packages.DeclaredExecGroup.DEFAULT_EXEC_GROUP_NAME;
 
 import com.google.common.collect.ImmutableMap;
+import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Iterables;
 import com.google.devtools.build.lib.analysis.ToolchainCollection;
 import com.google.devtools.build.lib.analysis.config.ConfigurationTransitionEvent;
@@ -120,11 +121,12 @@ public final class UnloadedToolchainContextsProducer implements StateMachine {
       @Nullable ToolchainTypeTransitionData transitionData,
       ResultSink sink,
       StateMachine runAfter) {
-    this.unloadedToolchainContextsInputs = unloadedToolchainContextsInputs;
-    this.transitionData = transitionData;
-    this.sink = sink;
-    this.runAfter = runAfter;
-    this.baseTargetPrerequisitesSupplier = null;
+    this(
+        unloadedToolchainContextsInputs,
+        transitionData,
+        /* baseTargetPrerequisitesSupplier= */ null,
+        sink,
+        runAfter);
   }
 
   /**
@@ -134,7 +136,7 @@ public final class UnloadedToolchainContextsProducer implements StateMachine {
   public UnloadedToolchainContextsProducer(
       UnloadedToolchainContextsInputs unloadedToolchainContextsInputs,
       @Nullable ToolchainTypeTransitionData transitionData,
-      BaseTargetPrerequisitesSupplier baseTargetPrerequisitesSupplier,
+      @Nullable BaseTargetPrerequisitesSupplier baseTargetPrerequisitesSupplier,
       ResultSink sink,
       StateMachine runAfter) {
     this.unloadedToolchainContextsInputs = unloadedToolchainContextsInputs;
@@ -334,22 +336,26 @@ public final class UnloadedToolchainContextsProducer implements StateMachine {
     if (transitionedConfigurations.isEmpty()) {
       return key;
     }
-    Map<Label, BuildConfigurationKey> toolchainTypeConfigurationKeys = new LinkedHashMap<>();
+    ImmutableMap.Builder<Label, BuildConfigurationKey> toolchainTypeConfigurationKeys =
+        ImmutableMap.builder();
+    ImmutableSet.Builder<ToolchainTypeRequirement> toolchainTypes = ImmutableSet.builder();
     for (ToolchainTypeRequirement toolchainType : key.toolchainTypes()) {
       if (!toolchainType.hasTransition()) {
+        toolchainTypes.add(toolchainType);
         continue;
       }
+      // Resolution depends only on the resulting configuration, not the transition that produced
+      // it. In particular, no-op transitions should reuse the ordinary resolution key.
+      toolchainTypes.add(toolchainType.toBuilder().transitionFactory(null).build());
       BuildConfigurationKey toConfiguration =
           checkNotNull(transitionedConfigurations.get(toolchainType.transitionFactory()));
       if (!toConfiguration.equals(key.configurationKey())) {
         toolchainTypeConfigurationKeys.put(toolchainType.toolchainType(), toConfiguration);
       }
     }
-    if (toolchainTypeConfigurationKeys.isEmpty()) {
-      return key;
-    }
     return key.toBuilder()
-        .toolchainTypeConfigurationKeys(ImmutableMap.copyOf(toolchainTypeConfigurationKeys))
+        .toolchainTypes(toolchainTypes.build())
+        .toolchainTypeConfigurationKeys(toolchainTypeConfigurationKeys.buildOrThrow())
         .build();
   }
 

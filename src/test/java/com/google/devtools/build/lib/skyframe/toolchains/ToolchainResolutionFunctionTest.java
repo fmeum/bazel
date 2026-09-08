@@ -47,7 +47,7 @@ public class ToolchainResolutionFunctionTest extends ToolchainTestCase {
     try {
       getSkyframeExecutor().getSkyframeBuildView().enableAnalysis(true);
       return SkyframeExecutorTestUtils.evaluate(
-          getSkyframeExecutor(), key, /*keepGoing=*/ false, reporter);
+          getSkyframeExecutor(), key, /* keepGoing= */ false, reporter);
     } finally {
       getSkyframeExecutor().getSkyframeBuildView().enableAnalysis(false);
     }
@@ -392,7 +392,7 @@ public class ToolchainResolutionFunctionTest extends ToolchainTestCase {
         .hasExceptionThat()
         .hasMessageThat()
         .isEqualTo(
-"""
+            """
 No matching toolchains found for types:
   //toolchain:test_toolchain
 To debug, rerun with --toolchain_resolution_debug='//toolchain:test_toolchain'
@@ -419,7 +419,7 @@ For more information on platforms or toolchains see https://bazel.build/concepts
     assertThat(exception)
         .hasMessageThat()
         .isEqualTo(
-"""
+            """
 No matching toolchains found for types:
   @@repo+//toolchain:test_toolchain
 To debug, rerun with --toolchain_resolution_debug='\\Q@@repo+//toolchain:test_toolchain\\E'
@@ -1574,6 +1574,7 @@ To debug, rerun with --toolchain_resolution_debug='\\Q@@repo+//toolchain:test_to
 
   @Test
   public void resolve_toolchainTypeConfiguration_targetPlatform() throws Exception {
+    scratch.file("aliases/BUILD", "alias(name = 'mac', actual = '//platforms:mac')");
     // toolchain_1 targets mac and toolchain_2 targets linux, both are registered by default.
     rewriteModuleDotBazel(
         """
@@ -1584,7 +1585,7 @@ To debug, rerun with --toolchain_resolution_debug='\\Q@@repo+//toolchain:test_to
     BuildOptions transitionedOptions = targetConfig.getOptions().clone();
     transitionedOptions
         .get(PlatformOptions.class)
-        .setPlatforms(ImmutableList.of(Label.parseCanonicalUnchecked("//platforms:mac")));
+        .setPlatforms(ImmutableList.of(Label.parseCanonicalUnchecked("//aliases:mac")));
     BuildConfigurationKey transitionedConfigKey = BuildConfigurationKey.create(transitionedOptions);
 
     ToolchainContextKey key =

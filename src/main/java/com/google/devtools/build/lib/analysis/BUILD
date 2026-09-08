@@ -964,7 +964,6 @@ java_library(
         "//src/main/java/com/google/devtools/build/lib/skyframe/toolchains:unloaded_toolchain_context",
         "//src/main/protobuf:failure_details_java_proto",
         "//third_party/java/auto:auto_value",
-        "//third_party/java/guava:base",
         "//third_party/java/guava:collect",
         "//third_party/java/jsr305_annotations",
     ],

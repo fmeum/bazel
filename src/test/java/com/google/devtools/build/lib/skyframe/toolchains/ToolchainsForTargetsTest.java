@@ -238,7 +238,7 @@ public final class ToolchainsForTargetsTest extends AnalysisTestCase {
     // analysis so we can call ConfiguredTargetFunction again without raising an error.
     skyframeExecutor.getSkyframeBuildView().enableAnalysis(true);
     EvaluationResult<Value> evalResult =
-        SkyframeExecutorTestUtils.evaluate(skyframeExecutor, key, /*keepGoing=*/ false, reporter);
+        SkyframeExecutorTestUtils.evaluate(skyframeExecutor, key, /* keepGoing= */ false, reporter);
     // Test call has finished, to reset the state.
     skyframeExecutor.getSkyframeBuildView().enableAnalysis(false);
     return evalResult.get(key).toolchainCollection();
@@ -1418,6 +1418,14 @@ public final class ToolchainsForTargetsTest extends AnalysisTestCase {
         .hasResolvedToolchain("//tc:tc_a_impl");
     assertThat(toolchainCollection.getDefaultToolchainContext().toolchainTypeConfigurations())
         .isEmpty();
+    // Applying a no-op transition must reuse the ordinary toolchain resolution node.
+    assertThat(toolchainCollection.getDefaultToolchainContext().key())
+        .isEqualTo(
+            ToolchainContextKey.key()
+                .configurationKey(
+                    toolchainCollection.getDefaultToolchainContext().key().configurationKey())
+                .toolchainTypes(ToolchainTypeRequirement.create(MODE_TOOLCHAIN_TYPE))
+                .build());
   }
 
   @Test

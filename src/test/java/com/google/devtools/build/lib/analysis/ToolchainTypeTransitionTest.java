@@ -293,6 +293,7 @@ public final class ToolchainTypeTransitionTest extends BuildViewTestCase {
 
   @Test
   public void execGroupToolchainTypeTransition() throws Exception {
+    useConfiguration("--include_config_fragments_provider=direct");
     scratch.file(
         "rules/defs.bzl",
         """
@@ -337,10 +338,13 @@ public final class ToolchainTypeTransitionTest extends BuildViewTestCase {
         .isEqualTo(Label.parseCanonical("//platforms:p1"));
     assertThat(toolchainContexts.getToolchainContext("eg").executionPlatform().label())
         .isEqualTo(Label.parseCanonical("//platforms:p2"));
+    assertThat(target.getProvider(RequiredConfigFragmentsProvider.class).starlarkOptions())
+        .contains(Label.parseCanonical("//flags:mode"));
   }
 
   @Test
   public void aspectToolchainTypeTransition() throws Exception {
+    useConfiguration("--include_config_fragments_provider=direct");
     scratch.file(
         "rules/defs.bzl",
         """
@@ -386,6 +390,76 @@ public final class ToolchainTypeTransitionTest extends BuildViewTestCase {
         )
         """);
 
+    assertThat(getResultField(getConfiguredTarget("//rules:c"), "Result", "transitioned_mode"))
+        .isEqualTo("b");
+    assertThat(
+            getAspect("//rules:defs.bzl%my_aspect")
+                .getProvider(RequiredConfigFragmentsProvider.class)
+                .starlarkOptions())
+        .contains(Label.parseCanonical("//flags:mode"));
+  }
+
+  @Test
+  public void aspectPropagatesToToolchainInTransitionedConfiguration() throws Exception {
+    scratch.file(
+        "rules/defs.bzl",
+        """
+        load("//flags:defs.bzl", "from_attr")
+
+        AspectResult = provider(fields = ["mode"])
+
+        def _aspect_impl(target, ctx):
+            if platform_common.ToolchainInfo in target:
+                return [AspectResult(mode = target[platform_common.ToolchainInfo].mode)]
+            return [ctx.rule.toolchains["//tc:transitioned_type"][AspectResult]]
+
+        my_aspect = aspect(
+            implementation = _aspect_impl,
+            toolchains_aspects = ["//tc:transitioned_type"],
+        )
+
+        def _dep_impl(ctx):
+            return []
+
+        dep_rule = rule(
+            implementation = _dep_impl,
+            attrs = {"mode": attr.string()},
+            toolchains = [
+                config_common.toolchain_type("//tc:transitioned_type", cfg = from_attr),
+            ],
+        )
+
+        Result = provider(fields = ["transitioned_mode"])
+
+        def _consumer_impl(ctx):
+            return [Result(transitioned_mode = ctx.attr.dep[AspectResult].mode)]
+
+        consumer = rule(
+            implementation = _consumer_impl,
+            attrs = {"dep": attr.label(aspects = [my_aspect])},
+        )
+        """);
+    scratch.file(
+        "rules/BUILD",
+        """
+        load(":defs.bzl", "consumer", "dep_rule")
+
+        dep_rule(
+            name = "dep",
+            mode = select({
+                "//flags:mode_b": "c",
+                "//conditions:default": "b",
+            }),
+        )
+
+        consumer(
+            name = "c",
+            dep = ":dep",
+        )
+        """);
+
+    // Both rule and aspect must evaluate select() in the rule's original configuration, and the
+    // aspect must propagate to the toolchain configured with the resulting mode.
     assertThat(getResultField(getConfiguredTarget("//rules:c"), "Result", "transitioned_mode"))
         .isEqualTo("b");
   }
