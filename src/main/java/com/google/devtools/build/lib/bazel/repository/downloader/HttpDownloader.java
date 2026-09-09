@@ -20,6 +20,8 @@ import com.google.auth.Credentials;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.Iterables;
+import com.google.devtools.build.lib.authandtls.AuthAndTLSOptions;
+import com.google.devtools.build.lib.authandtls.TrustStore;
 import com.google.devtools.build.lib.buildeventstream.BuildEventStreamProtos.BuildEventId.FetchId;
 import com.google.devtools.build.lib.buildeventstream.FetchEvent;
 import com.google.devtools.build.lib.clock.Clock;
@@ -43,6 +45,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.Semaphore;
 import java.util.function.Function;
+import javax.annotation.Nullable;
 
 /**
  * HTTP implementation of {@link Downloader}.
@@ -59,6 +62,7 @@ public class HttpDownloader implements Downloader {
 
   private final Semaphore semaphore;
   private final float timeoutScaling;
+  @Nullable private volatile AuthAndTLSOptions authAndTlsOptions;
   private final int maxAttempts;
   private final Duration maxRetryTimeout;
 
@@ -72,6 +76,11 @@ public class HttpDownloader implements Downloader {
 
   public HttpDownloader() {
     this(0, Duration.ZERO, 8, 1.0f);
+  }
+
+  /** Sets the TLS options, which decide which certificate authorities downloads trust. */
+  public void setAuthAndTlsOptions(AuthAndTLSOptions authAndTlsOptions) {
+    this.authAndTlsOptions = authAndTlsOptions;
   }
 
   @Override
@@ -277,7 +286,7 @@ public class HttpDownloader implements Downloader {
   }
 
   private HttpConnectorMultiplexer setUpConnectorMultiplexer(
-      ExtendedEventHandler eventHandler, Map<String, String> clientEnv) {
+      ExtendedEventHandler eventHandler, Map<String, String> clientEnv) throws IOException {
     ProxyHelper proxyHelper = new ProxyHelper(clientEnv);
     HttpConnector connector =
         new HttpConnector(
@@ -287,10 +296,20 @@ public class HttpDownloader implements Downloader {
             SLEEPER,
             timeoutScaling,
             maxAttempts,
-            maxRetryTimeout);
+            maxRetryTimeout,
+            getTrustStore(clientEnv));
     ProgressInputStream.Factory progressInputStreamFactory =
         new ProgressInputStream.Factory(LOCALE, CLOCK, eventHandler);
     HttpStream.Factory httpStreamFactory = new HttpStream.Factory(progressInputStreamFactory);
     return new HttpConnectorMultiplexer(eventHandler, connector, httpStreamFactory);
+  }
+
+  private TrustStore getTrustStore(Map<String, String> clientEnv) throws IOException {
+    AuthAndTLSOptions options = authAndTlsOptions;
+    return options != null
+        ? TrustStore.createFor(options, clientEnv)
+        // Outside a command, as in BazelPackageLoader, there are no parsed options to read; fall
+        // back to what the flags default to.
+        : TrustStore.create(TrustStore.Mode.MERGED, null, ImmutableList.of(), clientEnv);
   }
 }

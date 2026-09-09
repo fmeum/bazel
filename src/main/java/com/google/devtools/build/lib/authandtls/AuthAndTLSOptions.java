@@ -21,6 +21,7 @@ import com.google.devtools.common.options.Converter;
 import com.google.devtools.common.options.Converters.CommaSeparatedOptionListConverter;
 import com.google.devtools.common.options.Converters.DurationConverter;
 import com.google.devtools.common.options.Converters.EmptyToNullStringConverter;
+import com.google.devtools.common.options.EnumConverter;
 import com.google.devtools.common.options.Option;
 import com.google.devtools.common.options.OptionDocumentationCategory;
 import com.google.devtools.common.options.OptionEffectTag;
@@ -115,6 +116,50 @@ public abstract class AuthAndTLSOptions extends OptionsBase {
           "Specify the TLS client key to use; you also need to provide a client certificate to "
               + "enable client authentication. An empty value resets the flag to its default.")
   public abstract String getTlsClientKey();
+
+  @Option(
+      name = "experimental_tls_trust_store",
+      defaultValue = "merged",
+      converter = TrustStoreModeConverter.class,
+      documentationCategory = OptionDocumentationCategory.UNCATEGORIZED,
+      effectTags = {OptionEffectTag.UNKNOWN},
+      metadataTags = {OptionMetadataTag.EXPERIMENTAL},
+      help =
+          "Which certificate authorities Bazel trusts for HTTPS and gRPC over TLS, covering"
+              + " repository and registry downloads, the remote cache, remote execution and the"
+              + " build event service. `merged`, the default, trusts the union of the certificates"
+              + " bundled with Bazel's JDK and the ones installed in the system trust store, so"
+              + " that installing a CA system-wide is enough. `jdk` trusts only the certificates"
+              + " bundled with the JDK. `system` trusts only the system trust store, matching what"
+              + " curl and other native tools accept. The system trust store is the ROOT"
+              + " certificate store on Windows and the system, login and system-root keychains on"
+              + " macOS; elsewhere it is the bundle named by $SSL_CERT_FILE, $CURL_CA_BUNDLE,"
+              + " $NIX_SSL_CERT_FILE or $SSL_CERT_DIR, falling back to the usual distribution"
+              + " locations. Ignored where --tls_certificate applies, which pins trust to that"
+              + " certificate. The trust store is read once per server, so run `bazel shutdown`"
+              + " after installing a new certificate.")
+  public abstract TrustStore.Mode getTlsTrustStore();
+
+  @Option(
+      name = "experimental_tls_ca_certificate",
+      defaultValue = "null",
+      allowMultiple = true,
+      documentationCategory = OptionDocumentationCategory.UNCATEGORIZED,
+      effectTags = {OptionEffectTag.UNKNOWN},
+      metadataTags = {OptionMetadataTag.EXPERIMENTAL},
+      help =
+          "Path to a file holding additional certificate authorities to trust, either a PEM or DER"
+              + " encoded certificate bundle or a Java KeyStore. May be specified multiple times."
+              + " Unlike --tls_certificate, which pins trust to the certificate it names, these are"
+              + " trusted in addition to whatever --experimental_tls_trust_store selects.")
+  public abstract List<String> getTlsCaCertificates();
+
+  /** Converts to {@link TrustStore.Mode}. */
+  public static class TrustStoreModeConverter extends EnumConverter<TrustStore.Mode> {
+    public TrustStoreModeConverter() {
+      super(TrustStore.Mode.class, "TLS trust store mode");
+    }
+  }
 
   @Option(
       name = "tls_authority_override",

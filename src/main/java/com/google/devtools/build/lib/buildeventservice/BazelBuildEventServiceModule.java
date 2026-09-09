@@ -27,6 +27,7 @@ import com.google.common.collect.ImmutableSet;
 import com.google.devtools.build.lib.analysis.BlazeDirectories;
 import com.google.devtools.build.lib.authandtls.AuthAndTLSOptions;
 import com.google.devtools.build.lib.authandtls.GoogleAuthUtils;
+import com.google.devtools.build.lib.authandtls.TrustStore;
 import com.google.devtools.build.lib.authandtls.credentialhelper.CredentialHelperEnvironment;
 import com.google.devtools.build.lib.authandtls.credentialhelper.CredentialModule;
 import com.google.devtools.build.lib.buildeventservice.client.BuildEventServiceClient;
@@ -191,6 +192,7 @@ public class BazelBuildEventServiceModule
         config.besBackend(),
         config.besProxy(),
         config.authAndTLSOptions(),
+        TrustStore.createFor(config.authAndTLSOptions(), latestClientEnv()),
         /* interceptors= */ null,
         /* serviceConfig= */ null);
   }

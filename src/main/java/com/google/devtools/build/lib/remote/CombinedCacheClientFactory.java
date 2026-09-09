@@ -19,6 +19,7 @@ import com.google.common.base.Ascii;
 import com.google.common.base.Preconditions;
 import com.google.common.collect.ImmutableList;
 import com.google.devtools.build.lib.authandtls.AuthAndTLSOptions;
+import com.google.devtools.build.lib.authandtls.TrustStore;
 import com.google.devtools.build.lib.remote.common.RemoteCacheClient;
 import com.google.devtools.build.lib.remote.disk.DiskCacheClient;
 import com.google.devtools.build.lib.remote.http.HttpCacheClient;
@@ -49,6 +50,7 @@ public final class CombinedCacheClientFactory {
       @Nullable PathFragment diskCachePath,
       @Nullable Credentials creds,
       AuthAndTLSOptions authAndTlsOptions,
+      TrustStore trustStore,
       Path workingDirectory,
       DigestUtil digestUtil,
       RemoteRetrier retrier,
@@ -58,7 +60,8 @@ public final class CombinedCacheClientFactory {
     RemoteCacheClient httpCacheClient = null;
     DiskCacheClient diskCacheClient = null;
     if (isHttpCache(options)) {
-      httpCacheClient = createHttp(options, creds, authAndTlsOptions, digestUtil, retrier);
+      httpCacheClient =
+          createHttp(options, creds, authAndTlsOptions, trustStore, digestUtil, retrier);
     }
     if (diskCachePath != null) {
       diskCacheClient =
@@ -80,6 +83,7 @@ public final class CombinedCacheClientFactory {
       RemoteOptions options,
       Credentials creds,
       AuthAndTLSOptions authAndTlsOptions,
+      TrustStore trustStore,
       DigestUtil digestUtil,
       RemoteRetrier retrier) {
     Preconditions.checkNotNull(options.getRemoteCache(), "remoteCache");
@@ -102,7 +106,8 @@ public final class CombinedCacheClientFactory {
               digestUtil,
               retrier,
               creds,
-              authAndTlsOptions);
+              authAndTlsOptions,
+              trustStore);
         } else {
           throw new Exception("Remote cache proxy unsupported: " + options.getRemoteProxy());
         }
@@ -116,7 +121,8 @@ public final class CombinedCacheClientFactory {
             digestUtil,
             retrier,
             creds,
-            authAndTlsOptions);
+            authAndTlsOptions,
+            trustStore);
       }
     } catch (Exception e) {
       throw new RuntimeException(e);

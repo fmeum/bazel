@@ -297,6 +297,11 @@ public class BazelRepositoryModule extends BlazeModule {
     singleExtensionEvalFunction.setProcessWrapper(processWrapper);
     singleExtensionEvalFunction.setDownloadManager(downloadManager);
 
+    AuthAndTLSOptions tlsOptions = env.getOptions().getOptions(AuthAndTLSOptions.class);
+    if (tlsOptions != null) {
+      env.getHttpDownloader().setAuthAndTlsOptions(tlsOptions);
+    }
+
     RepositoryOptions repoOptions = env.getOptions().getOptions(RepositoryOptions.class);
     requireRepoExtensionMetadataMode = RequireRepoExtensionMetadataMode.FALSE;
     if (repoOptions != null) {

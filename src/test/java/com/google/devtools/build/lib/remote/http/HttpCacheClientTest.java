@@ -37,6 +37,7 @@ import com.google.common.util.concurrent.ListeningScheduledExecutorService;
 import com.google.common.util.concurrent.MoreExecutors;
 import com.google.devtools.build.lib.actions.Spawn;
 import com.google.devtools.build.lib.authandtls.AuthAndTLSOptions;
+import com.google.devtools.build.lib.authandtls.TrustStore;
 import com.google.devtools.build.lib.exec.SpawnRunner.SpawnExecutionContext;
 import com.google.devtools.build.lib.remote.CombinedCacheClientFactory;
 import com.google.devtools.build.lib.remote.RemoteRetrier;
@@ -317,7 +318,8 @@ public class HttpCacheClientTest {
           DIGEST_UTIL,
           retrier,
           creds,
-          authAndTlsOptions);
+          authAndTlsOptions,
+          TrustStore.jvmDefault());
     } else if (socketAddress instanceof InetSocketAddress inetSocketAddress) {
       URI uri = new URI("http://localhost:" + inetSocketAddress.getPort());
       return HttpCacheClient.create(
@@ -329,7 +331,8 @@ public class HttpCacheClientTest {
           DIGEST_UTIL,
           retrier,
           creds,
-          authAndTlsOptions);
+          authAndTlsOptions,
+          TrustStore.jvmDefault());
     } else {
       throw new IllegalStateException(
           "unsupported socket address class " + socketAddress.getClass());
@@ -1107,7 +1110,8 @@ public class HttpCacheClientTest {
             DIGEST_UTIL,
             /* retrier= */ mock(RemoteRetrier.class),
             /* creds= */ null,
-            Options.getDefaults(AuthAndTLSOptions.class));
+            Options.getDefaults(AuthAndTLSOptions.class),
+            TrustStore.jvmDefault());
 
     ChannelPipeline pipeline = mock(ChannelPipeline.class);
     when(pipeline.first()).thenReturn(mock(ChannelHandler.class));
@@ -1128,7 +1132,8 @@ public class HttpCacheClientTest {
             DIGEST_UTIL,
             /* retrier= */ mock(RemoteRetrier.class),
             /* creds= */ null,
-            Options.getDefaults(AuthAndTLSOptions.class));
+            Options.getDefaults(AuthAndTLSOptions.class),
+            TrustStore.jvmDefault());
 
     ChannelPipeline pipeline = mock(ChannelPipeline.class);
     when(pipeline.first()).thenReturn(null);
@@ -1149,7 +1154,8 @@ public class HttpCacheClientTest {
             DIGEST_UTIL,
             /* retrier= */ mock(RemoteRetrier.class),
             /* creds= */ null,
-            Options.getDefaults(AuthAndTLSOptions.class));
+            Options.getDefaults(AuthAndTLSOptions.class),
+            TrustStore.jvmDefault());
 
     ChannelHandler sslHandler = mock(ChannelHandler.class);
     ChannelHandlerContext sslContext = mock(ChannelHandlerContext.class);
@@ -1175,7 +1181,8 @@ public class HttpCacheClientTest {
             DIGEST_UTIL,
             /* retrier= */ mock(RemoteRetrier.class),
             /* creds= */ null,
-            Options.getDefaults(AuthAndTLSOptions.class));
+            Options.getDefaults(AuthAndTLSOptions.class),
+            TrustStore.jvmDefault());
 
     ChannelHandler handler = mock(ChannelHandler.class);
     ChannelHandlerContext context = mock(ChannelHandlerContext.class);
