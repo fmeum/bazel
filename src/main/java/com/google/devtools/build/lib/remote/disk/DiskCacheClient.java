@@ -145,6 +145,38 @@ public class DiskCacheClient {
     FileSystemUtils.renameToleratingConcurrentCreation(src, target);
   }
 
+  /**
+   * Flushes a temporary file obtained from {@link #getTempPath} to stable storage and moves it into
+   * the cache as the entry for the given digest, on the disk cache's own threads.
+   *
+   * <p>Neither the fsync nor the rename is on the caller's critical path, which is what makes
+   * writing a download through to the disk cache cheap. The temporary file is deleted if it cannot
+   * be moved into place. Pending moves are awaited by {@link #close}.
+   *
+   * <p>The caller must ensure that the digest is correct and the file has been recently modified.
+   *
+   * @return a future that fails if the entry could not be stored
+   */
+  public ListenableFuture<Void> syncAndCaptureFile(Path src, Digest digest, Store store) {
+    return executorService.submit(
+        () -> {
+          try {
+            // Fsync before renaming to avoid data loss in the case of machine crashes (the OS may
+            // reorder the writes and the rename).
+            syncFile(src);
+            captureFile(src, digest, store);
+          } catch (IOException e) {
+            try {
+              src.delete();
+            } catch (IOException deleteErr) {
+              e.addSuppressed(deleteErr);
+            }
+            throw e;
+          }
+          return null;
+        });
+  }
+
   private ListenableFuture<Void> download(Digest digest, OutputStream out, Store store) {
     return executorService.submit(
         () -> {

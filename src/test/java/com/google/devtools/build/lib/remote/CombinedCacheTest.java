@@ -65,6 +65,7 @@ import com.google.devtools.build.lib.exec.util.SpawnBuilder;
 import com.google.devtools.build.lib.remote.common.BlobNotSplittableException;
 import com.google.devtools.build.lib.remote.common.BulkTransferException;
 import com.google.devtools.build.lib.remote.common.CacheNotFoundException;
+import com.google.devtools.build.lib.remote.common.LazyFileOutputStream;
 import com.google.devtools.build.lib.remote.common.RemoteActionExecutionContext;
 import com.google.devtools.build.lib.remote.common.RemoteCacheClient;
 import com.google.devtools.build.lib.remote.common.RemoteCacheClient.Blob;
@@ -1222,6 +1223,160 @@ public class CombinedCacheTest {
     // Verify disk cache has BOTH files saved
     assertThat(diskCacheClient.toPath(digest1, Store.CAS).exists()).isTrue();
     assertThat(diskCacheClient.toPath(digest2, Store.CAS).exists()).isTrue();
+  }
+
+  @Test
+  public void downloadFile_fromRemote_writesThroughToDiskCache() throws Exception {
+    Path diskRoot = fs.getPath("/diskroot3");
+    diskRoot.createDirectoryAndParents();
+    DiskCacheClient diskCacheClient =
+        new DiskCacheClient(diskRoot, digestUtil, /* checkActionResultIntegrity= */ true);
+    RemoteCacheClient remoteCacheClient = new InMemoryCacheClient();
+    CombinedCache combinedCache = newCombinedCache(remoteCacheClient, diskCacheClient);
+    Digest digest = digestUtil.computeAsUtf8("remote only");
+    getFromFuture(
+        remoteCacheClient.uploadBlob(
+            remoteActionExecutionContext,
+            digest,
+            ByteString.copyFromUtf8("remote only"),
+            /* force= */ true));
+    Path file = execRoot.getRelative("file");
+
+    getFromFuture(combinedCache.downloadFile(remoteActionExecutionContext, file, digest));
+
+    // The download is complete once the future is, regardless of the disk cache.
+    assertThat(FileSystemUtils.readContent(file, UTF_8)).isEqualTo("remote only");
+    // The entry is published in the background and is guaranteed to be in place once the client
+    // has been closed, as happens at the end of a command.
+    diskCacheClient.close();
+    Path entry = diskCacheClient.toPath(digest, Store.CAS);
+    assertThat(FileSystemUtils.readContent(entry, UTF_8)).isEqualTo("remote only");
+    assertThat(diskRoot.getChild("tmp").getDirectoryEntries()).isEmpty();
+  }
+
+  @Test
+  public void downloadFile_fromRemote_emptyBlob_writesThroughToDiskCache() throws Exception {
+    Path diskRoot = fs.getPath("/diskroot4");
+    diskRoot.createDirectoryAndParents();
+    DiskCacheClient diskCacheClient =
+        new DiskCacheClient(diskRoot, digestUtil, /* checkActionResultIntegrity= */ true);
+    RemoteCacheClient remoteCacheClient = new InMemoryCacheClient();
+    CombinedCache combinedCache = newCombinedCache(remoteCacheClient, diskCacheClient);
+    Digest digest = digestUtil.computeAsUtf8("");
+    getFromFuture(
+        remoteCacheClient.uploadBlob(
+            remoteActionExecutionContext, digest, ByteString.EMPTY, /* force= */ true));
+    Path file = execRoot.getRelative("file");
+
+    // Bypass the local handling of empty files in downloadFile to exercise the write-through.
+    try (var out = new LazyFileOutputStream(file)) {
+      getFromFuture(combinedCache.downloadBlob(remoteActionExecutionContext, digest, out));
+      out.ensureOpen();
+    }
+
+    assertThat(FileSystemUtils.readContent(file, UTF_8)).isEmpty();
+    diskCacheClient.close();
+    Path entry = diskCacheClient.toPath(digest, Store.CAS);
+    assertThat(entry.exists()).isTrue();
+    assertThat(FileSystemUtils.readContent(entry, UTF_8)).isEmpty();
+    assertThat(diskRoot.getChild("tmp").getDirectoryEntries()).isEmpty();
+  }
+
+  @Test
+  public void downloadFile_fromRemote_diskCacheWriteFailure_doesNotFailDownload()
+      throws Exception {
+    Path diskRoot = fs.getPath("/diskroot5");
+    diskRoot.createDirectoryAndParents();
+    DiskCacheClient diskCacheClient =
+        new DiskCacheClient(diskRoot, digestUtil, /* checkActionResultIntegrity= */ true);
+    // Make every write to a temporary file fail by turning the temporary directory into a file.
+    Path tempDir = diskRoot.getChild("tmp");
+    tempDir.deleteTree();
+    FileSystemUtils.writeContent(tempDir, UTF_8, "not a directory");
+    RemoteCacheClient remoteCacheClient = new InMemoryCacheClient();
+    CombinedCache combinedCache = newCombinedCache(remoteCacheClient, diskCacheClient);
+    Digest digest = digestUtil.computeAsUtf8("remote only");
+    getFromFuture(
+        remoteCacheClient.uploadBlob(
+            remoteActionExecutionContext,
+            digest,
+            ByteString.copyFromUtf8("remote only"),
+            /* force= */ true));
+    Path file = execRoot.getRelative("file");
+
+    getFromFuture(combinedCache.downloadFile(remoteActionExecutionContext, file, digest));
+
+    assertThat(FileSystemUtils.readContent(file, UTF_8)).isEqualTo("remote only");
+    diskCacheClient.close();
+    assertThat(diskCacheClient.toPath(digest, Store.CAS).exists()).isFalse();
+  }
+
+  @Test
+  public void downloadFile_fromRemote_downloadFailure_discardsDiskCacheTempFile()
+      throws Exception {
+    Path diskRoot = fs.getPath("/diskroot6");
+    diskRoot.createDirectoryAndParents();
+    DiskCacheClient diskCacheClient =
+        new DiskCacheClient(diskRoot, digestUtil, /* checkActionResultIntegrity= */ true);
+    RemoteCacheClient remoteCacheClient = mock(RemoteCacheClient.class);
+    // Deliver part of the blob, then fail.
+    doAnswer(
+            invocation -> {
+              OutputStream out = invocation.getArgument(2);
+              out.write("partial".getBytes(UTF_8));
+              return Futures.immediateFailedFuture(new IOException("connection reset"));
+            })
+        .when(remoteCacheClient)
+        .downloadBlob(any(), any(), any());
+    CombinedCache combinedCache = newCombinedCache(remoteCacheClient, diskCacheClient);
+    Digest digest = digestUtil.computeAsUtf8("remote only");
+    Path file = execRoot.getRelative("file");
+
+    var e =
+        assertThrows(
+            IOException.class,
+            () ->
+                getFromFuture(
+                    combinedCache.downloadFile(remoteActionExecutionContext, file, digest)));
+
+    assertThat(e).hasMessageThat().isEqualTo("connection reset");
+    diskCacheClient.close();
+    assertThat(diskCacheClient.toPath(digest, Store.CAS).exists()).isFalse();
+    assertThat(diskRoot.getChild("tmp").getDirectoryEntries()).isEmpty();
+  }
+
+  @Test
+  public void downloadFile_fromRemote_cancelled_discardsDiskCacheTempFile() throws Exception {
+    Path diskRoot = fs.getPath("/diskroot7");
+    diskRoot.createDirectoryAndParents();
+    DiskCacheClient diskCacheClient =
+        new DiskCacheClient(diskRoot, digestUtil, /* checkActionResultIntegrity= */ true);
+    RemoteCacheClient remoteCacheClient = mock(RemoteCacheClient.class);
+    SettableFuture<Void> neverCompletes = SettableFuture.create();
+    SettableFuture<Void> downloadStarted = SettableFuture.create();
+    // Deliver part of the blob, then stall.
+    doAnswer(
+            invocation -> {
+              OutputStream out = invocation.getArgument(2);
+              out.write("partial".getBytes(UTF_8));
+              downloadStarted.set(null);
+              return neverCompletes;
+            })
+        .when(remoteCacheClient)
+        .downloadBlob(any(), any(), any());
+    CombinedCache combinedCache = newCombinedCache(remoteCacheClient, diskCacheClient);
+    Digest digest = digestUtil.computeAsUtf8("remote only");
+    Path file = execRoot.getRelative("file");
+
+    ListenableFuture<Void> download =
+        combinedCache.downloadFile(remoteActionExecutionContext, file, digest);
+    // The remote download only starts once the disk cache lookup has missed asynchronously.
+    getFromFuture(downloadStarted);
+    download.cancel(/* mayInterruptIfRunning= */ true);
+
+    assertThat(neverCompletes.isCancelled()).isTrue();
+    diskCacheClient.close();
+    assertThat(diskRoot.getChild("tmp").getDirectoryEntries()).isEmpty();
   }
 
   private InMemoryCombinedCache newCombinedCache() {

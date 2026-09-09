@@ -32,6 +32,7 @@ import build.bazel.remote.execution.v2.ServerCapabilities;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Iterables;
 import com.google.common.flogger.GoogleLogger;
+import com.google.common.util.concurrent.FutureCallback;
 import com.google.common.util.concurrent.Futures;
 import com.google.common.util.concurrent.ListenableFuture;
 import com.google.common.util.concurrent.ListeningExecutorService;
@@ -45,6 +46,7 @@ import com.google.devtools.build.lib.remote.common.BlobNotSplittableException;
 import com.google.devtools.build.lib.remote.common.CacheNotFoundException;
 import com.google.devtools.build.lib.remote.common.LazyFileOutputStream;
 import com.google.devtools.build.lib.remote.common.MaybePathBacked;
+import com.google.devtools.build.lib.remote.common.TeeOutputStream;
 import com.google.devtools.build.lib.remote.common.OutputDigestMismatchException;
 import com.google.devtools.build.lib.remote.common.ProgressStatusListener;
 import com.google.devtools.build.lib.remote.common.RemoteActionExecutionContext;
@@ -606,51 +608,92 @@ public class CombinedCache extends AbstractReferenceCounted {
     checkState(remoteCacheClient != null && context.getReadCachePolicy().allowRemoteCache());
 
     if (diskCacheClient != null && context.getWriteCachePolicy().allowDiskCache()) {
+      // Write the blob through to a temporary file in the disk cache while it is downloaded into
+      // `out`, and publish that file as a cache entry in the background once the download has
+      // completed. Downloading into the disk cache first and copying the entry to `out` from there
+      // would put the fsync and rename that publish the entry, as well as the copy, on the critical
+      // path of the action waiting for the blob. Storing the entry is best-effort and never fails
+      // the download: the disk cache is written through to, not read from, on this path.
       Path tempPath = diskCacheClient.getTempPath();
-      LazyFileOutputStream tempOut = new LazyFileOutputStream(tempPath);
-      ListenableFuture<Void> download = remoteCacheClient.downloadBlob(context, digest, tempOut);
-      return cleanupTempFileOnError(
-          Futures.transformAsync(
-              download,
-              (unused) -> {
-                try {
-                  // Fsync temp before we rename it to avoid data loss in the case of machine
-                  // crashes (the OS may reorder the writes and the rename).
-                  tempOut.syncIfPossible();
-                  tempOut.close();
-                  diskCacheClient.captureFile(tempPath, digest, Store.CAS);
-                } catch (IOException e) {
-                  return immediateFailedFuture(e);
-                }
-                return diskCacheClient.downloadBlob(digest, out);
+      TeeOutputStream tee = new TeeOutputStream(out, new LazyFileOutputStream(tempPath));
+      ListenableFuture<Void> download = remoteCacheClient.downloadBlob(context, digest, tee);
+      ListenableFuture<Void> result =
+          Futures.catchingAsync(
+              Futures.transform(
+                  download,
+                  (unused) -> {
+                    storeDownloadedBlob(tee, tempPath, digest);
+                    return null;
+                  },
+                  directExecutor()),
+              Exception.class,
+              (rootCause) -> {
+                discardTempFile(tee, tempPath, rootCause);
+                return immediateFailedFuture(rootCause);
               },
-              directExecutor()),
-          tempPath,
-          tempOut);
+              directExecutor());
+      // A cancellation is propagated upstream but doesn't go through catchingAsync.
+      result.addListener(
+          () -> {
+            if (result.isCancelled()) {
+              discardTempFile(tee, tempPath, /* rootCause= */ null);
+            }
+          },
+          directExecutor());
+      return result;
     }
 
     return remoteCacheClient.downloadBlob(context, digest, out);
   }
 
-  private static ListenableFuture<Void> cleanupTempFileOnError(
-      ListenableFuture<Void> f, Path tempPath, OutputStream tempOut) {
-    return Futures.catchingAsync(
-        f,
-        Exception.class,
-        (rootCause) -> {
-          try {
-            tempOut.close();
-          } catch (IOException e) {
-            rootCause.addSuppressed(e);
+  /**
+   * Publishes the temporary file a successful download was written through to as a disk cache
+   * entry, or discards it if it didn't receive the entire blob.
+   */
+  private void storeDownloadedBlob(TeeOutputStream tee, Path tempPath, Digest digest) {
+    IOException mirrorFailure = tee.closeMirror();
+    if (mirrorFailure != null) {
+      logger.atWarning().withCause(mirrorFailure).atMostEvery(1, TimeUnit.MINUTES).log(
+          "Failed to write blob %s/%d through to the disk cache",
+          digest.getHash(), digest.getSizeBytes());
+      discardTempFile(tee, tempPath, /* rootCause= */ null);
+      return;
+    }
+    Futures.addCallback(
+        diskCacheClient.syncAndCaptureFile(tempPath, digest, Store.CAS),
+        new FutureCallback<Void>() {
+          @Override
+          public void onSuccess(Void unused) {}
+
+          @Override
+          public void onFailure(Throwable t) {
+            logger.atWarning().withCause(t).atMostEvery(1, TimeUnit.MINUTES).log(
+                "Failed to store blob %s/%d in the disk cache",
+                digest.getHash(), digest.getSizeBytes());
           }
-          try {
-            tempPath.delete();
-          } catch (IOException e) {
-            rootCause.addSuppressed(e);
-          }
-          return immediateFailedFuture(rootCause);
         },
         directExecutor());
+  }
+
+  /**
+   * Discards the temporary file of a download that didn't complete, adding any failure to do so to
+   * {@code rootCause} if given.
+   */
+  private static void discardTempFile(
+      TeeOutputStream tee, Path tempPath, @Nullable Throwable rootCause) {
+    IOException mirrorFailure = tee.closeMirror();
+    if (mirrorFailure != null && rootCause != null) {
+      rootCause.addSuppressed(mirrorFailure);
+    }
+    try {
+      tempPath.delete();
+    } catch (IOException e) {
+      if (rootCause != null) {
+        rootCause.addSuppressed(e);
+      } else {
+        logger.atWarning().withCause(e).log("Failed to delete temporary file %s", tempPath);
+      }
+    }
   }
 
   /** A reporter that reports download progresses. */

@@ -76,7 +76,12 @@ public class LazyFileOutputStream extends OutputStream implements MaybePathBacke
     }
   }
 
-  private void ensureOpen() throws IOException {
+  /**
+   * Opens the file if no data has been written yet, creating it or truncating it if it exists.
+   *
+   * <p>This makes an empty file appear on disk for a stream that never receives any data.
+   */
+  public void ensureOpen() throws IOException {
     if (out == null) {
       out = path.getOutputStream();
     }

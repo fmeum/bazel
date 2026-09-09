@@ -148,6 +148,44 @@ public class DiskCacheClientTest {
   }
 
   @Test
+  public void syncAndCaptureFile_movesTempPathIntoPlace() throws Exception {
+    Digest digest = getDigest("contents");
+    Path tempPath = client.getTempPath();
+    FileSystemUtils.writeContent(tempPath, UTF_8, "contents");
+
+    getFromFuture(client.syncAndCaptureFile(tempPath, digest, Store.CAS));
+
+    assertThat(FileSystemUtils.readContent(getCasPath(digest), UTF_8)).isEqualTo("contents");
+    assertThat(tempPath.exists()).isFalse();
+  }
+
+  @Test
+  public void syncAndCaptureFile_whenPresent_deletesTempPathAndUpdatesMtime() throws Exception {
+    Digest digest = getDigest("contents");
+    Path casPath = populateCas(digest, "existing contents");
+    Path tempPath = client.getTempPath();
+    FileSystemUtils.writeContent(tempPath, UTF_8, "contents");
+
+    getFromFuture(client.syncAndCaptureFile(tempPath, digest, Store.CAS));
+
+    assertThat(FileSystemUtils.readContent(casPath, UTF_8)).isEqualTo("existing contents");
+    assertThat(casPath.getLastModifiedTime()).isNotEqualTo(0);
+    assertThat(tempPath.exists()).isFalse();
+  }
+
+  @Test
+  public void syncAndCaptureFile_whenTempPathMissing_failsWithoutCreatingEntry() throws Exception {
+    Digest digest = getDigest("contents");
+    Path tempPath = client.getTempPath();
+
+    assertThrows(
+        IOException.class,
+        () -> getFromFuture(client.syncAndCaptureFile(tempPath, digest, Store.CAS)));
+
+    assertThat(getCasPath(digest).exists()).isFalse();
+  }
+
+  @Test
   public void uploadFile_whenPresent_updatesMtime() throws Exception {
     Path file = fs.getPath("/file");
     FileSystemUtils.writeContent(file, UTF_8, "contents");
