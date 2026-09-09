@@ -316,6 +316,40 @@ public final class SequencedSkyframeExecutorTest extends BuildViewTestCase {
     GcFinalization.awaitClear(ref);
   }
 
+  // Regression test for https://github.com/bazelbuild/bazel/issues/29186: when discarding loading
+  // nodes, the package of a top-level alias itself must be kept, not just the package of the target
+  // it points to, since BuildDriverFunction looks up the alias's Target during execution.
+  @Test
+  public void discardPreExecutionCache_keepsPackageOfTopLevelAlias() throws Exception {
+    skyframeExecutor.setEventBus(new EventBus());
+    scratch.file(rootDirectory + "/other/BUILD", "filegroup(name='other', srcs=['other.txt'])");
+    scratch.file(rootDirectory + "/other/other.txt");
+    scratch.file(
+        rootDirectory + "/real/BUILD",
+        "genrule(name='real', srcs=['//other'], outs=['real.out'], cmd='touch $@')");
+    scratch.file(rootDirectory + "/aliased/BUILD", "alias(name='aliased', actual='//real:real')");
+
+    ConfiguredTarget alias =
+        skyframeExecutor.getConfiguredTargetForTesting(
+            reporter, Label.parseCanonical("@//aliased:aliased"), getTargetConfiguration());
+    assertThat(alias).isNotNull();
+    assertThat(alias.getLabel()).isEqualTo(Label.parseCanonical("@//real:real"));
+    assertThat(alias.getOriginalLabel()).isEqualTo(Label.parseCanonical("@//aliased:aliased"));
+    PackageIdentifier aliasPkg = PackageIdentifier.createInMainRepo("aliased");
+    PackageIdentifier realPkg = PackageIdentifier.createInMainRepo("real");
+    PackageIdentifier otherPkg = PackageIdentifier.createInMainRepo("other");
+    assertThat(skyframeExecutor.getEvaluator().getExistingValue(aliasPkg)).isNotNull();
+    assertThat(skyframeExecutor.getEvaluator().getExistingValue(realPkg)).isNotNull();
+    assertThat(skyframeExecutor.getEvaluator().getExistingValue(otherPkg)).isNotNull();
+
+    skyframeExecutor.discardPreExecutionCache(
+        ImmutableSet.of(alias), ImmutableSet.of(), SkyframeExecutor.DiscardType.ALL);
+
+    assertThat(skyframeExecutor.getEvaluator().getExistingValue(aliasPkg)).isNotNull();
+    assertThat(skyframeExecutor.getEvaluator().getExistingValue(realPkg)).isNotNull();
+    assertThat(skyframeExecutor.getEvaluator().getExistingValue(otherPkg)).isNull();
+  }
+
   @Test
   public void testChangeDirectory() throws Exception {
     analysisMock.pySupport().setup(mockToolsConfig);

@@ -947,17 +947,41 @@ public class SkymeldBuildIntegrationTest extends BuildIntegrationTestCase {
 
   // Regression test for https://github.com/bazelbuild/bazel/issues/29186: the analysis cache
   // discard must keep the package of a top-level alias itself (not just the package of the
-  // aliased target) since BuildDriverFunction depends on it.
+  // aliased target), since the alias's BuildDriverFunction depends on it.
   @Test
   public void topLevelAlias_notrackIncrementalState_doesNotCrash() throws Exception {
     addOptions("--notrack_incremental_state");
+    // The analysis cache is discarded as soon as the last top-level target has been analyzed. To
+    // reliably hit the bug, the discard must happen while the alias's BuildDriverKey is waiting
+    // for the execution of the aliased target: //slow is analyzed only after its repository has
+    // been fetched, which takes longer than the analysis of the alias, but less than the
+    // execution of the aliased genrule.
+    write(
+        "MODULE.bazel",
+        """
+        slow_repo = use_repo_rule("//:slow_repo.bzl", "slow_repo")
+        slow_repo(name = "slow_repo")
+        """);
+    write("BUILD");
+    write(
+        "slow_repo.bzl",
+        """
+        def _impl(rctx):
+            rctx.execute(["sleep", "3"])
+            rctx.file(
+                "BUILD",
+                "filegroup(name = 'slow_repo', visibility = ['//visibility:public'])",
+            )
+
+        slow_repo = repository_rule(implementation = _impl)
+        """);
     write(
         "foo/BUILD",
         """
         genrule(
             name = "real",
             outs = ["real.out"],
-            cmd = "touch $@",
+            cmd = "sleep 6 && touch $@",
         )
         """);
     write(
@@ -968,10 +992,18 @@ public class SkymeldBuildIntegrationTest extends BuildIntegrationTestCase {
             actual = "//foo:real",
         )
         """);
+    write(
+        "slow/BUILD",
+        """
+        filegroup(
+            name = "slow",
+            srcs = ["@slow_repo"],
+        )
+        """);
 
-    buildTarget("//bar:aliased");
+    buildTarget("//bar:aliased", "//slow");
 
-    assertSingleOutputBuilt("//foo:real");
+    assertSingleOutputBuilt("//bar:aliased");
   }
 
   @Test

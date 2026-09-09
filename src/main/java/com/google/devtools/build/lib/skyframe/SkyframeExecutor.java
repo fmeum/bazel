@@ -1375,9 +1375,14 @@ public abstract class SkyframeExecutor implements WalkableGraphFactory {
     // This is to prevent throwing away Packages we may need during execution.
     ImmutableSet.Builder<PackageIdentifier> packageSetBuilder = ImmutableSet.builder();
     if (discardType.discardsLoading()) {
-      packageSetBuilder.addAll(
-          Collections2.transform(
-              topLevelTargets, target -> target.getLabel().getPackageIdentifier()));
+      for (ConfiguredTarget target : topLevelTargets) {
+        packageSetBuilder.add(target.getLabel().getPackageIdentifier());
+        // For an alias, getLabel() is the label of the aliased target, but the package of the
+        // alias itself is also needed during execution (e.g. by BuildDriverFunction in Skymeld mode
+        // to look up the Target of the alias). See
+        // https://github.com/bazelbuild/bazel/issues/29186.
+        packageSetBuilder.add(target.getOriginalLabel().getPackageIdentifier());
+      }
       packageSetBuilder.addAll(
           Collections2.transform(
               topLevelAspects, aspect -> aspect.getLabel().getPackageIdentifier()));
