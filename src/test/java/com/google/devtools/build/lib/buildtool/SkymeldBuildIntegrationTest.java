@@ -945,6 +945,35 @@ public class SkymeldBuildIntegrationTest extends BuildIntegrationTestCase {
     events.assertContainsError("cycle in dependency graph");
   }
 
+  // Regression test for https://github.com/bazelbuild/bazel/issues/29186: the analysis cache
+  // discard must keep the package of a top-level alias itself (not just the package of the
+  // aliased target) since BuildDriverFunction depends on it.
+  @Test
+  public void topLevelAlias_notrackIncrementalState_doesNotCrash() throws Exception {
+    addOptions("--notrack_incremental_state");
+    write(
+        "foo/BUILD",
+        """
+        genrule(
+            name = "real",
+            outs = ["real.out"],
+            cmd = "touch $@",
+        )
+        """);
+    write(
+        "bar/BUILD",
+        """
+        alias(
+            name = "aliased",
+            actual = "//foo:real",
+        )
+        """);
+
+    buildTarget("//bar:aliased");
+
+    assertSingleOutputBuilt("//foo:real");
+  }
+
   @Test
   public void analysisOverlapPercentageSanityCheck_success() throws Exception {
     writeMyRuleBzl();
