@@ -388,12 +388,13 @@ class RemoteRepoContentsCacheTest(test_base.TestBase):
     with open(self.Path('bazel-bin/platform.txt')) as f:
       self.assertEqual(f.read().strip(), 'macOS')
 
-    # Second fetch on Linux: cached
+    # Second fetch on Linux: cached. Files left behind by the previous fetch
+    # that may still match the cached contents are kept on disk, so the
+    # presence of BUILD says nothing about whether the repo was fetched.
     self.ScratchFile('platform.txt', ['Linux'])
     _, _, stderr = self.RunBazel(['build', '//:show_platform'])
     self.assertIn('DETERMINING PLATFORM', '\n'.join(stderr))
     self.assertNotIn('JUST FETCHED', '\n'.join(stderr))
-    self.assertFalse(os.path.exists(os.path.join(repo_dir, 'BUILD')))
     with open(self.Path('bazel-bin/platform.txt')) as f:
       self.assertEqual(f.read().strip(), 'Linux')
 
@@ -402,7 +403,6 @@ class RemoteRepoContentsCacheTest(test_base.TestBase):
     _, _, stderr = self.RunBazel(['build', '//:show_platform'])
     self.assertIn('DETERMINING PLATFORM', '\n'.join(stderr))
     self.assertNotIn('JUST FETCHED', '\n'.join(stderr))
-    self.assertFalse(os.path.exists(os.path.join(repo_dir, 'BUILD')))
     with open(self.Path('bazel-bin/platform.txt')) as f:
       self.assertEqual(f.read().strip(), 'macOS')
 
@@ -2711,6 +2711,99 @@ class RemoteRepoContentsCacheTest(test_base.TestBase):
     # via its contents proxy, so my_repo is neither invalidated nor refetched.
     _, _, stderr = self.RunBazel(['build', '//main:use_data'])
     self.assertNotIn('JUST FETCHED', '\n'.join(stderr))
+
+  def testReinjectionKeepsMaterializedFiles(self):
+    self.ScratchFile(
+        'repo.bzl',
+        [
+            'def _repo_impl(rctx):',
+            (
+                '  rctx.file("BUILD", "exports_files([\'data.txt\'])\\n'
+                'filegroup(name=\'empty\')")'
+            ),
+            '  rctx.file("data.txt", rctx.attr.data)',
+            '  print("JUST FETCHED")',
+            '  return rctx.repo_metadata(reproducible=True)',
+            'repo = repository_rule(',
+            '    implementation = _repo_impl,',
+            '    attrs = {"data": attr.string()},',
+            ')',
+        ],
+    )
+    self.ScratchFile(
+        'BUILD.bazel',
+        [
+            'genrule(',
+            '    name = "use_data",',
+            '    srcs = ["@my_repo//:data.txt"],',
+            '    outs = ["out.txt"],',
+            '    cmd = "cat $< > $@",',
+            # Always execute locally so that data.txt is materialized as an
+            # action input rather than out.txt being served from the cache.
+            '    tags = ["no-cache"],',
+            ')',
+        ],
+    )
+
+    def set_repo_data(data):
+      self.ScratchFile(
+          'MODULE.bazel',
+          [
+              'repo = use_repo_rule("//:repo.bzl", "repo")',
+              'repo(name = "my_repo", data = "%s")' % data,
+          ],
+      )
+
+    def assert_content(path, expected):
+      with open(path) as f:
+        self.assertEqual(f.read(), expected)
+
+    # Populate the cache with three variants of the repo.
+    for data in ['one', 'two', 'three']:
+      set_repo_data(data)
+      _, _, stderr = self.RunBazel(['build', '//:use_data'])
+      self.assertIn('JUST FETCHED', '\n'.join(stderr))
+    data_path = os.path.join(self.RepoDir('my_repo'), 'data.txt')
+    out_path = self.Path('bazel-bin/out.txt')
+
+    # A cache hit materializes data.txt as the input of a local action.
+    self.RunBazel(['clean', '--expunge'])
+    set_repo_data('one')
+    _, _, stderr = self.RunBazel(['build', '//:use_data'])
+    self.assertNotIn('JUST FETCHED', '\n'.join(stderr))
+    assert_content(data_path, 'one')
+    assert_content(out_path, 'one')
+
+    # Injecting the same contents again after a server restart keeps the
+    # materialized file, e.g. for the runfiles symlinks of previously built
+    # binaries.
+    self.RunBazel(['shutdown'])
+    _, _, stderr = self.RunBazel(['build', '@my_repo//:empty'])
+    self.assertNotIn('JUST FETCHED', '\n'.join(stderr))
+    assert_content(data_path, 'one')
+
+    # A change that preserves the size is only detected when an action uses
+    # the file, which replaces it.
+    self.RunBazel(['shutdown'])
+    set_repo_data('two')
+    _, _, stderr = self.RunBazel(['build', '@my_repo//:empty'])
+    self.assertNotIn('JUST FETCHED', '\n'.join(stderr))
+    self.assertTrue(os.path.exists(data_path))
+    _, _, stderr = self.RunBazel(['build', '//:use_data'])
+    self.assertNotIn('JUST FETCHED', '\n'.join(stderr))
+    assert_content(data_path, 'two')
+    assert_content(out_path, 'two')
+
+    # A change of the size is detected during injection and removes the file.
+    self.RunBazel(['shutdown'])
+    set_repo_data('three')
+    _, _, stderr = self.RunBazel(['build', '@my_repo//:empty'])
+    self.assertNotIn('JUST FETCHED', '\n'.join(stderr))
+    self.assertFalse(os.path.exists(data_path))
+    _, _, stderr = self.RunBazel(['build', '//:use_data'])
+    self.assertNotIn('JUST FETCHED', '\n'.join(stderr))
+    assert_content(data_path, 'three')
+    assert_content(out_path, 'three')
 
 
 if __name__ == '__main__':
