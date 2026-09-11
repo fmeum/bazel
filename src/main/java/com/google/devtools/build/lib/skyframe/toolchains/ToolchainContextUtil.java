@@ -215,11 +215,18 @@ public final class ToolchainContextUtil {
         if (toolchainTypes.stream()
             .map(ToolchainTypeRequirement::toolchainType)
             .noneMatch(label::equals)) {
-          ImmutableSet<String> suggestedLabels =
-              toolchainTypes.stream()
-                  .map(ToolchainTypeRequirement::toolchainType)
-                  .map(type -> type.getDisplayForm(rule.getPackageMetadata().repositoryMapping()))
-                  .collect(toImmutableSet());
+          ImmutableSet<String> suggestedLabels = ImmutableSet.of();
+          // Suggestions use the main repository's apparent names, which are only meaningful to
+          // someone editing a BUILD file in the main repository. For rules in external
+          // repositories no single repository mapping yields a correct suggestion (the key may
+          // originate in a .bzl file in a third repository), so none is offered.
+          if (rule.getLabel().getRepository().isMain()) {
+            suggestedLabels =
+                toolchainTypes.stream()
+                    .map(ToolchainTypeRequirement::toolchainType)
+                    .map(type -> type.getDisplayForm(rule.getPackageMetadata().repositoryMapping()))
+                    .collect(toImmutableSet());
+          }
           throw new ExecGroupCollection.InvalidExecGroupException(
               "execution constraints",
               rule.getDisplayFormLabel(),
