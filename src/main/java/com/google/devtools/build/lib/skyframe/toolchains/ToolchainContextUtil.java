@@ -216,7 +216,10 @@ public final class ToolchainContextUtil {
             .map(ToolchainTypeRequirement::toolchainType)
             .noneMatch(label::equals)) {
           ImmutableSet<String> suggestedLabels = ImmutableSet.of();
-          // TODO: Generalize Label#getDisplayForm to accept non-main repo mappings.
+          // Suggestions use the main repository's apparent names, which are only meaningful to
+          // someone editing a BUILD file in the main repository. For rules in external
+          // repositories no single repository mapping yields a correct suggestion (the key may
+          // originate in a .bzl file in a third repository), so none is offered.
           if (rule.getLabel().getRepository().isMain()) {
             suggestedLabels =
                 toolchainTypes.stream()

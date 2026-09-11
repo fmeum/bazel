@@ -43,9 +43,7 @@ filegroup(
         "//docs:srcs",
         "//examples:srcs",
         "//scripts:srcs",
-        "//site:srcs",
         "//src:srcs",
-        "//src/main/java/com/google/devtools/build/docgen/release:srcs",
         "//third_party:srcs",
         "//tools:srcs",
     ] + glob(
@@ -114,6 +112,10 @@ sh_test(
         "//third_party:patches",
         "//third_party:remoteapis/MODULE.bazel",
     ],
+    env_inherit = [
+        "BUILDKITE_PIPELINE_SLUG",
+        "UPDATE_BAZEL_LOCK_FILE",
+    ],
     tags = ["requires-network"],
     visibility = ["//visibility:private"],
     deps = ["@bazel_tools//tools/bash/runfiles"],
@@ -178,7 +180,6 @@ pkg_files(
     excludes = [
         "MODULE.bazel.lock",  # Use MODULE.bazel.lock.dist instead
         "//examples:srcs",
-        "//site:srcs",
         "//docs:srcs",
         "//src:srcs-to-exclude-in-distfile",
     ] + glob(

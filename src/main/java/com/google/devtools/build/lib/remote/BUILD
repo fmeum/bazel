@@ -2,7 +2,7 @@ load("@rules_java//java:defs.bzl", "java_library")
 
 package(
     default_applicable_licenses = ["//:license"],
-    default_visibility = ["//src:__subpackages__"],
+    default_visibility = ["//src/main/java/com/google/devtools/build/lib:build_lib"],
 )
 
 filegroup(
@@ -761,7 +761,6 @@ java_library(
         ":remote_output_checker",
         ":remote_rewound_action_synchronizer",
         "//src/main/java/com/google/devtools/build/lib/actions",
-        "//src/main/java/com/google/devtools/build/lib/actions:action_input_prefetcher",
         "//src/main/java/com/google/devtools/build/lib/actions:artifacts",
         "//src/main/java/com/google/devtools/build/lib/analysis:blaze_directories",
         "//src/main/java/com/google/devtools/build/lib/buildtool/buildevent",
@@ -771,6 +770,7 @@ java_library(
         "//src/main/java/com/google/devtools/build/lib/vfs",
         "//src/main/java/com/google/devtools/build/lib/vfs:output_service",
         "//src/main/java/com/google/devtools/build/lib/vfs:pathfragment",
+        "//src/main/java/com/google/devtools/build/skyframe",
         "//src/main/protobuf:failure_details_java_proto",
         "//third_party/java/guava:base",
         "//third_party/java/guava:collect",
@@ -941,8 +941,8 @@ java_library(
     deps = [
         ":abstract_action_input_prefetcher",
         ":combined_cache",
+        ":lazy_materializer",
         ":remote_action_file_system",
-        ":subtree_materializer",
         "//src/main/java/com/google/devtools/build/lib/actions",
         "//src/main/java/com/google/devtools/build/lib/actions:action_input_helper",
         "//src/main/java/com/google/devtools/build/lib/actions:file_metadata",
@@ -1090,8 +1090,8 @@ java_library(
     srcs = ["AbstractActionInputPrefetcher.java"],
     deps = [
         ":concurrent_artifact_path_trie",
+        ":lazy_materializer",
         ":remote_output_checker",
-        ":subtree_materializer",
         "//src/main/java/com/google/devtools/build/lib/actions",
         "//src/main/java/com/google/devtools/build/lib/actions:action_input",
         "//src/main/java/com/google/devtools/build/lib/actions:action_output_directory_helper",
@@ -1118,9 +1118,11 @@ java_library(
 )
 
 java_library(
-    name = "subtree_materializer",
-    srcs = ["SubtreeMaterializer.java"],
+    name = "lazy_materializer",
+    srcs = ["LazyMaterializer.java"],
     deps = [
+        "//src/main/java/com/google/devtools/build/lib/cmdline",
+        "//src/main/java/com/google/devtools/build/lib/events",
         "//src/main/java/com/google/devtools/build/lib/vfs:pathfragment",
     ],
 )
@@ -1168,17 +1170,23 @@ java_library(
 
 java_library(
     name = "remote_rewound_action_synchronizer",
-    srcs = ["RemoteRewoundActionSynchronizer.java"],
+    srcs = [
+        "ReaderPreferringReadWriteLock.java",
+        "RemoteRewoundActionSynchronizer.java",
+    ],
     deps = [
         ":abstract_action_input_prefetcher",
         "//src/main/java/com/google/devtools/build/lib/actions",
         "//src/main/java/com/google/devtools/build/lib/actions:action_lookup_data",
         "//src/main/java/com/google/devtools/build/lib/actions:artifacts",
         "//src/main/java/com/google/devtools/build/lib/profiler",
+        "//src/main/java/com/google/devtools/build/lib/skyframe:action_template_expansion_value",
         "//src/main/java/com/google/devtools/build/lib/vfs:output_service",
+        "//src/main/java/com/google/devtools/build/skyframe",
         "//third_party/java/caffeine",
         "//third_party/java/error_prone:annotations",
         "//third_party/java/guava:annotations",
+        "//third_party/java/guava:base",
         "//third_party/java/guava:collect",
         "//third_party/java/jsr305_annotations",
     ],
