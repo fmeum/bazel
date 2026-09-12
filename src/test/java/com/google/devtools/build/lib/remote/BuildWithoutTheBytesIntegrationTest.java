@@ -534,6 +534,67 @@ public class BuildWithoutTheBytesIntegrationTest extends BuildWithoutTheBytesInt
   }
 
   @Test
+  public void actionRewinding_chainedLostInputsWithStaleActionCacheEntries_recovers()
+      throws Exception {
+    // A rewound action that itself observes a lost input must report the lost digest just like an
+    // action that hasn't been rewound. Otherwise, the rewound generating action accepts the stale
+    // action result served by the unverified worker and the two actions keep rewinding each other
+    // until the limit on repeated lost inputs fails the build.
+    var unverifiedWorker = IntegrationTestUtils.createWorker("--noaction_cache_integrity_check");
+    try (var ignored = unverifiedWorker.start()) {
+      addOptions("--remote_executor=grpc://localhost:" + unverifiedWorker.getPort());
+      enableActionRewinding();
+      write(
+          "a/BUILD",
+          """
+          genrule(
+              name = "foo",
+              srcs = [],
+              outs = ["foo.out"],
+              cmd = "echo -n foo > $@",
+          )
+
+          genrule(
+              name = "bar",
+              srcs = [":foo"],
+              outs = ["bar.out"],
+              cmd = "cat $(location :foo) > $@ && echo -n bar >> $@",
+          )
+
+          genrule(
+              name = "baz",
+              srcs = [
+                  ":bar",
+                  "baz.in",
+              ],
+              outs = ["baz.out"],
+              cmd = "cat $(location :bar) $(location baz.in) > $@",
+          )
+          """);
+      write("a/baz.in", "baz");
+
+      buildTarget("//a:baz");
+
+      // Delete the blobs backing foo.out and bar.out from the CAS while keeping all action cache
+      // entries. Rewinding //a:bar to regenerate bar.out then discovers that foo.out is lost too.
+      unverifiedWorker.evictBlob("foo".getBytes(UTF_8));
+      unverifiedWorker.evictBlob("foobar".getBytes(UTF_8));
+      if (useDiskCache) {
+        // Prevent the disk cache from restoring the deleted blobs.
+        addOptions("--disk_cache=" + UUID.randomUUID());
+      }
+
+      // Invalidate only //a:baz so that its execution discovers the lost input and rewinds //a:bar,
+      // which in turn discovers the other lost input and rewinds //a:foo.
+      write("a/baz.in", "baz2");
+      setDownloadToplevel();
+      buildTarget("//a:baz");
+
+      assertValidOutputFile("a/baz.out", "foobarbaz2\n");
+    }
+  }
+
+  @Test
   public void downloadTopLevel_deepSymlinkToFile() throws Exception {
     setDownloadToplevel();
     write(
