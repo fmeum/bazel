@@ -35,7 +35,7 @@ public class DirtyAndInflightTrackingProgressReceiver implements InflightTrackin
   protected final EvaluationProgressReceiver progressReceiver;
   private final Set<SkyKey> dirtyKeys = Sets.newConcurrentHashSet();
   private Set<SkyKey> inflightKeys = Sets.newConcurrentHashSet();
-  private Set<SkyKey> unsuccessfullyRewoundKeys = Sets.newConcurrentHashSet();
+  private Set<SkyKey> rewoundKeys = Sets.newConcurrentHashSet();
 
   // Nodes that were dirtied because one of their transitive dependencies changed
   private final ConcurrentHashMultiset<SkyFunctionName> dirtied;
@@ -104,8 +104,7 @@ public class DirtyAndInflightTrackingProgressReceiver implements InflightTrackin
       // All nodes enqueued for evaluation will be either verified clean, re-evaluated, or cleaned
       // up after being in-flight when an error happens in nokeep_going mode or in the event of an
       // interrupt. In any of these cases, they won't be dirty anymore. Note that we don't remove
-      // from unsuccessfullyRewoundKeys here - that is only done when the key completes
-      // successfully.
+      // from rewoundKeys here - see getAndClearRewoundKeys.
       dirtyKeys.remove(skyKey);
       if (!afterError) {
         // Only tell the external listener the node was enqueued if no there was neither an error
@@ -152,15 +151,12 @@ public class DirtyAndInflightTrackingProgressReceiver implements InflightTrackin
     progressReceiver.evaluated(skyKey, state, newValue, newError, directDeps);
 
     // This key was either built or marked clean, so we can remove it from both the dirty and
-    // inflight nodes.
+    // inflight nodes. It is deliberately not removed from rewoundKeys, even if it was built
+    // successfully: the node may have been rewound again between the commit of its value and this
+    // notification, which would have added it to rewoundKeys just before it is removed here. See
+    // getAndClearRewoundKeys for how successfully rewound keys are told apart instead.
     inflightKeys.remove(skyKey);
-
-    if (state.succeeded()) {
-      removeFromDirtySet(skyKey);
-    } else {
-      // Leave unsuccessful keys in unsuccessfullyRewoundKeys. Only remove them from dirtyKeys.
-      dirtyKeys.remove(skyKey);
-    }
+    dirtyKeys.remove(skyKey);
 
     if (directDeps == null) {
       // In this case, no actual evaluation work was done so let's not record it.
@@ -190,8 +186,8 @@ public class DirtyAndInflightTrackingProgressReceiver implements InflightTrackin
   }
 
   /**
-   * Returns the set of all keys that were {@linkplain DirtyType#REWIND rewound} but did not
-   * complete successfully, and resets the set to empty.
+   * Returns the set of all keys that were {@linkplain DirtyType#REWIND rewound}, and resets the set
+   * to empty.
    *
    * <p>The returned set includes keys that were rewound and were either:
    *
@@ -199,11 +195,17 @@ public class DirtyAndInflightTrackingProgressReceiver implements InflightTrackin
    *   <li>not yet enqueued
    *   <li>enqueued but not evaluated
    *   <li>evaluated to an error
+   *   <li>evaluated successfully
    * </ul>
+   *
+   * <p>Whether a key was evaluated successfully after its last rewind can't be tracked here: the
+   * notification of an evaluation may be delivered after a concurrent rewind of the same node. The
+   * caller has to consult the state of the node instead, which is done at a time when there are no
+   * concurrent evaluations.
    */
-  final Set<SkyKey> getAndClearUnsuccessfullyRewoundKeys() {
-    Set<SkyKey> keys = unsuccessfullyRewoundKeys;
-    unsuccessfullyRewoundKeys = Sets.newConcurrentHashSet();
+  final Set<SkyKey> getAndClearRewoundKeys() {
+    Set<SkyKey> keys = rewoundKeys;
+    rewoundKeys = Sets.newConcurrentHashSet();
     return keys;
   }
 
@@ -218,19 +220,15 @@ public class DirtyAndInflightTrackingProgressReceiver implements InflightTrackin
 
   private void addToDirtySet(SkyKey skyKey, DirtyType dirtyType) {
     if (dirtyType == DirtyType.REWIND) {
-      unsuccessfullyRewoundKeys.add(skyKey);
+      rewoundKeys.add(skyKey);
     } else {
       dirtyKeys.add(skyKey);
     }
   }
 
   private void removeFromDirtySet(SkyKey skyKey) {
-    // A key will never be present in both sets because EvaluationProgressReceiver#dirtied is only
-    // called after successful NodeEntry#markDirty calls, i.e. a call that transitioned the node
-    // from done to dirty.
-    if (!dirtyKeys.remove(skyKey)) {
-      unsuccessfullyRewoundKeys.remove(skyKey);
-    }
+    dirtyKeys.remove(skyKey);
+    rewoundKeys.remove(skyKey);
   }
 
   private static ImmutableMap<SkyFunctionName, Integer> fromMultiset(
