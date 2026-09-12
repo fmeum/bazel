@@ -136,7 +136,15 @@ public abstract class AbstractInMemoryMemoizingEvaluator implements MemoizingEva
     // rewound but did not complete successfully. When the invalidator runs, it will delete the
     // reverse transitive closure.
     valuesToDelete.addAll(progressReceiver.getAndClearInflightKeys());
-    valuesToDelete.addAll(progressReceiver.getAndClearUnsuccessfullyRewoundKeys());
+    // Whether a rewound node completed successfully is determined by its state in the graph: a
+    // notification of its evaluation received by the progress receiver may have been overtaken by
+    // a concurrent rewind of the same node. There are no concurrent evaluations at this point.
+    for (SkyKey rewoundKey : progressReceiver.getAndClearRewoundKeys()) {
+      InMemoryNodeEntry entry = getInMemoryGraph().getIfPresent(rewoundKey);
+      if (entry != null && (!entry.isDone() || entry.getErrorInfo() != null)) {
+        valuesToDelete.add(rewoundKey);
+      }
+    }
     try {
       // The RecordingDifferencer implementation is not quite working as it should be at this point.
       // It clears the internal data structures after getDiff is called and will not return
