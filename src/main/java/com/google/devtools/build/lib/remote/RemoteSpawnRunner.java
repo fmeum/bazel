@@ -250,6 +250,10 @@ public class RemoteSpawnRunner implements SpawnRunner {
             acceptCachedResult = false;
           }
         }
+      } else if (action.isCachedResultKnownStale()) {
+        // The cached result references blobs known to be missing from the CAS. Don't let the remote
+        // executor serve it either, it must re-execute the action.
+        acceptCachedResult = false;
       }
     } catch (CredentialHelperException e) {
       throw createExecExceptionForCredentialHelperException(e);
