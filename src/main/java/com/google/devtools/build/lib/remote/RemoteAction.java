@@ -45,6 +45,11 @@ public class RemoteAction {
   private final Action action;
   private final ActionKey actionKey;
 
+  // Set by RemoteExecutionService#lookupCache when it rejects the cached action result because it
+  // references blobs that are known to be missing from the CAS. Only accessed by the thread
+  // executing the spawn.
+  private boolean cachedResultKnownStale = false;
+
   RemoteAction(
       Spawn spawn,
       SpawnExecutionContext spawnExecutionContext,
@@ -136,5 +141,18 @@ public class RemoteAction {
    */
   public NetworkTime getNetworkTime() {
     return remoteActionExecutionContext.getNetworkTime();
+  }
+
+  /**
+   * Records that the action result cached for this action references blobs that are known to be
+   * missing from the CAS and must not be reused, not even by a remote executor's own cache lookup.
+   */
+  void markCachedResultKnownStale() {
+    cachedResultKnownStale = true;
+  }
+
+  /** Returns whether {@link #markCachedResultKnownStale} has been called. */
+  boolean isCachedResultKnownStale() {
+    return cachedResultKnownStale;
   }
 }

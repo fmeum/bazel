@@ -800,9 +800,8 @@ public class RemoteExecutionService {
 
     var result = RemoteActionResult.createFromCache(cachedActionResult);
 
-    // We only add digests to `knownMissingCasDigests` when LostInputsEvent occurs which will cause
-    // the build to abort and rewind, so there is no data race here. This allows us to avoid the
-    // check until cache eviction happens.
+    // Digests are only added to `knownMissingCasDigests` when a LostInputsEvent is posted, which
+    // is rare. This allows us to avoid the check until cache eviction happens.
     if (!knownMissingCasDigests.isEmpty()) {
       var metadata =
           result.getOrParseActionResultMetadata(
@@ -817,6 +816,9 @@ public class RemoteExecutionService {
       //
       // See https://github.com/bazelbuild/bazel/issues/18696.
       if (updateKnownMissingCasDigests(knownMissingCasDigests, metadata)) {
+        // A remote executor that doesn't verify its action cache either would serve the same stale
+        // result in response to an execution request that permits cached results.
+        action.markCachedResultKnownStale();
         return null;
       }
     }

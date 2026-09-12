@@ -157,6 +157,7 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.Random;
+import java.util.Set;
 import java.util.SortedMap;
 import java.util.concurrent.ConcurrentLinkedDeque;
 import java.util.concurrent.CountDownLatch;
@@ -268,6 +269,42 @@ public class RemoteExecutionServiceTest {
 
     RequestMetadata metadata = TracingMetadataUtils.buildMetadata("none", "none", "action-id");
     remoteActionExecutionContext = RemoteActionExecutionContext.create(metadata);
+  }
+
+  @Test
+  public void lookupCache_knownMissingDigest_rejectsResultAndMarksAction() throws Exception {
+    Set<Digest> knownMissingCasDigests = Sets.newConcurrentHashSet();
+    RemoteExecutionService service =
+        newRemoteExecutionService(remoteOptions, knownMissingCasDigests);
+    Spawn spawn =
+        new SpawnBuilder("dummy")
+            .withOutput(
+                ActionsTestUtil.createArtifactWithExecPath(
+                    artifactRoot, PathFragment.create("outputs/out")))
+            .build();
+    FakeSpawnExecutionContext context = newSpawnExecutionContext(spawn);
+    RemoteAction action = service.buildRemoteAction(spawn, context);
+    Digest lostDigest = digestUtil.computeAsUtf8("content");
+    ActionResult actionResult =
+        ActionResult.newBuilder()
+            .setExitCode(0)
+            .addOutputFiles(OutputFile.newBuilder().setPath("outputs/out").setDigest(lostDigest))
+            .build();
+    cache
+        .uploadActionResult(
+            action.getRemoteActionExecutionContext(), action.getActionKey(), actionResult)
+        .get();
+
+    // The cached result is served as long as none of its blobs are known to be missing.
+    assertThat(service.lookupCache(action)).isNotNull();
+    assertThat(action.isCachedResultKnownStale()).isFalse();
+
+    knownMissingCasDigests.add(lostDigest);
+
+    assertThat(service.lookupCache(action)).isNull();
+    assertThat(action.isCachedResultKnownStale()).isTrue();
+    // The digest is assumed to be re-uploaded by the re-execution of the action.
+    assertThat(knownMissingCasDigests).isEmpty();
   }
 
   @Test
@@ -3337,6 +3374,11 @@ public class RemoteExecutionServiceTest {
   }
 
   private RemoteExecutionService newRemoteExecutionService(RemoteOptions remoteOptions) {
+    return newRemoteExecutionService(remoteOptions, Sets.newConcurrentHashSet());
+  }
+
+  private RemoteExecutionService newRemoteExecutionService(
+      RemoteOptions remoteOptions, Set<Digest> knownMissingCasDigests) {
     return new RemoteExecutionService(
         reporter,
         /* verboseFailures= */ true,
@@ -3354,7 +3396,7 @@ public class RemoteExecutionServiceTest {
         null,
         remoteOutputChecker,
         outputService,
-        Sets.newConcurrentHashSet());
+        knownMissingCasDigests);
   }
 
   private RunfilesTree createRunfilesTree(String root, Collection<Artifact> artifacts) {

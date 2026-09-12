@@ -20,6 +20,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.atLeastOnce;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doNothing;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.doThrow;
@@ -557,6 +558,50 @@ public class RemoteSpawnRunnerTest {
             any(ExecuteRequest.class),
             any(OperationObserver.class)))
         .thenReturn(successfulResponse);
+    var spawn = newSimpleSpawn(output);
+    var spawnExecutionContext = getSpawnContext(spawn);
+
+    var result = runner.exec(spawn, spawnExecutionContext);
+    assertThat(result.status()).isEqualTo(Status.SUCCESS);
+
+    verify(service).executeRemotely(any(), eq(false), any());
+  }
+
+  @Test
+  public void knownStaleCachedResult_forcesRemoteExecutionWithSkipCacheLookup() throws Exception {
+    // Test that if the client-side cache lookup rejects an action result because it references
+    // blobs known to be missing from the CAS, the remote executor is asked to skip its own cache
+    // lookup so that it can't serve the same stale result.
+
+    var runner = newSpawnRunner();
+    var service = runner.getRemoteExecutionService();
+    doAnswer(
+            invocation -> {
+              invocation.getArgument(0, RemoteAction.class).markCachedResultKnownStale();
+              return null;
+            })
+        .when(service)
+        .lookupCache(any(RemoteAction.class));
+
+    var output =
+        ActionsTestUtil.createArtifactWithExecPath(
+            artifactRoot, PathFragment.create("outputs/out"));
+    var succeeded =
+        ExecuteResponse.newBuilder()
+            .setResult(
+                ActionResult.newBuilder()
+                    .setExitCode(0)
+                    .addOutputFiles(
+                        OutputFile.newBuilder()
+                            .setPath(output.getExecPathString())
+                            .setDigest(digestUtil.computeAsUtf8("content")))
+                    .build())
+            .build();
+    when(executor.executeRemotely(
+            any(RemoteActionExecutionContext.class),
+            any(ExecuteRequest.class),
+            any(OperationObserver.class)))
+        .thenReturn(succeeded);
     var spawn = newSimpleSpawn(output);
     var spawnExecutionContext = getSpawnContext(spawn);
 
