@@ -3691,5 +3691,205 @@ class BazelLockfileTest(test_base.TestBase):
     self.RunBazel(['build', '@hello//:all', '--lockfile_mode=error'])
 
 
+  _REPRODUCIBLE_REPO_RULE = [
+      'def _repo_impl(ctx):',
+      '    ctx.file("BUILD", "filegroup(name=\'lala\')")',
+      '    print("fetching hello at version %s with commit %s" % (',
+      '        ctx.attr.version, repr(ctx.attr.commit)))',
+      '    if ctx.attr.commit:',
+      '        return ctx.repo_metadata(reproducible = True)',
+      '    return ctx.repo_metadata(attrs_for_reproducibility = {',
+      '        "name": ctx.attr.name,',
+      '        "version": ctx.attr.version,',
+      '        "commit": "abc123",',
+      '    })',
+      '',
+      'repo_rule = repository_rule(',
+      '    implementation = _repo_impl,',
+      '    attrs = {"version": attr.string(), "commit": attr.string()},',
+      ')',
+  ]
+
+  def _disableRepoContentsCache(self):
+    # Repos fetched with locked reproducible attrs are eligible for the repo
+    # contents cache, which would hide whether the repo rule ran again.
+    with open(self.Path('.bazelrc'), 'a') as f:
+      f.write('common --repo_contents_cache=\n')
+
+  def _writeReproducibleRepoAttrsFixture(self, version='1.0', repo='hello'):
+    self.ScratchFile(
+        'MODULE.bazel',
+        [
+            'ext = use_extension("//:extension.bzl", "ext")',
+            'use_repo(ext, "%s")' % repo,
+        ],
+    )
+    self.ScratchFile('BUILD.bazel')
+    self.ScratchFile(
+        'extension.bzl',
+        self._REPRODUCIBLE_REPO_RULE
+        + [
+            '',
+            'def _ext_impl(ctx):',
+            '    repo_rule(name = "%s", version = "%s")' % (repo, version),
+            '',
+            'ext = module_extension(implementation = _ext_impl)',
+        ],
+    )
+
+  def _readReproducibleRepoAttrs(self):
+    with open(self.Path('MODULE.bazel.lock'), 'r') as f:
+      lockfile = json.loads(f.read().strip())
+    return lockfile.get('reproducibleRepoAttrs', {})
+
+  def testReproducibleRepoAttrsRecordedAndApplied(self):
+    self._disableRepoContentsCache()
+    self._writeReproducibleRepoAttrsFixture()
+    flag = '--experimental_lock_repo_attrs'
+
+    # The first fetch uses the original definition and records the attrs
+    # reported by the repo rule.
+    _, _, stderr = self.RunBazel(['build', flag, '@hello//:all'])
+    self.assertIn(
+        'fetching hello at version 1.0 with commit ""', '\n'.join(stderr)
+    )
+    attrs = self._readReproducibleRepoAttrs()
+    self.assertEqual(list(attrs.keys()), ['+ext+hello'])
+    self.assertEqual(
+        attrs['+ext+hello']['repoRuleId'], '@@//:extension.bzl%repo_rule'
+    )
+    self.assertEqual(
+        attrs['+ext+hello']['attributes'],
+        {'version': '1.0', 'commit': 'abc123'},
+    )
+    digest = attrs['+ext+hello']['definitionDigest']
+
+    # The repo is not refetched even though its definition now includes the
+    # recorded attrs.
+    _, _, stderr = self.RunBazel(['build', flag, '@hello//:all'])
+    self.assertNotIn('fetching hello', '\n'.join(stderr))
+
+    # After a clean, the repo is fetched with the recorded attrs.
+    self.RunBazel(['clean', '--expunge'])
+    _, _, stderr = self.RunBazel(['build', flag, '@hello//:all'])
+    self.assertIn(
+        'fetching hello at version 1.0 with commit "abc123"', '\n'.join(stderr)
+    )
+    attrs = self._readReproducibleRepoAttrs()
+    self.assertEqual(attrs['+ext+hello']['definitionDigest'], digest)
+
+    # A change to the original definition invalidates the recorded attrs.
+    self._writeReproducibleRepoAttrsFixture(version='2.0')
+    _, _, stderr = self.RunBazel(['build', flag, '@hello//:all'])
+    self.assertIn(
+        'fetching hello at version 2.0 with commit ""', '\n'.join(stderr)
+    )
+    attrs = self._readReproducibleRepoAttrs()
+    self.assertEqual(
+        attrs['+ext+hello']['attributes'],
+        {'version': '2.0', 'commit': 'abc123'},
+    )
+    self.assertNotEqual(attrs['+ext+hello']['definitionDigest'], digest)
+
+    # A forced fetch resolves the original definition again.
+    _, _, stderr = self.RunBazel(['fetch', flag, '--force', '--repo=@hello'])
+    self.assertIn(
+        'fetching hello at version 2.0 with commit ""', '\n'.join(stderr)
+    )
+    # The next build may fetch the repo again since the forced fetch modified
+    # its files under the running server, but only with the recorded attrs.
+    _, _, stderr = self.RunBazel(['build', flag, '@hello//:all'])
+    self.assertNotIn(
+        'fetching hello at version 2.0 with commit ""', '\n'.join(stderr)
+    )
+    _, _, stderr = self.RunBazel(['build', flag, '@hello//:all'])
+    self.assertNotIn('fetching hello', '\n'.join(stderr))
+
+    # Removing the repo from the extension removes the recorded attrs.
+    self._writeReproducibleRepoAttrsFixture(repo='other')
+    self.RunBazel(['build', flag, '@other//:all'])
+    self.assertEqual(list(self._readReproducibleRepoAttrs().keys()), ['+ext+other'])
+
+  def testReproducibleRepoAttrsNotRecordedInErrorModeOrWithoutFlag(self):
+    self._disableRepoContentsCache()
+    self._writeReproducibleRepoAttrsFixture()
+    flag = '--experimental_lock_repo_attrs'
+
+    # Without the flag, nothing is recorded.
+    _, _, stderr = self.RunBazel(['build', '@hello//:all'])
+    self.assertIn(
+        'fetching hello at version 1.0 with commit ""', '\n'.join(stderr)
+    )
+    self.assertEqual(self._readReproducibleRepoAttrs(), {})
+
+    # In error mode, nothing is recorded either, but the build succeeds.
+    self.RunBazel(['clean', '--expunge'])
+    _, _, stderr = self.RunBazel(
+        ['build', flag, '--lockfile_mode=error', '@hello//:all']
+    )
+    self.assertIn(
+        'fetching hello at version 1.0 with commit ""', '\n'.join(stderr)
+    )
+    self.assertEqual(self._readReproducibleRepoAttrs(), {})
+
+    # Record the attrs in update mode, then verify that they are applied in
+    # error mode.
+    _, _, stderr = self.RunBazel(['fetch', flag, '--force', '--repo=@hello'])
+    self.assertIn(
+        'fetching hello at version 1.0 with commit ""', '\n'.join(stderr)
+    )
+    self.assertEqual(
+        list(self._readReproducibleRepoAttrs().keys()), ['+ext+hello']
+    )
+    self.RunBazel(['clean', '--expunge'])
+    _, _, stderr = self.RunBazel(
+        ['build', flag, '--lockfile_mode=error', '@hello//:all']
+    )
+    self.assertIn(
+        'fetching hello at version 1.0 with commit "abc123"', '\n'.join(stderr)
+    )
+
+    # Without the flag, the recorded attrs are neither applied nor removed.
+    _, _, stderr = self.RunBazel(['build', '@hello//:all'])
+    self.assertIn(
+        'fetching hello at version 1.0 with commit ""', '\n'.join(stderr)
+    )
+    self.assertEqual(
+        list(self._readReproducibleRepoAttrs().keys()), ['+ext+hello']
+    )
+
+  def testReproducibleRepoAttrsForUseRepoRule(self):
+    self._disableRepoContentsCache()
+    self.ScratchFile(
+        'MODULE.bazel',
+        [
+            'repo_rule = use_repo_rule("//:repo.bzl", "repo_rule")',
+            'repo_rule(name = "hello", version = "1.0")',
+        ],
+    )
+    self.ScratchFile('BUILD.bazel')
+    self.ScratchFile('repo.bzl', self._REPRODUCIBLE_REPO_RULE)
+    flag = '--experimental_lock_repo_attrs'
+
+    _, _, stderr = self.RunBazel(['build', flag, '@hello//:all'])
+    self.assertIn(
+        'fetching hello at version 1.0 with commit ""', '\n'.join(stderr)
+    )
+    attrs = self._readReproducibleRepoAttrs()
+    self.assertEqual(len(attrs), 1)
+    (name, entry), = attrs.items()
+    self.assertTrue(name.endswith('+hello'), name)
+    self.assertEqual(entry['repoRuleId'], '@@//:repo.bzl%repo_rule')
+    self.assertEqual(
+        entry['attributes'], {'version': '1.0', 'commit': 'abc123'}
+    )
+
+    self.RunBazel(['clean', '--expunge'])
+    _, _, stderr = self.RunBazel(['build', flag, '@hello//:all'])
+    self.assertIn(
+        'fetching hello at version 1.0 with commit "abc123"', '\n'.join(stderr)
+    )
+
+
 if __name__ == '__main__':
   absltest.main()

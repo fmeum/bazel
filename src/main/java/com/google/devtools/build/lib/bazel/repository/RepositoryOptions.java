@@ -432,6 +432,21 @@ public abstract class RepositoryOptions extends OptionsBase {
   public abstract LockfileMode getLockfileMode();
 
   @Option(
+      name = "experimental_lock_repo_attrs",
+      defaultValue = "false",
+      documentationCategory = OptionDocumentationCategory.BZLMOD,
+      effectTags = {OptionEffectTag.LOADING_AND_ANALYSIS},
+      metadataTags = {OptionMetadataTag.EXPERIMENTAL},
+      help =
+          "If true, whenever a repo rule reports via `repository_ctx.repo_metadata` that the repo"
+              + " it fetched would have been reproducible with a different set of attributes, Bazel"
+              + " records these attributes in MODULE.bazel.lock and uses them in place of the"
+              + " original ones when fetching the repo in the future, as long as its original"
+              + " definition doesn't change. Recorded attributes are re-resolved by `bazel fetch"
+              + " --force` and are never recorded with `--lockfile_mode=error` or `off`.")
+  public abstract boolean getLockRepoAttrs();
+
+  @Option(
       name = "vendor_dir",
       defaultValue = "null",
       converter = OptionsUtils.PathFragmentConverter.class,

@@ -24,9 +24,18 @@ import com.google.common.collect.ImmutableMap;
 import com.google.devtools.build.lib.actions.FileStateValue;
 import com.google.devtools.build.lib.actions.FileValue;
 import com.google.devtools.build.lib.analysis.BlazeDirectories;
+import com.google.devtools.build.lib.bazel.bzlmod.BazelLockFileFunction;
+import com.google.devtools.build.lib.bazel.bzlmod.BazelLockFileValue;
+import com.google.devtools.build.lib.bazel.bzlmod.ExternalDepsException;
+import com.google.devtools.build.lib.bazel.bzlmod.ModuleFileValue;
+import com.google.devtools.build.lib.bazel.bzlmod.ModuleFileValue.RootModuleFileValue;
 import com.google.devtools.build.lib.bazel.bzlmod.NonRegistryOverride;
+import com.google.devtools.build.lib.bazel.bzlmod.RepoSpec;
+import com.google.devtools.build.lib.bazel.bzlmod.ReproducibleRepoAttrs;
+import com.google.devtools.build.lib.bazel.bzlmod.ReproducibleRepoAttrsEvent;
 import com.google.devtools.build.lib.bazel.bzlmod.VendorFileValue;
 import com.google.devtools.build.lib.bazel.repository.RepositoryFunctionException.AlreadyReportedRepositoryAccessException;
+import com.google.devtools.build.lib.bazel.repository.RepositoryOptions.LockfileMode;
 import com.google.devtools.build.lib.bazel.repository.RepositoryOptions.RequireRepoExtensionMetadataMode;
 import com.google.devtools.build.lib.bazel.repository.cache.LocalRepoContentsCache;
 import com.google.devtools.build.lib.bazel.repository.cache.LocalRepoContentsCache.CandidateRepo;
@@ -37,10 +46,13 @@ import com.google.devtools.build.lib.bazel.repository.starlark.RepoMetadata.Repr
 import com.google.devtools.build.lib.bazel.repository.starlark.StarlarkRepositoryContext;
 import com.google.devtools.build.lib.bazel.repository.starlark.StarlarkRepositoryDefinitionLocationEvent;
 import com.google.devtools.build.lib.cmdline.LabelConstants;
+import com.google.devtools.build.lib.cmdline.PackageIdentifier;
 import com.google.devtools.build.lib.cmdline.RepositoryMapping;
 import com.google.devtools.build.lib.cmdline.RepositoryName;
 import com.google.devtools.build.lib.cmdline.StarlarkThreadContext;
 import com.google.devtools.build.lib.events.Event;
+import com.google.devtools.build.lib.events.NullEventHandler;
+import com.google.devtools.build.lib.packages.LabelConverter;
 import com.google.devtools.build.lib.pkgcache.PathPackageLocator;
 import com.google.devtools.build.lib.profiler.Profiler;
 import com.google.devtools.build.lib.profiler.ProfilerTask;
@@ -72,6 +84,7 @@ import com.google.devtools.build.skyframe.SkyKey;
 import com.google.devtools.build.skyframe.SkyValue;
 import com.google.devtools.build.skyframe.WorkerSkyKeyComputeState;
 import java.io.IOException;
+import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.ExecutionException;
@@ -85,6 +98,7 @@ import net.starlark.java.eval.StarlarkCallable;
 import net.starlark.java.eval.StarlarkSemantics;
 import net.starlark.java.eval.StarlarkThread;
 import net.starlark.java.eval.SymbolGenerator;
+import net.starlark.java.syntax.Location;
 
 /** A {@link SkyFunction} that fetches the given repository. */
 public final class RepositoryFetchFunction implements SkyFunction {
@@ -219,6 +233,29 @@ public final class RepositoryFetchFunction implements SkyFunction {
       Path repoRoot,
       RepoDefinition repoDefinition)
       throws InterruptedException, RepositoryFunctionException {
+    LockedAttrsPolicy lockedAttrsPolicy = LockedAttrsPolicy.get(env);
+    if (lockedAttrsPolicy == null) {
+      return null;
+    }
+    @Nullable RepositoryMapping basicMainRepoMapping = null;
+    if (lockedAttrsPolicy.apply() || lockedAttrsPolicy.record()) {
+      var root = (RootModuleFileValue) env.getValue(ModuleFileValue.KEY_FOR_ROOT_MODULE);
+      if (root == null) {
+        return null;
+      }
+      basicMainRepoMapping = RepoDefinitionFunction.basicMainRepoMapping(root);
+    }
+    boolean lockedAttrsApplied = false;
+    if (lockedAttrsPolicy.apply()) {
+      RepoDefinition lockedRepoDefinition =
+          applyReproducibleRepoAttrs(env, repositoryName, repoDefinition, basicMainRepoMapping);
+      if (lockedRepoDefinition == null) {
+        return null;
+      }
+      lockedAttrsApplied = lockedRepoDefinition != repoDefinition;
+      // From here on, the repo is defined by the attributes recorded in the lockfile (if any).
+      repoDefinition = lockedRepoDefinition;
+    }
     var digestWriter =
         DigestWriter.create(env, directories, repositoryName, repoDefinition, starlarkSemantics);
     if (digestWriter == null) {
@@ -309,12 +346,39 @@ public final class RepositoryFetchFunction implements SkyFunction {
       // repository as valid even though it is in an inconsistent state. Clear the marker file and
       // only recreate it after fetching is done to prevent this scenario.
       DigestWriter.clearMarkerFile(directories, repositoryName);
-      FetchResult result = fetchAndHandleEvents(repoDefinition, repoRoot, env, repositoryName);
+      FetchResult result =
+          fetchAndHandleEvents(
+              repoDefinition,
+              repoRoot,
+              env,
+              repositoryName,
+              /* recordReproducibleAttrs= */ lockedAttrsPolicy.record() && !lockedAttrsApplied,
+              basicMainRepoMapping);
       if (result == null) {
         return null;
       }
-      digestWriter.writeMarkerFile(result.recordedInputValues());
-      if (result.reproducible() == Reproducibility.YES && !repoDefinition.repoRule().local()) {
+      DigestWriter markerWriter = digestWriter;
+      boolean reproducible = result.reproducible() == Reproducibility.YES;
+      if (result.reproducibleRepoDefinition() != null) {
+        // The attributes reported by the repo rule to make this repo reproducible are recorded in
+        // the lockfile at the end of the command and thus define the repo from the next evaluation
+        // on. Write the marker file for that definition to avoid a refetch and cache the contents
+        // under it, which is safe as the repo rule promised that a fetch with these attributes
+        // yields exactly the same contents.
+        markerWriter =
+            DigestWriter.create(
+                env,
+                directories,
+                repositoryName,
+                result.reproducibleRepoDefinition(),
+                starlarkSemantics);
+        if (markerWriter == null) {
+          return null;
+        }
+        reproducible = true;
+      }
+      markerWriter.writeMarkerFile(result.recordedInputValues());
+      if (reproducible && !repoDefinition.repoRule().local()) {
         // This repo may be eligible for the local and remote repo contents cache.
         // Replant symlinks before caching to convert absolute symlinks relative if possible, which
         // can make more repos eligible.
@@ -344,8 +408,8 @@ public final class RepositoryFetchFunction implements SkyFunction {
           remoteRepoContentsCache.addToCache(
               repositoryName,
               repoRoot,
-              digestWriter.markerPath,
-              digestWriter.predeclaredInputHash,
+              markerWriter.markerPath,
+              markerWriter.predeclaredInputHash,
               env.getListener());
         }
         if (repoContentsCache.isEnabled() && replantSymlinksResult.safeForLocalCache()) {
@@ -353,7 +417,7 @@ public final class RepositoryFetchFunction implements SkyFunction {
           try {
             newCacheEntry =
                 repoContentsCache.moveToCache(
-                    repoRoot, digestWriter.markerPath, digestWriter.predeclaredInputHash);
+                    repoRoot, markerWriter.markerPath, markerWriter.predeclaredInputHash);
           } catch (IOException e) {
             throw new RepositoryFunctionException(
                 new IOException(
@@ -554,13 +618,25 @@ public final class RepositoryFetchFunction implements SkyFunction {
 
   @Nullable
   private FetchResult fetchAndHandleEvents(
-      RepoDefinition repoDefinition, Path repoRoot, Environment env, RepositoryName repoName)
+      RepoDefinition repoDefinition,
+      Path repoRoot,
+      Environment env,
+      RepositoryName repoName,
+      boolean recordReproducibleAttrs,
+      @Nullable RepositoryMapping basicMainRepoMapping)
       throws InterruptedException, RepositoryFunctionException {
     env.getListener().post(RepositoryFetchProgress.ongoing(repoName, "starting"));
 
     FetchResult result;
     try {
-      result = fetch(repoDefinition, repoRoot, env, repoName);
+      result =
+          fetch(
+              repoDefinition,
+              repoRoot,
+              env,
+              repoName,
+              recordReproducibleAttrs,
+              basicMainRepoMapping);
     } catch (RepositoryFunctionException e) {
       // Upon an exceptional exit, the fetching of that repository is over as well.
       env.getListener().post(RepositoryFetchProgress.finished(repoName));
@@ -601,14 +677,23 @@ public final class RepositoryFetchFunction implements SkyFunction {
    * @param recordedInputValues Any recorded inputs (and their values) encountered during the fetch
    *     of the repo. Changes to these inputs will result in the repo being refetched in the future.
    * @param reproducible Whether the fetched repo contents are reproducible, hence cacheable.
+   * @param reproducibleRepoDefinition If the repo rule reported attributes that make the repo
+   *     reproducible and these have been recorded for the lockfile, the definition of the repo
+   *     with these attributes applied. Null otherwise.
    */
   private record FetchResult(
       ImmutableList<RepoRecordedInput.WithValue> recordedInputValues,
-      Reproducibility reproducible) {}
+      Reproducibility reproducible,
+      @Nullable RepoDefinition reproducibleRepoDefinition) {}
 
   @Nullable
   private FetchResult fetch(
-      RepoDefinition repoDefinition, Path outputDirectory, Environment env, RepositoryName repoName)
+      RepoDefinition repoDefinition,
+      Path outputDirectory,
+      Environment env,
+      RepositoryName repoName,
+      boolean recordReproducibleAttrs,
+      @Nullable RepositoryMapping basicMainRepoMapping)
       throws RepositoryFunctionException, InterruptedException {
     setupRepoRoot(outputDirectory);
 
@@ -655,6 +740,7 @@ public final class RepositoryFetchFunction implements SkyFunction {
 
     ImmutableList<RepoRecordedInput.WithValue> recordedInputValues;
     RepoMetadata repoMetadata;
+    @Nullable RepoDefinition reproducibleRepoDefinition = null;
     try (Mutability mu = Mutability.create("Starlark repository");
         StarlarkRepositoryContext starlarkRepositoryContext =
             new StarlarkRepositoryContext(
@@ -721,9 +807,13 @@ public final class RepositoryFetchFunction implements SkyFunction {
           };
       RepositoryResolvedEvent resolved =
           new RepositoryResolvedEvent(repoDefinition, repoMetadata.attrsForReproducibility());
-      if (resolved.isNewInformationReturned()) {
-        // TODO: https://github.com/bazelbuild/bazel/issues/26511 - printing this information isn't
-        //  super useful, as it's often not actionable. Figure out what to do instead.
+      if (recordReproducibleAttrs) {
+        reproducibleRepoDefinition =
+            recordReproducibleRepoAttrs(
+                env, repoDefinition, repoName, resolved, basicMainRepoMapping);
+      } else if (resolved.isNewInformationReturned()) {
+        // This information is only acted upon with --experimental_lock_repo_attrs and is often not
+        // actionable for the user, so only report it at the debug level.
         env.getListener().handle(Event.debug(resolved.getMessage()));
         env.getListener().handle(Event.debug(defInfo));
       }
@@ -793,7 +883,155 @@ public final class RepositoryFetchFunction implements SkyFunction {
       }
     }
 
-    return new FetchResult(recordedInputValues, repoMetadata.reproducible());
+    return new FetchResult(
+        recordedInputValues, repoMetadata.reproducible(), reproducibleRepoDefinition);
+  }
+
+  /**
+   * Type-checks the attributes reported by a repo rule to make its repo reproducible and posts an
+   * event to record them in the lockfile in place of any previously recorded attributes.
+   *
+   * @return the definition of the repo with the reported attributes applied, or null if the repo
+   *     rule didn't report any or they are invalid
+   */
+  @Nullable
+  private static RepoDefinition recordReproducibleRepoAttrs(
+      Environment env,
+      RepoDefinition repoDefinition,
+      RepositoryName repoName,
+      RepositoryResolvedEvent resolved,
+      RepositoryMapping basicMainRepoMapping) {
+    Optional<ReproducibleRepoAttrs> reproducibleRepoAttrs = Optional.empty();
+    RepoDefinition reproducibleRepoDefinition = null;
+    if (resolved.isNewInformationReturned()) {
+      try {
+        RepoSpec reproducibleSpec =
+            instantiate(
+                repoDefinition.repoRule(), resolved.getReproducibleAttrs(), basicMainRepoMapping);
+        var originalSpec =
+            new RepoSpec(repoDefinition.repoRule().id(), repoDefinition.attrValues());
+        reproducibleRepoAttrs =
+            Optional.of(
+                new ReproducibleRepoAttrs(
+                    ReproducibleRepoAttrs.digestOf(originalSpec),
+                    reproducibleSpec.repoRuleId(),
+                    reproducibleSpec.attributes()));
+        reproducibleRepoDefinition =
+            new RepoDefinition(
+                repoDefinition.repoRule(),
+                reproducibleSpec.attributes(),
+                repoDefinition.name(),
+                repoDefinition.originalName());
+      } catch (ExternalDepsException e) {
+        env.getListener()
+            .handle(
+                Event.warn(
+                    ("Ignoring the attributes reported by the repo rule of '%s' to make it"
+                            + " reproducible as they are invalid: %s")
+                        .formatted(repoDefinition.name(), e.getMessage())));
+      }
+    }
+    // The repo has been fetched from its original definition, so whatever it reported (or didn't
+    // report) supersedes the attributes recorded in the lockfile for it.
+    env.getListener().post(new ReproducibleRepoAttrsEvent(repoName, reproducibleRepoAttrs));
+    return reproducibleRepoDefinition;
+  }
+
+  /**
+   * Applies the attributes recorded in the lockfile to make the given repo reproducible, if any.
+   *
+   * @return the definition of the repo to fetch, or null if a Skyframe restart is needed
+   */
+  @Nullable
+  private static RepoDefinition applyReproducibleRepoAttrs(
+      Environment env,
+      RepositoryName repositoryName,
+      RepoDefinition repoDefinition,
+      RepositoryMapping basicMainRepoMapping)
+      throws InterruptedException {
+    var lockfile = (BazelLockFileValue) env.getValue(BazelLockFileValue.KEY);
+    if (lockfile == null) {
+      return null;
+    }
+    ReproducibleRepoAttrs reproducibleRepoAttrs =
+        lockfile.getReproducibleRepoAttrs().get(repositoryName.getName());
+    if (reproducibleRepoAttrs == null) {
+      return repoDefinition;
+    }
+    var originalSpec = new RepoSpec(repoDefinition.repoRule().id(), repoDefinition.attrValues());
+    if (!reproducibleRepoAttrs.appliesTo(originalSpec)) {
+      // The definition of the repo has changed since the attributes were recorded. The stale entry
+      // is removed from the lockfile at the end of the command.
+      return repoDefinition;
+    }
+    try {
+      RepoSpec reproducibleSpec =
+          instantiate(
+              repoDefinition.repoRule(),
+              reproducibleRepoAttrs.attributes().attributes(),
+              basicMainRepoMapping);
+      return new RepoDefinition(
+          repoDefinition.repoRule(),
+          reproducibleSpec.attributes(),
+          repoDefinition.name(),
+          repoDefinition.originalName());
+    } catch (ExternalDepsException e) {
+      env.getListener()
+          .handle(
+              Event.warn(
+                  ("Ignoring the attributes recorded for '%s' in MODULE.bazel.lock as they are"
+                          + " invalid: %s")
+                      .formatted(repoDefinition.name(), e.getMessage())));
+      return repoDefinition;
+    }
+  }
+
+  private static RepoSpec instantiate(
+      RepoRule repoRule, Map<String, Object> attrs, RepositoryMapping basicMainRepoMapping)
+      throws ExternalDepsException {
+    return repoRule.instantiate(
+        attrs,
+        // The attributes either come from the repo rule itself or have been type-checked against it
+        // before, so errors are unexpected and the call stack is never user-visible.
+        ImmutableList.of(StarlarkThread.callStackEntry("<toplevel>", Location.BUILTIN)),
+        new LabelConverter(PackageIdentifier.EMPTY_PACKAGE_ID, basicMainRepoMapping),
+        // Errors are reported by the callers.
+        NullEventHandler.INSTANCE,
+        "to the root module");
+  }
+
+  /**
+   * Whether the attributes recorded in the lockfile to make repos reproducible are applied to repo
+   * definitions and whether newly reported ones are recorded in the lockfile.
+   */
+  private record LockedAttrsPolicy(boolean apply, boolean record) {
+    private static final LockedAttrsPolicy DISABLED = new LockedAttrsPolicy(false, false);
+
+    /** Returns null if and only if a Skyframe restart is needed. */
+    @Nullable
+    static LockedAttrsPolicy get(Environment env) throws InterruptedException {
+      Boolean enabled = RepositoryDirectoryValue.LOCK_REPO_ATTRS.get(env);
+      if (enabled == null) {
+        return null;
+      }
+      if (!enabled) {
+        return DISABLED;
+      }
+      LockfileMode lockfileMode = BazelLockFileFunction.LOCKFILE_MODE.get(env);
+      if (lockfileMode == null) {
+        return null;
+      }
+      return switch (lockfileMode) {
+        case OFF -> DISABLED;
+        // The lockfile is never modified in this mode.
+        case ERROR -> new LockedAttrsPolicy(/* apply= */ true, /* record= */ false);
+        // A forced fetch resolves the repo from its original definition again.
+        case UPDATE, REFRESH ->
+            new LockedAttrsPolicy(
+                /* apply= */ RepositoryDirectoryValue.FORCE_FETCH.get(env).isEmpty(),
+                /* record= */ true);
+      };
+    }
   }
 
   private static boolean shouldRequireRepoMetadata(

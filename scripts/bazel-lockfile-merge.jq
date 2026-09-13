@@ -75,9 +75,15 @@ def shallow_merge(f):
         factsVersions: (if any(has("factsVersions")) then
                           $maxFactsVersions | with_entries(select(.value != 0))
                         else null end),
+        # Shallowly merge the attributes recorded to make repos reproducible by
+        # repo name.
+        reproducibleRepoAttrs: (if any(has("reproducibleRepoAttrs")) then
+                                  map(.reproducibleRepoAttrs // {} | to_entries) | flatten |
+                                  if length > 0 then group_by(.key) | shallow_merge({(.[0].key): (map(.value) | stable_unique | last)}) else {} end
+                                else null end),
     }
-    # Filter out null values for missing top-level keys such as facts and
-    # factsVersions.
+    # Filter out null values for missing top-level keys such as facts,
+    # factsVersions and reproducibleRepoAttrs.
     | with_entries(select(.value != null))
 )? //
     # We get here if the lockfiles with the highest lockFileVersion could not be

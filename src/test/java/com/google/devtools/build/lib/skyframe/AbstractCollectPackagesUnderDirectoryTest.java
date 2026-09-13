@@ -316,6 +316,7 @@ public abstract class AbstractCollectPackagesUnderDirectoryTest {
             PrecomputedValue.injected(
                 RepoDefinitionFunction.REPOSITORY_OVERRIDES, ImmutableMap.of()),
             PrecomputedValue.injected(RepositoryDirectoryValue.FETCH_DISABLED, false),
+            PrecomputedValue.injected(RepositoryDirectoryValue.LOCK_REPO_ATTRS, false),
             PrecomputedValue.injected(
                 RepositoryDirectoryValue.FORCE_FETCH,
                 RepositoryDirectoryValue.FORCE_FETCH_DISABLED),

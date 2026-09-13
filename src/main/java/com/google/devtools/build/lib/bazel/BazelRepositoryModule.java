@@ -150,6 +150,7 @@ public class BazelRepositoryModule extends BlazeModule {
   private CheckDirectDepsMode checkDirectDepsMode = CheckDirectDepsMode.WARNING;
   private BazelCompatibilityMode bazelCompatibilityMode = BazelCompatibilityMode.ERROR;
   private LockfileMode bazelLockfileMode = LockfileMode.UPDATE;
+  private boolean lockRepoAttrs = false;
   private RequireRepoExtensionMetadataMode requireRepoExtensionMetadataMode =
       RequireRepoExtensionMetadataMode.FALSE;
   private Clock clock;
@@ -563,6 +564,7 @@ public class BazelRepositoryModule extends BlazeModule {
       checkDirectDepsMode = repoOptions.getCheckDirectDependencies();
       bazelCompatibilityMode = repoOptions.getBazelCompatibilityMode();
       bazelLockfileMode = repoOptions.getLockfileMode();
+      lockRepoAttrs = repoOptions.getLockRepoAttrs();
       allowedYankedVersions = repoOptions.getAllowedYankedVersions();
       if (env.getWorkspace() != null) {
         Path externalRoot = env.getOutputBase().getRelative(LabelConstants.EXTERNAL_PATH_PREFIX);
@@ -776,6 +778,7 @@ public class BazelRepositoryModule extends BlazeModule {
             RepoMetadataRequirements.REQUIRE_REPO_EXTENSION_METADATA,
             requireRepoExtensionMetadataMode),
         PrecomputedValue.injected(BazelLockFileFunction.LOCKFILE_MODE, bazelLockfileMode),
+        PrecomputedValue.injected(RepositoryDirectoryValue.LOCK_REPO_ATTRS, lockRepoAttrs),
         PrecomputedValue.injected(RepositoryDirectoryValue.IS_VENDOR_COMMAND, false),
         PrecomputedValue.injected(RepositoryDirectoryValue.VENDOR_DIRECTORY, vendorDirectory),
         PrecomputedValue.injected(

@@ -113,7 +113,8 @@ public abstract class BazelLockFileValue implements SkyValue {
         .setSelectedYankedVersions(ImmutableMap.of())
         .setModuleExtensions(ImmutableMap.of())
         .setFacts(ImmutableMap.of())
-        .setFactsVersions(ImmutableMap.of());
+        .setFactsVersions(ImmutableMap.of())
+        .setReproducibleRepoAttrs(ImmutableMap.of());
   }
 
   /** Current version of the lock file */
@@ -153,6 +154,13 @@ public abstract class BazelLockFileValue implements SkyValue {
    */
   public abstract ImmutableMap<ModuleExtensionId, Integer> getFactsVersions();
 
+  /**
+   * The attributes reported by repo rules via {@code repository_ctx.repo_metadata} to make their
+   * repos reproducible, keyed by canonical repo name. Only maintained with {@code
+   * --experimental_lock_repo_attrs}.
+   */
+  public abstract ImmutableMap<String, ReproducibleRepoAttrs> getReproducibleRepoAttrs();
+
   public abstract Builder toBuilder();
 
   /** Builder type for {@link BazelLockFileValue}. */
@@ -173,6 +181,9 @@ public abstract class BazelLockFileValue implements SkyValue {
     public abstract Builder setFacts(ImmutableMap<ModuleExtensionId, Facts> value);
 
     public abstract Builder setFactsVersions(ImmutableMap<ModuleExtensionId, Integer> value);
+
+    public abstract Builder setReproducibleRepoAttrs(
+        ImmutableMap<String, ReproducibleRepoAttrs> value);
 
     public abstract BazelLockFileValue build();
   }

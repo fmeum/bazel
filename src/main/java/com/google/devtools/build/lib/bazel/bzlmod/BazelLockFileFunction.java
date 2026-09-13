@@ -158,7 +158,7 @@ public class BazelLockFileFunction implements SkyFunction {
       return false;
     }
     for (var extensionMap : lockFileValue.getModuleExtensions().values()) {
-      if (extensionMap == null) {
+      
         return false;
       }
       for (LockFileModuleExtension extension : extensionMap.values()) {

@@ -82,13 +82,7 @@ public final class RepoDefinitionFunction implements SkyFunction {
     // In such cases, we need to provide a "basic repo mapping", so that we can properly turn those
     // label strings into label objects. Since we only accept patches from the main repo anyway, we
     // only need the two simple entries pointing into the main repo itself.
-    RepositoryMapping basicMainRepoMapping =
-        RepositoryMapping.create(
-            ImmutableMap.<String, RepositoryName>builder()
-                .put("", RepositoryName.MAIN)
-                .put(root.module().getRepoName(), RepositoryName.MAIN)
-                .buildKeepingLast(),
-            RepositoryName.MAIN);
+    RepositoryMapping basicMainRepoMapping = basicMainRepoMapping(root);
 
     RepositoryName repositoryName = ((RepoDefinitionValue.Key) skyKey).argument();
 
@@ -164,6 +158,19 @@ public final class RepoDefinitionFunction implements SkyFunction {
     RepoSpec extRepoSpec = extensionValue.generatedRepoSpecs().get(internalRepo);
     return createRepoDefinitionFromSpec(
         extRepoSpec, repositoryName, internalRepo, basicMainRepoMapping, env);
+  }
+
+  /**
+   * Returns a repo mapping that only knows about the main repo, which suffices to type-check the
+   * attribute values of repo definitions. See {@link #compute} for details.
+   */
+  public static RepositoryMapping basicMainRepoMapping(RootModuleFileValue root) {
+    return RepositoryMapping.create(
+        ImmutableMap.<String, RepositoryName>builder()
+            .put("", RepositoryName.MAIN)
+            .put(root.module().getRepoName(), RepositoryName.MAIN)
+            .buildKeepingLast(),
+        RepositoryName.MAIN);
   }
 
   // Callers must check env.valuesMissing() and ignore the result if true.

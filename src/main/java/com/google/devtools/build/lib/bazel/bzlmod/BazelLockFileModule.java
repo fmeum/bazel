@@ -22,22 +22,32 @@ import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.ImmutableSortedMap;
 import com.google.common.collect.Maps;
 import com.google.common.collect.Sets;
+import com.google.common.eventbus.AllowConcurrentEvents;
+import com.google.common.eventbus.Subscribe;
 import com.google.common.flogger.GoogleLogger;
+import com.google.devtools.build.lib.bazel.repository.RepoDefinition;
+import com.google.devtools.build.lib.bazel.repository.RepoDefinitionValue;
 import com.google.devtools.build.lib.bazel.repository.RepositoryOptions;
 import com.google.devtools.build.lib.bazel.repository.RepositoryOptions.LockfileMode;
 import com.google.devtools.build.lib.cmdline.LabelConstants;
+import com.google.devtools.build.lib.cmdline.RepositoryName;
 import com.google.devtools.build.lib.runtime.BlazeModule;
 import com.google.devtools.build.lib.runtime.CommandEnvironment;
 import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.build.lib.vfs.Root;
 import com.google.devtools.build.lib.vfs.RootedPath;
 import com.google.devtools.build.skyframe.MemoizingEvaluator;
+import com.google.devtools.build.skyframe.SkyKey;
+import com.google.devtools.build.skyframe.SkyValue;
 import com.google.gson.JsonIOException;
 import java.io.BufferedWriter;
 import java.io.IOException;
 import java.io.OutputStreamWriter;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Optional;
+import java.util.TreeMap;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Predicate;
 
 /**
@@ -48,6 +58,13 @@ public class BazelLockFileModule extends BlazeModule {
 
   private CommandEnvironment env;
 
+  /**
+   * The reproducible repo attrs reported by repo rules during the current command, keyed by
+   * canonical repo name.
+   */
+  private final ConcurrentHashMap<String, Optional<ReproducibleRepoAttrs>>
+      reproducibleRepoAttrsUpdates = new ConcurrentHashMap<>();
+
   private static final GoogleLogger logger = GoogleLogger.forEnclosingClass();
 
   private static final ImmutableSet<LockfileMode> ENABLED_IN_MODES =
@@ -56,6 +73,14 @@ public class BazelLockFileModule extends BlazeModule {
   @Override
   public void beforeCommand(CommandEnvironment env) {
     this.env = env;
+    reproducibleRepoAttrsUpdates.clear();
+    env.getEventBus().register(this);
+  }
+
+  @Subscribe
+  @AllowConcurrentEvents
+  public void onReproducibleRepoAttrs(ReproducibleRepoAttrsEvent event) {
+    reproducibleRepoAttrsUpdates.put(event.repoName().getName(), event.reproducibleRepoAttrs());
   }
 
   @Override
@@ -68,8 +93,8 @@ public class BazelLockFileModule extends BlazeModule {
       // in the meantime.
       return;
     }
-    LockfileMode lockfileMode =
-        env.getOptions().getOptions(RepositoryOptions.class).getLockfileMode();
+    RepositoryOptions repoOptions = env.getOptions().getOptions(RepositoryOptions.class);
+    LockfileMode lockfileMode = repoOptions.getLockfileMode();
     if (!ENABLED_IN_MODES.contains(lockfileMode)) {
       return;
     }
@@ -144,6 +169,26 @@ public class BazelLockFileModule extends BlazeModule {
     var relevantHiddenFactsVersions =
         filterRelevantFactsVersions(combinedHiddenFactsVersions, relevantHiddenFacts);
 
+    ImmutableMap<String, ReproducibleRepoAttrs> reproducibleRepoAttrs;
+    if (repoOptions.getLockRepoAttrs()) {
+      var oldReproducibleRepoAttrs = oldLockfile.getReproducibleRepoAttrs();
+      reproducibleRepoAttrs =
+          combineReproducibleRepoAttrs(
+              oldReproducibleRepoAttrs,
+              ImmutableMap.copyOf(reproducibleRepoAttrsUpdates),
+              repoName ->
+                  isReproducibleRepoAttrsEntryStale(
+                      repoName,
+                      oldReproducibleRepoAttrs.get(repoName),
+                      depGraphValue,
+                      newExtensionInfos,
+                      doneValues));
+    } else {
+      // Keep the recorded attributes as they are so that toggling the flag doesn't churn the
+      // lockfile.
+      reproducibleRepoAttrs = oldLockfile.getReproducibleRepoAttrs();
+    }
+
     Thread updateLockfile =
         Thread.startVirtualThread(
             () -> {
@@ -175,6 +220,7 @@ public class BazelLockFileModule extends BlazeModule {
                       .setModuleExtensions(notReproducibleExtensionInfos)
                       .setFacts(relevantFacts)
                       .setFactsVersions(relevantFactsVersions)
+                      .setReproducibleRepoAttrs(reproducibleRepoAttrs)
                       .build();
 
               // Write the new values to the files, but only if needed. This is not just a
@@ -245,6 +291,75 @@ public class BazelLockFileModule extends BlazeModule {
                     && entry.getValue() != null
                     && entry.getValue() != 0),
         ModuleExtensionId.LEXICOGRAPHIC_COMPARATOR);
+  }
+
+  /**
+   * Combines the reproducible repo attrs stored in the lockfile with the updates reported by repos
+   * fetched from their original definition during the current command.
+   *
+   * @param oldAttrs the entries stored in the lockfile
+   * @param updates the attrs reported by repos fetched during the current command, with an empty
+   *     value indicating that the repo didn't report any and its old entry should be removed
+   * @param isStale whether the old entry for the given repo is known to be outdated
+   */
+  @VisibleForTesting
+  static ImmutableSortedMap<String, ReproducibleRepoAttrs> combineReproducibleRepoAttrs(
+      Map<String, ReproducibleRepoAttrs> oldAttrs,
+      Map<String, Optional<ReproducibleRepoAttrs>> updates,
+      Predicate<String> isStale) {
+    var combined = new TreeMap<String, ReproducibleRepoAttrs>();
+    oldAttrs.forEach(
+        (repoName, attrs) -> {
+          if (!updates.containsKey(repoName) && !isStale.test(repoName)) {
+            combined.put(repoName, attrs);
+          }
+        });
+    updates.forEach((repoName, attrs) -> attrs.ifPresent(a -> combined.put(repoName, a)));
+    return ImmutableSortedMap.copyOfSorted(combined);
+  }
+
+  /**
+   * Returns whether the reproducible repo attrs recorded for the given repo are known to no longer
+   * match its definition, either because the repo can't be defined anymore or because its
+   * definition has been evaluated in the current server and differs from the one they were
+   * recorded for.
+   */
+  private static boolean isReproducibleRepoAttrsEntryStale(
+      String repoName,
+      ReproducibleRepoAttrs attrs,
+      BazelDepGraphValue depGraphValue,
+      Map<ModuleExtensionId, LockFileModuleExtension.WithFactors> newExtensionInfos,
+      Map<SkyKey, SkyValue> doneValues) {
+    var repositoryName = RepositoryName.createUnvalidated(repoName);
+    if (!depGraphValue.getCanonicalRepoNameLookup().containsKey(repositoryName)) {
+      // Not a module repo, so it must be generated by an extension that is still in use.
+      Optional<Map.Entry<ModuleExtensionId, String>> extension =
+          depGraphValue.getExtensionUniqueNames().entrySet().stream()
+              .filter(e -> repoName.startsWith(e.getValue() + "+"))
+              .findFirst();
+      if (extension.isEmpty()) {
+        return true;
+      }
+      var newExtensionInfo = newExtensionInfos.get(extension.get().getKey());
+      if (newExtensionInfo != null) {
+        String internalName = repoName.substring(extension.get().getValue().length() + 1);
+        if (!newExtensionInfo
+            .moduleExtension()
+            .getGeneratedRepoSpecs()
+            .containsKey(internalName)) {
+          return true;
+        }
+      }
+    }
+    return switch (doneValues.get(RepoDefinitionValue.key(repositoryName))) {
+      case RepoDefinitionValue.Found(RepoDefinition repoDefinition) ->
+          !attrs.appliesTo(
+              new RepoSpec(repoDefinition.repoRule().id(), repoDefinition.attrValues()));
+      case RepoDefinitionValue.NotFound unused -> true;
+      // Overrides are temporary, so keep the entry for when the override is removed. If the repo
+      // definition hasn't been evaluated in this server, there is no way to tell.
+      case null, default -> false;
+    };
   }
 
   /**

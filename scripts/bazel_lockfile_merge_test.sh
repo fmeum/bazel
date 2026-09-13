@@ -466,4 +466,106 @@ EOF
   diff -u expected left || fail "output differs"
 }
 
+function test_merge_reproducible_repo_attrs() {
+  cat > base <<'EOF'
+{
+  "lockFileVersion": 28,
+  "registryFileHashes": {},
+  "selectedYankedVersions": {},
+  "moduleExtensions": {},
+  "reproducibleRepoAttrs": {
+    "+ext+foo": {
+      "definitionDigest": "1111",
+      "repoRuleId": "@@//:repo.bzl%my_repo",
+      "attributes": {
+        "commit": "aaaa"
+      }
+    }
+  }
+}
+EOF
+  cat > left <<'EOF'
+{
+  "lockFileVersion": 28,
+  "registryFileHashes": {},
+  "selectedYankedVersions": {},
+  "moduleExtensions": {},
+  "reproducibleRepoAttrs": {
+    "+ext+foo": {
+      "definitionDigest": "1111",
+      "repoRuleId": "@@//:repo.bzl%my_repo",
+      "attributes": {
+        "commit": "bbbb"
+      }
+    },
+    "+ext+bar": {
+      "definitionDigest": "2222",
+      "repoRuleId": "@@//:repo.bzl%my_repo",
+      "attributes": {
+        "commit": "cccc"
+      }
+    }
+  }
+}
+EOF
+  cat > right <<'EOF'
+{
+  "lockFileVersion": 28,
+  "registryFileHashes": {},
+  "selectedYankedVersions": {},
+  "moduleExtensions": {},
+  "reproducibleRepoAttrs": {
+    "+ext+foo": {
+      "definitionDigest": "1111",
+      "repoRuleId": "@@//:repo.bzl%my_repo",
+      "attributes": {
+        "commit": "aaaa"
+      }
+    },
+    "+ext+baz": {
+      "definitionDigest": "3333",
+      "repoRuleId": "@@//:repo.bzl%my_repo",
+      "attributes": {
+        "commit": "dddd"
+      }
+    }
+  }
+}
+EOF
+  cat > expected <<'EOF'
+{
+  "lockFileVersion": 28,
+  "registryFileHashes": {},
+  "selectedYankedVersions": {},
+  "moduleExtensions": {},
+  "reproducibleRepoAttrs": {
+    "+ext+bar": {
+      "definitionDigest": "2222",
+      "repoRuleId": "@@//:repo.bzl%my_repo",
+      "attributes": {
+        "commit": "cccc"
+      }
+    },
+    "+ext+baz": {
+      "definitionDigest": "3333",
+      "repoRuleId": "@@//:repo.bzl%my_repo",
+      "attributes": {
+        "commit": "dddd"
+      }
+    },
+    "+ext+foo": {
+      "definitionDigest": "1111",
+      "repoRuleId": "@@//:repo.bzl%my_repo",
+      "attributes": {
+        "commit": "bbbb"
+      }
+    }
+  }
+}
+EOF
+
+  do_merge base left right
+  diff -u expected left || fail "output differs"
+}
+
 run_suite "Tests of bash completion of 'blaze' command."

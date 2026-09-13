@@ -658,7 +658,13 @@ public class StarlarkRepositoryContext extends StarlarkBaseExternalContext {
             doc =
                 """
                 If <code>reproducible</code> is False, this can be specified to tell Bazel which \
-                attributes of the original repo rule to change to make it reproducible.
+                attributes of the original repo rule to change to make it reproducible. The \
+                attributes must be valid for the repo rule and the repo fetched with them must \
+                have exactly the same contents as the one that has just been fetched. \
+                <p>With <code>--experimental_lock_repo_attrs</code>, Bazel records these \
+                attributes in <code>MODULE.bazel.lock</code> and fetches the repo with them \
+                instead of the original attributes from then on, which also makes the repo \
+                eligible for the repo contents cache.
                 """,
             positional = false,
             named = true)

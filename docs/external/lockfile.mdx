@@ -214,6 +214,47 @@ Module extensions can opt out of being included in the lockfile by setting the
 returning metadata with `reproducible = True`. By doing so, they promise that
 they will always create the same repositories when given the same inputs.
 
+### Reproducible Repo Attributes {#reproducible-repo-attrs}
+
+Some repos aren't reproducible as defined: an `http_archive` without an
+`integrity` or a `git_repository` with a `branch` instead of a `commit` may
+yield different contents when fetched again. Repo rules can report the
+attributes that would make such a repo reproducible by returning
+`repository_ctx.repo_metadata(attrs_for_reproducibility = ...)` from their
+implementation function, but since most repos are defined by module extensions
+rather than by the user, this information is not directly actionable.
+
+With the experimental `--experimental_lock_repo_attrs` flag, Bazel records
+these attributes in the `reproducibleRepoAttrs` section of the lockfile, keyed
+by canonical repo name, and uses them in place of the original attributes
+whenever it fetches the repo:
+
+```json
+"reproducibleRepoAttrs": {
+  "+http_archive+foo": {
+    "definitionDigest": "5f0a5c8b...e7b9c0d1",
+    "repoRuleId": "@@bazel_tools//tools/build_defs/repo:http.bzl%http_archive",
+    "attributes": {
+      "urls": ["https://example.com/foo.tar.gz"],
+      "integrity": "sha256-...."
+    }
+  }
+}
+```
+
+The `definitionDigest` identifies the original definition of the repo. If
+that definition changes, for example because the module extension now passes
+different attributes, the recorded attributes are discarded and the repo is
+fetched from its new definition again. As the repo rule promises that a fetch
+with the recorded attributes yields exactly the same contents, the repo is
+also eligible for the repo contents cache (see `--repo_contents_cache`).
+
+Recorded attributes are never modified with `--lockfile_mode=error` or `off`.
+To re-resolve a repo from its original definition, for example to update a
+`git_repository` to the latest commit of its branch, run
+`bazel fetch --force --repo=@<repo>` (or `bazel fetch --force //...` for all
+repos).
+
 ## Best Practices {#best-practices}
 
 To maximize the benefits of the lockfile feature, consider the following best

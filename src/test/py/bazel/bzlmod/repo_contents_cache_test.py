@@ -168,6 +168,76 @@ class RepoContentsCacheTest(test_base.TestBase):
     )
     self.assertIn('JUST FETCHED', '\n'.join(stderr))
 
+  def testCachedUnderLockedReproducibleAttrs(self):
+    self.ScratchFile(
+        'MODULE.bazel',
+        [
+            'repo = use_repo_rule("//:repo.bzl", "repo")',
+            'repo(name = "my_repo", version = "1.0")',
+        ],
+    )
+    self.ScratchFile('BUILD.bazel')
+    self.ScratchFile(
+        'repo.bzl',
+        [
+            'def _repo_impl(rctx):',
+            '  rctx.file("BUILD", "filegroup(name=\'haha\')")',
+            '  print("JUST FETCHED with commit %s" % repr(rctx.attr.commit))',
+            '  if rctx.attr.commit:',
+            '    return rctx.repo_metadata(reproducible=True)',
+            '  return rctx.repo_metadata(attrs_for_reproducibility={',
+            '    "name": rctx.attr.name,',
+            '    "version": rctx.attr.version,',
+            '    "commit": "abc123",',
+            '  })',
+            'repo = repository_rule(',
+            '  _repo_impl,',
+            '  attrs={"version": attr.string(), "commit": attr.string()},',
+            ')',
+        ],
+    )
+    # Without locking the reported attrs, the repo is not reproducible and thus
+    # not cached.
+    _, _, stderr = self.RunBazel(['build', '@my_repo//:haha'])
+    self.assertIn('JUST FETCHED with commit ""', '\n'.join(stderr))
+    self.RunBazel(['clean', '--expunge'])
+    _, _, stderr = self.RunBazel(['build', '@my_repo//:haha'])
+    self.assertIn('JUST FETCHED with commit ""', '\n'.join(stderr))
+
+    # With the reported attrs locked, the repo is cached under the definition
+    # with these attrs applied right away.
+    flag = '--experimental_lock_repo_attrs'
+    self.RunBazel(['clean', '--expunge'])
+    _, _, stderr = self.RunBazel(['build', flag, '@my_repo//:haha'])
+    self.assertIn('JUST FETCHED with commit ""', '\n'.join(stderr))
+    repo_dir = self.repoDir('my_repo')
+    real_repo_contents_cache = os.path.realpath(self.repo_contents_cache)
+    real_target_path = os.path.realpath(os.readlink(repo_dir))
+    self.assertTrue(
+        any(
+            parent.samefile(real_repo_contents_cache)
+            for parent in pathlib.Path(real_target_path).parents
+        ),
+        'repo target dir %s is not in the repo contents cache %s'
+        % (real_target_path, real_repo_contents_cache),
+    )
+
+    # After expunging, the repo is fetched from the cache rather than by the
+    # repo rule.
+    self.RunBazel(['clean', '--expunge'])
+    _, _, stderr = self.RunBazel(['build', flag, '@my_repo//:haha'])
+    self.assertNotIn('JUST FETCHED', '\n'.join(stderr))
+
+    # Another workspace with the same lockfile also gets a cache hit.
+    other_workspace = tempfile.mkdtemp(dir=self._tests_root)
+    for f in ['MODULE.bazel', 'MODULE.bazel.lock', 'BUILD.bazel', 'repo.bzl', '.bazelrc']:
+      shutil.copy(self.Path(f), os.path.join(other_workspace, f))
+    _, _, stderr = self.RunBazel(
+        ['build', flag, '@my_repo//:haha'], cwd=other_workspace
+    )
+    self.assertNotIn('JUST FETCHED', '\n'.join(stderr))
+    self.RunBazel(['shutdown'], cwd=other_workspace)
+
   def testNotCachedWhenPredeclaredInputsChange(self):
     self.ScratchFile(
         'MODULE.bazel',

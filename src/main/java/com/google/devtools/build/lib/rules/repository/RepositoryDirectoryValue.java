@@ -46,6 +46,8 @@ public sealed interface RepositoryDirectoryValue extends NotComparableSkyValue {
       new Precomputed<>("dependency_for_force_fetching_configure_repositories");
   Precomputed<Boolean> IS_VENDOR_COMMAND = new Precomputed<>("is_vendor_command");
   Precomputed<Optional<Path>> VENDOR_DIRECTORY = new Precomputed<>("vendor_directory");
+  /** Whether the attrs reported by repo rules to make repos reproducible are locked. */
+  Precomputed<Boolean> LOCK_REPO_ATTRS = new Precomputed<>("lock_repo_attrs");
 
   /**
    * Represents a successful repository lookup.

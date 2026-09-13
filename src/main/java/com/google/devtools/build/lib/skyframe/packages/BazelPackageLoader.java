@@ -204,7 +204,8 @@ public class BazelPackageLoader extends AbstractPackageLoader {
               .put(SkyFunctions.YANKED_VERSIONS, yankedVersionsFunction)
               .buildOrThrow());
       addExtraPrecomputedValues(
-          PrecomputedValue.injected(RepositoryDirectoryValue.FETCH_DISABLED, fetchDisabled));
+          PrecomputedValue.injected(RepositoryDirectoryValue.FETCH_DISABLED, fetchDisabled),
+          PrecomputedValue.injected(RepositoryDirectoryValue.LOCK_REPO_ATTRS, false));
 
       return new BazelPackageLoader(this);
     }
