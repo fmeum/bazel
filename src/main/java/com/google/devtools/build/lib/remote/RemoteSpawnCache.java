@@ -153,9 +153,11 @@ final class RemoteSpawnCache implements SpawnCache {
               prof.profile(ProfilerTask.REMOTE_CACHE_CHECK, "check cache hit")) {
             result = remoteExecutionService.lookupCache(action);
           }
-          // In case the remote cache returned a failed action (exit code != 0) or failed to create
-          // a mandatory output, we treat it as a cache miss.
+          // In case the remote cache returned a failed action (exit code != 0), failed to create
+          // a mandatory output or references blobs known to be missing from the CAS, we treat it
+          // as a cache miss.
           if (result != null
+              && !remoteExecutionService.isStaleCachedResult(action, result)
               && result.getExitCode() == 0
               && result.maybeGetMissingMandatoryOutput(action).isEmpty()) {
             if (thisExecution != null) {

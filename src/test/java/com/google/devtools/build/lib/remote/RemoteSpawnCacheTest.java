@@ -1199,6 +1199,26 @@ public class RemoteSpawnCacheTest {
   }
 
   @Test
+  public void staleCachedResultIsTreatedAsCacheMiss() throws Exception {
+    // arrange
+    RemoteSpawnCache cache = createRemoteSpawnCache();
+    RemoteExecutionService remoteExecutionService = cache.getRemoteExecutionService();
+    var staleResult =
+        RemoteActionResult.createFromCache(
+            CachedActionResult.remote(createSuccessfulResult(simpleSpawn)));
+    doReturn(staleResult).when(remoteExecutionService).lookupCache(any());
+    doReturn(true).when(remoteExecutionService).isStaleCachedResult(any(), eq(staleResult));
+
+    // act
+    try (CacheHandle cacheHandle = cache.lookup(simpleSpawn, simplePolicy)) {
+      assertThat(cacheHandle.hasResult()).isFalse();
+    }
+
+    // assert
+    verify(remoteExecutionService, never()).downloadOutputs(any(), any());
+  }
+
+  @Test
   public void pathMappedActionWithCacheIoExceptionRemovesInFlightExecution() throws Exception {
     // arrange
     RemoteSpawnCache cache = createRemoteSpawnCache();

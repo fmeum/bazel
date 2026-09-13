@@ -567,6 +567,56 @@ public class RemoteSpawnRunnerTest {
   }
 
   @Test
+  public void staleCachedResult_forcesRemoteExecutionWithSkipCacheLookup() throws Exception {
+    // Test that if the cached action result references blobs known to be missing from the CAS, the
+    // remote executor is asked to skip its own cache lookup so that it can't serve the same stale
+    // result.
+
+    var runner = newSpawnRunner();
+    var service = runner.getRemoteExecutionService();
+    var output =
+        ActionsTestUtil.createArtifactWithExecPath(
+            artifactRoot, PathFragment.create("outputs/out"));
+    var staleResult =
+        RemoteActionResult.createFromCache(
+            CachedActionResult.remote(
+                ActionResult.newBuilder()
+                    .setExitCode(0)
+                    .addOutputFiles(
+                        OutputFile.newBuilder()
+                            .setPath(output.getExecPathString())
+                            .setDigest(digestUtil.computeAsUtf8("stale")))
+                    .build()));
+    doReturn(staleResult).when(service).lookupCache(any(RemoteAction.class));
+    doReturn(true).when(service).isStaleCachedResult(any(RemoteAction.class), eq(staleResult));
+
+    var succeeded =
+        ExecuteResponse.newBuilder()
+            .setResult(
+                ActionResult.newBuilder()
+                    .setExitCode(0)
+                    .addOutputFiles(
+                        OutputFile.newBuilder()
+                            .setPath(output.getExecPathString())
+                            .setDigest(digestUtil.computeAsUtf8("content")))
+                    .build())
+            .build();
+    when(executor.executeRemotely(
+            any(RemoteActionExecutionContext.class),
+            any(ExecuteRequest.class),
+            any(OperationObserver.class)))
+        .thenReturn(succeeded);
+    var spawn = newSimpleSpawn(output);
+    var spawnExecutionContext = getSpawnContext(spawn);
+
+    var result = runner.exec(spawn, spawnExecutionContext);
+    assertThat(result.status()).isEqualTo(Status.SUCCESS);
+
+    verify(service, never()).downloadOutputs(any(), eq(staleResult));
+    verify(service).executeRemotely(any(), eq(false), any());
+  }
+
+  @Test
   public void treatCachedActionWithMissingOutputAsCacheMiss_duringRemoteExecution()
       throws Exception {
     // Test that bazel treats a cached execute result with missing mandatory outputs as a cache miss

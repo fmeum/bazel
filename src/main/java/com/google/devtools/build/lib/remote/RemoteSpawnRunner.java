@@ -223,6 +223,14 @@ public class RemoteSpawnRunner implements SpawnRunner {
         cachedResult = acceptCachedResult ? remoteExecutionService.lookupCache(action) : null;
       }
 
+      if (cachedResult != null
+          && remoteExecutionService.isStaleCachedResult(action, cachedResult)) {
+        // The cached result references blobs known to be missing from the CAS. Don't let the remote
+        // executor serve it either, it must re-execute the action.
+        cachedResult = null;
+        acceptCachedResult = false;
+      }
+
       if (cachedResult != null) {
         if (cachedResult.getExitCode() != 0
             || cachedResult.maybeGetMissingMandatoryOutput(action).isPresent()) {
