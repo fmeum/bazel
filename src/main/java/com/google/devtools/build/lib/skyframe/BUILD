@@ -710,7 +710,6 @@ java_library(
         "//src/main/java/com/google/devtools/build/lib/actions",
         "//src/main/java/com/google/devtools/build/lib/actions:action_lookup_key",
         "//src/main/java/com/google/devtools/build/lib/actions:artifacts",
-        "//src/main/java/com/google/devtools/build/lib/concurrent",
         "//src/main/java/com/google/devtools/build/lib/concurrent:thread_safety",
         "//src/main/java/com/google/devtools/build/lib/profiler",
         "//src/main/java/com/google/devtools/build/lib/vfs:pathfragment",
@@ -718,7 +717,6 @@ java_library(
         "//src/main/java/com/google/devtools/build/skyframe:skyframe-objects",
         "//third_party/java/guava:base",
         "//third_party/java/guava:collect",
-        "//third_party/java/guava:concurrent",
         "//third_party/java/jsr305_annotations",
     ],
 )

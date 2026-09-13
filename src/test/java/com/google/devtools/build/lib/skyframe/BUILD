@@ -226,6 +226,29 @@ java_test(
 )
 
 java_test(
+    name = "IncrementalArtifactConflictFinderTest",
+    srcs = ["IncrementalArtifactConflictFinderTest.java"],
+    deps = [
+        "//src/main/java/com/google/devtools/build/lib/actions",
+        "//src/main/java/com/google/devtools/build/lib/actions:action_lookup_key",
+        "//src/main/java/com/google/devtools/build/lib/actions:artifacts",
+        "//src/main/java/com/google/devtools/build/lib/collect/nestedset",
+        "//src/main/java/com/google/devtools/build/lib/skyframe:artifact_conflict_finder",
+        "//src/main/java/com/google/devtools/build/lib/skyframe:incremental_artifact_conflict_finder",
+        "//src/main/java/com/google/devtools/build/lib/util:pair",
+        "//src/main/java/com/google/devtools/build/lib/vfs",
+        "//src/main/java/com/google/devtools/build/lib/vfs:pathfragment",
+        "//src/main/java/com/google/devtools/build/lib/vfs/inmemoryfs",
+        "//src/main/java/com/google/devtools/build/skyframe",
+        "//src/main/java/com/google/devtools/build/skyframe:skyframe-objects",
+        "//src/test/java/com/google/devtools/build/lib/actions/util",
+        "//third_party/java/guava:collect",
+        "//third_party/java/junit",
+        "//third_party/java/truth",
+    ],
+)
+
+java_test(
     name = "LocalDiffAwarenessIntegrationTest",
     srcs = ["LocalDiffAwarenessIntegrationTest.java"],
     # TODO(pcloudy): Even with --experimental_windows_watchfs, there's an extra

@@ -2730,11 +2730,6 @@ public abstract class SkyframeExecutor implements WalkableGraphFactory {
 
   /** Clear the incremental conflict finding states to save memory. */
   public void clearIncrementalArtifactConflictFindingStates() {
-    // Create a local ref for shutting down, in case there's a race.
-    IncrementalArtifactConflictFinder localRef = incrementalArtifactConflictFinder;
-    if (localRef != null) {
-      localRef.shutdown();
-    }
     incrementalArtifactConflictFinder = null;
     conflictCheckingModeInThisBuild = NONE;
   }
