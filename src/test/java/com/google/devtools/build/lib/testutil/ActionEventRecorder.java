@@ -145,9 +145,6 @@ public final class ActionEventRecorder {
   /**
    * Check how many of each type of event was emitted during a successful build.
    *
-   * <p>Use {@link #assertEventCounts} for actions that don't match any of these patterns, e.g.
-   * actions that are rewound more than once.
-   *
    * @param runOnce Actions which ran and are not rewound
    * @param completedRewound Actions which ran and then are rewound (once) by a later failed action,
    *     which causes them to run a second time and to emit all of their events again
@@ -227,46 +224,6 @@ public final class ActionEventRecorder {
 
     assertTotalLostInputCountsFromStats(actionRewindingPostLostInputCounts);
     assertThat(cachedActionEvents).isEmpty();
-  }
-
-  /**
-   * Asserts how many events of each type were emitted for the action with the given progress
-   * message (or pretty-printed representation).
-   */
-  public void assertEventCounts(
-      String action,
-      int expectedStartedEvents,
-      int expectedCompletionEvents,
-      int expectedExecutedEvents,
-      int expectedResultReceivedEvents,
-      int expectedRewoundEvents) {
-    assertWithMessage("actionStartedEvents for \"%s\"", action)
-        .that(countEventsFor(action, actionStartedEvents, ActionStartedEvent::getAction))
-        .isEqualTo(expectedStartedEvents);
-    assertWithMessage("actionCompletionEvents for \"%s\"", action)
-        .that(countEventsFor(action, actionCompletionEvents, ActionCompletionEvent::getAction))
-        .isEqualTo(expectedCompletionEvents);
-    assertWithMessage("actionExecutedEvents for \"%s\"", action)
-        .that(countEventsFor(action, actionExecutedEvents, ActionExecutedEvent::getAction))
-        .isEqualTo(expectedExecutedEvents);
-    assertWithMessage("actionResultReceivedEvents for \"%s\"", action)
-        .that(
-            countEventsFor(action, actionResultReceivedEvents, ActionResultReceivedEvent::getAction))
-        .isEqualTo(expectedResultReceivedEvents);
-    assertWithMessage("actionRewoundEvents for \"%s\"", action)
-        .that(
-            countEventsFor(
-                action, actionRewoundEvents, ActionRewoundEvent::getFailedRewoundAction))
-        .isEqualTo(expectedRewoundEvents);
-  }
-
-  private static <T> long countEventsFor(
-      String action, List<T> events, Function<T, ActionExecutionMetadata> actionGetter) {
-    return events.stream()
-        .map(actionGetter)
-        .map(ActionEventRecorder::progressMessageOrPrettyPrint)
-        .filter(action::equals)
-        .count();
   }
 
   /**

@@ -39,9 +39,14 @@ import com.google.common.eventbus.AllowConcurrentEvents;
 import com.google.common.eventbus.Subscribe;
 import com.google.common.flogger.GoogleLogger;
 import com.google.common.util.concurrent.Uninterruptibles;
+import com.google.devtools.build.lib.actions.ActionCompletionEvent;
+import com.google.devtools.build.lib.actions.ActionExecutedEvent;
 import com.google.devtools.build.lib.actions.ActionExecutionContext;
+import com.google.devtools.build.lib.actions.ActionExecutionMetadata;
 import com.google.devtools.build.lib.actions.ActionInput;
 import com.google.devtools.build.lib.actions.ActionLookupData;
+import com.google.devtools.build.lib.actions.ActionResultReceivedEvent;
+import com.google.devtools.build.lib.actions.ActionStartedEvent;
 import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.actions.Artifact.SpecialArtifact;
 import com.google.devtools.build.lib.actions.BuildFailedException;
@@ -109,6 +114,7 @@ import java.util.concurrent.CyclicBarrier;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Function;
 import java.util.stream.IntStream;
 
 /**
@@ -698,7 +704,7 @@ public class RewindingTestsHelper {
         /* failedRewound= */ ImmutableList.of(),
         /* actionRewindingPostLostInputCounts= */ ImmutableList.of(maxRepeatedLostInputs + 1));
     // Rule1 is rewound each time rule2 loses its output and emits its events on every execution.
-    recorder.assertEventCounts(
+    assertEventCounts(
         "Executing genrule //test:rule1",
         /* expectedStartedEvents= */ maxRepeatedLostInputs + 1,
         /* expectedCompletionEvents= */ maxRepeatedLostInputs + 1,
@@ -841,7 +847,7 @@ public class RewindingTestsHelper {
         /* actionRewindingPostLostInputCounts= */ ImmutableList.of(1));
     // Rule1 completes, is rewound and starts again, but its second execution doesn't complete
     // successfully.
-    recorder.assertEventCounts(
+    assertEventCounts(
         "Executing genrule //test:rule1",
         /* expectedStartedEvents= */ 2,
         /* expectedCompletionEvents= */ 2,
@@ -849,7 +855,7 @@ public class RewindingTestsHelper {
         /* expectedResultReceivedEvents= */ 1,
         /* expectedRewoundEvents= */ 0);
     // Rule2 fails with a lost input and is never executed again.
-    recorder.assertEventCounts(
+    assertEventCounts(
         "Executing genrule //test:rule2",
         /* expectedStartedEvents= */ 1,
         /* expectedCompletionEvents= */ 0,
@@ -1082,7 +1088,7 @@ public class RewindingTestsHelper {
         /* actionRewindingPostLostInputCounts= */ ImmutableList.of(2));
     // Rule2 completes, is rewound by rule3, fails with a lost input on its second execution and
     // completes again on its third.
-    recorder.assertEventCounts(
+    assertEventCounts(
         "Executing genrule //test:rule2",
         /* expectedStartedEvents= */ 3,
         /* expectedCompletionEvents= */ 2,
@@ -3772,6 +3778,57 @@ public class RewindingTestsHelper {
     assertOutputsReported(event, "bin/foo/found.out");
 
     recorder.assertTotalLostOutputCountsFromStats(ImmutableList.of(maxRepeatedLostInputs + 1));
+  }
+
+  /**
+   * Asserts how many events of each type were emitted for the action with the given progress
+   * message (or pretty-printed representation).
+   */
+  private void assertEventCounts(
+      String action,
+      int expectedStartedEvents,
+      int expectedCompletionEvents,
+      int expectedExecutedEvents,
+      int expectedResultReceivedEvents,
+      int expectedRewoundEvents) {
+    assertWithMessage("actionStartedEvents for \"%s\"", action)
+        .that(
+            countEventsFor(
+                action, recorder.getActionStartedEvents(), ActionStartedEvent::getAction))
+        .isEqualTo(expectedStartedEvents);
+    assertWithMessage("actionCompletionEvents for \"%s\"", action)
+        .that(
+            countEventsFor(
+                action, recorder.getActionCompletionEvents(), ActionCompletionEvent::getAction))
+        .isEqualTo(expectedCompletionEvents);
+    assertWithMessage("actionExecutedEvents for \"%s\"", action)
+        .that(
+            countEventsFor(
+                action, recorder.getActionExecutedEvents(), ActionExecutedEvent::getAction))
+        .isEqualTo(expectedExecutedEvents);
+    assertWithMessage("actionResultReceivedEvents for \"%s\"", action)
+        .that(
+            countEventsFor(
+                action,
+                recorder.getActionResultReceivedEvents(),
+                ActionResultReceivedEvent::getAction))
+        .isEqualTo(expectedResultReceivedEvents);
+    assertWithMessage("actionRewoundEvents for \"%s\"", action)
+        .that(
+            countEventsFor(
+                action,
+                recorder.getActionRewoundEvents(),
+                ActionRewoundEvent::getFailedRewoundAction))
+        .isEqualTo(expectedRewoundEvents);
+  }
+
+  private static <T> long countEventsFor(
+      String action, List<T> events, Function<T, ActionExecutionMetadata> actionGetter) {
+    return events.stream()
+        .map(actionGetter)
+        .map(ActionEventRecorder::progressMessageOrPrettyPrint)
+        .filter(action::equals)
+        .count();
   }
 
   final void listenForNoCompletionEventsBeforeRewinding(
