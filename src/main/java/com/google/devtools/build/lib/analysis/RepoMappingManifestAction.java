@@ -14,7 +14,6 @@
 package com.google.devtools.build.lib.analysis;
 
 import static com.google.common.collect.ImmutableList.toImmutableList;
-import static com.google.common.collect.ImmutableSortedMap.toImmutableSortedMap;
 import static com.google.devtools.build.lib.actions.ActionKeyContext.describeNestedSetFingerprint;
 import static java.nio.charset.StandardCharsets.ISO_8859_1;
 import static java.util.Comparator.comparing;
@@ -47,6 +46,7 @@ import com.google.devtools.build.lib.util.Fingerprint;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.PrintWriter;
+import java.util.HashMap;
 import java.util.IdentityHashMap;
 import java.util.Map.Entry;
 import java.util.UUID;
@@ -214,16 +214,16 @@ public final class RepoMappingManifestAction extends AbstractFileWriteAction
       }
       var reposInRunfilesPaths = reposInRunfilesPathsBuilder.build();
 
+      // All packages in a given repository have the same repository mapping, so deduplicate by
+      // repository in linear time first and only sort the (typically much smaller) set of
+      // repositories.
+      HashMap<RepositoryName, RepositoryMapping> repoMappings = new HashMap<>();
+      for (Package.Metadata pkgMetadata : transitivePackages.toList()) {
+        repoMappings.putIfAbsent(
+            pkgMetadata.packageIdentifier().getRepository(), pkgMetadata.repositoryMapping());
+      }
       ImmutableSortedMap<RepositoryName, RepositoryMapping> sortedRepoMappings =
-          transitivePackages.toList().stream()
-              .collect(
-                  toImmutableSortedMap(
-                      comparing(RepositoryName::getName),
-                      pkgMetadata -> pkgMetadata.packageIdentifier().getRepository(),
-                      Package.Metadata::repositoryMapping,
-                      // All packages in a given repository have the same repository mapping, so the
-                      // particular way of resolving duplicates does not matter.
-                      (first, second) -> first));
+          ImmutableSortedMap.copyOf(repoMappings, comparing(RepositoryName::getName));
       if (emitCompactRepoMapping) {
         var repoAndMappings = Iterators.peekingIterator(sortedRepoMappings.entrySet().iterator());
         while (repoAndMappings.hasNext()) {
