@@ -57,7 +57,7 @@ import com.google.devtools.build.lib.packages.ConfigurationFragmentPolicy.Missin
 import com.google.devtools.build.lib.packages.EnvironmentGroup;
 import com.google.devtools.build.lib.packages.InputFile;
 import com.google.devtools.build.lib.packages.OutputFile;
-import com.google.devtools.build.lib.packages.Package;
+import com.google.devtools.build.lib.packages.RepositoryMetadata;
 import com.google.devtools.build.lib.packages.PackageGroup;
 import com.google.devtools.build.lib.packages.PackageGroupsRuleVisibility;
 import com.google.devtools.build.lib.packages.PackageSpecification.PackageGroupContents;
@@ -229,7 +229,7 @@ public final class ConfiguredTargetFactory {
       @Nullable OrderedSetMultimap<DependencyKind, ConfiguredTargetAndData> materializerTargets,
       ConfigConditions configConditions,
       @Nullable ToolchainCollection<ResolvedToolchainContext> toolchainContexts,
-      @Nullable NestedSet<Package.Metadata> transitivePackages,
+      @Nullable NestedSet<RepositoryMetadata> transitiveRepositories,
       ExecGroupCollection.Builder execGroupCollectionBuilder,
       @Nullable StarlarkAttributeTransitionProvider starlarkExecTransition,
       boolean dependsOnFileKey)
@@ -250,7 +250,7 @@ public final class ConfiguredTargetFactory {
             materializerTargets,
             configConditions,
             toolchainContexts,
-            transitivePackages,
+            transitiveRepositories,
             execGroupCollectionBuilder,
             starlarkExecTransition);
       } finally {
@@ -379,7 +379,7 @@ public final class ConfiguredTargetFactory {
       @Nullable OrderedSetMultimap<DependencyKind, ConfiguredTargetAndData> materializerTargets,
       ConfigConditions configConditions,
       @Nullable ToolchainCollection<ResolvedToolchainContext> toolchainContexts,
-      @Nullable NestedSet<Package.Metadata> transitivePackages,
+      @Nullable NestedSet<RepositoryMetadata> transitiveRepositories,
       ExecGroupCollection.Builder execGroupCollectionBuilder,
       @Nullable StarlarkAttributeTransitionProvider starlarkExecTransition)
       throws IOException,
@@ -416,7 +416,7 @@ public final class ConfiguredTargetFactory {
                     Iterables.transform(
                         prerequisiteMap.values(), ConfiguredTargetAndData::getConfiguredTarget),
                     starlarkExecTransition))
-            .setTransitivePackagesForRunfileRepoMappingManifest(transitivePackages)
+            .setTransitiveRepositoriesForRunfileRepoMappingManifest(transitiveRepositories)
             .setConflictFinder(conflictFinder)
             .setAllowMaterializerRuleRealDeps(ruleClass.materializerRuleAllowsRealDeps())
             .build();
@@ -692,7 +692,7 @@ public final class ConfiguredTargetFactory {
           ToolchainCollection<AspectBaseTargetResolvedToolchainContext> baseTargetToolchainContexts,
       @Nullable ExecGroupCollection.Builder execGroupCollectionBuilder,
       BuildConfigurationValue aspectConfiguration,
-      @Nullable NestedSet<Package.Metadata> transitivePackages,
+      @Nullable NestedSet<RepositoryMetadata> transitiveRepositories,
       AspectKeyCreator.AspectKey aspectKey,
       StarlarkAttributeTransitionProvider starlarkExecTransition)
       throws IOException,
@@ -727,7 +727,7 @@ public final class ConfiguredTargetFactory {
                             prerequisiteMap.values(), ConfiguredTargetAndData::getConfiguredTarget),
                         ImmutableList.of(configuredTarget)),
                     starlarkExecTransition))
-            .setTransitivePackagesForRunfileRepoMappingManifest(transitivePackages)
+            .setTransitiveRepositoriesForRunfileRepoMappingManifest(transitiveRepositories)
             .setConflictFinder(conflictFinder)
             .build();
 

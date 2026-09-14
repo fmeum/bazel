@@ -22,7 +22,7 @@ import com.google.devtools.build.lib.analysis.configuredtargets.RuleConfiguredTa
 import com.google.devtools.build.lib.collect.nestedset.NestedSet;
 import com.google.devtools.build.lib.concurrent.ThreadSafety.Immutable;
 import com.google.devtools.build.lib.concurrent.ThreadSafety.ThreadSafe;
-import com.google.devtools.build.lib.packages.Package;
+import com.google.devtools.build.lib.packages.RepositoryMetadata;
 import javax.annotation.Nullable;
 
 /** A configured target in the context of a Skyframe graph. */
@@ -36,8 +36,9 @@ public final class RuleConfiguredTargetValue
 
   public RuleConfiguredTargetValue(
       RuleConfiguredTarget configuredTarget,
-      @Nullable NestedSet<Package.Metadata> transitivePackages) {
-    super(configuredTarget, transitivePackages);
+      @Nullable NestedSet<RepositoryMetadata> transitiveRepositories,
+      @Nullable NestedSet<String> transitiveTopLevelDirs) {
+    super(configuredTarget, transitiveRepositories, transitiveTopLevelDirs);
     // These are specifically *not* copied to save memory.
     this.actions = configuredTarget.getActions();
   }

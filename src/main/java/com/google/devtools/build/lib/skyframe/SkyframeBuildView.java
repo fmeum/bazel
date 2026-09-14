@@ -89,7 +89,7 @@ import com.google.devtools.build.lib.concurrent.QuiescingExecutors;
 import com.google.devtools.build.lib.events.Event;
 import com.google.devtools.build.lib.events.EventHandler;
 import com.google.devtools.build.lib.events.ExtendedEventHandler;
-import com.google.devtools.build.lib.packages.Package;
+import com.google.devtools.build.lib.packages.RepositoryMetadata;
 import com.google.devtools.build.lib.packages.Rule;
 import com.google.devtools.build.lib.packages.Target;
 import com.google.devtools.build.lib.packages.TargetUtils;
@@ -1395,7 +1395,7 @@ public final class SkyframeBuildView {
       @Nullable OrderedSetMultimap<DependencyKind, ConfiguredTargetAndData> materializerTargets,
       ConfigConditions configConditions,
       @Nullable ToolchainCollection<ResolvedToolchainContext> toolchainContexts,
-      @Nullable NestedSet<Package.Metadata> transitivePackages,
+      @Nullable NestedSet<RepositoryMetadata> transitiveRepositories,
       ExecGroupCollection.Builder execGroupCollectionBuilder,
       boolean crashIfExecutionPhase,
       boolean dependsOnFileKey)
@@ -1436,7 +1436,7 @@ public final class SkyframeBuildView {
         materializerTargets,
         configConditions,
         toolchainContexts,
-        transitivePackages,
+        transitiveRepositories,
         execGroupCollectionBuilder,
         starlarkExecTransition.orElse(null),
         dependsOnFileKey);

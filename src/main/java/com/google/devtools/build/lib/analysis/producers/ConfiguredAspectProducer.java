@@ -107,9 +107,11 @@ final class ConfiguredAspectProducer
         continue;
       }
       configuredAspects.add(value);
-      if (transitiveState.storeTransitivePackages()) {
-        transitiveState.updateTransitivePackages(
-            value.getKeyForTransitivePackageTracking(), value.getTransitivePackages());
+      if (transitiveState.storeTransitiveRepositories()) {
+        transitiveState.addDependency(
+            value.getKeyForTransitiveRepositoryTracking(),
+            value.getTransitiveRepositories(),
+            value.getTransitiveTopLevelDirs());
       }
     }
     try {

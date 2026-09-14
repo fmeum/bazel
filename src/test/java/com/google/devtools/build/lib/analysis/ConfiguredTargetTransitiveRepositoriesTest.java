@@ -23,19 +23,17 @@ import com.google.devtools.build.lib.analysis.config.BuildConfigurationValue;
 import com.google.devtools.build.lib.analysis.util.AnalysisTestCase;
 import com.google.devtools.build.lib.analysis.util.TestAspects;
 import com.google.devtools.build.lib.cmdline.Label;
-import com.google.devtools.build.lib.cmdline.PackageIdentifier;
 import com.google.devtools.build.lib.packages.util.MockProtoSupport;
 import com.google.devtools.build.lib.skyframe.util.SkyframeExecutorTestUtils;
 import com.google.devtools.build.lib.testutil.TestConstants;
-import com.google.devtools.build.lib.vfs.PathFragment;
 import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
 
-/** Test that checks collected list of transitive targets of configured targets. */
+/** Test that checks the collected transitive repositories of configured targets. */
 @RunWith(JUnit4.class)
-public final class ConfiguredTargetTransitivePackagesTest extends AnalysisTestCase {
+public final class ConfiguredTargetTransitiveRepositoriesTest extends AnalysisTestCase {
 
   @Before
   public void setUpToolsConfigMock() throws Exception {
@@ -44,20 +42,29 @@ public final class ConfiguredTargetTransitivePackagesTest extends AnalysisTestCa
 
   @Override
   protected boolean allowExternalRepositories() {
-    // Transitive packages are only stored when external repositories are enabled.
+    // Transitive repositories are only stored when external repositories are enabled.
     return true;
   }
 
-  private void assertTransitiveClosureOfTargetContainsPackages(
-      String target, BuildConfigurationValue config, String... packages) throws Exception {
+  private void assertTransitiveClosureOfTargetContainsRepositories(
+      String target, BuildConfigurationValue config, String... repositories) throws Exception {
     ConfiguredTargetValue ctValue =
         SkyframeExecutorTestUtils.getExistingConfiguredTargetValue(
             skyframeExecutor, Label.parseCanonical(target), config);
-    ImmutableSet<String> packageNames =
-        ctValue.getTransitivePackages().toList().stream()
-            .map(pkgMetadata -> pkgMetadata.packageIdentifier().toString())
+    ImmutableSet<String> repositoryNames =
+        ctValue.getTransitiveRepositories().toList().stream()
+            .map(repoMetadata -> repoMetadata.repository().getName())
             .collect(toImmutableSet());
-    assertThat(packageNames).containsAtLeastElementsIn(Sets.newHashSet(packages));
+    assertThat(repositoryNames).containsAtLeastElementsIn(Sets.newHashSet(repositories));
+  }
+
+  private void assertTransitiveClosureOfTargetContainsTopLevelDirs(
+      String target, BuildConfigurationValue config, String... topLevelDirs) throws Exception {
+    ConfiguredTargetValue ctValue =
+        SkyframeExecutorTestUtils.getExistingConfiguredTargetValue(
+            skyframeExecutor, Label.parseCanonical(target), config);
+    assertThat(ctValue.getTransitiveTopLevelDirs().toList())
+        .containsAtLeastElementsIn(Sets.newHashSet(topLevelDirs));
   }
 
   @Test
@@ -70,10 +77,14 @@ public final class ConfiguredTargetTransitivePackagesTest extends AnalysisTestCa
     ConfiguredTarget target = Iterables.getOnlyElement(update("//a:a").getTargetsToBuild());
     BuildConfigurationValue config = getConfiguration(target);
 
-    assertTransitiveClosureOfTargetContainsPackages("//a:a", config, "a", "a/b", "c", "d");
-    assertTransitiveClosureOfTargetContainsPackages("//a/b:b", config, "a/b", "c", "d");
-    assertTransitiveClosureOfTargetContainsPackages("//c:c", config, "c");
-    assertTransitiveClosureOfTargetContainsPackages("//d:d", config, "d");
+    assertTransitiveClosureOfTargetContainsRepositories("//a:a", config, "");
+    assertTransitiveClosureOfTargetContainsRepositories("//a/b:b", config, "");
+    assertTransitiveClosureOfTargetContainsRepositories("//c:c", config, "");
+    assertTransitiveClosureOfTargetContainsRepositories("//d:d", config, "");
+    assertTransitiveClosureOfTargetContainsTopLevelDirs("//a:a", config, "a", "c", "d");
+    assertTransitiveClosureOfTargetContainsTopLevelDirs("//a/b:b", config, "a", "c", "d");
+    assertTransitiveClosureOfTargetContainsTopLevelDirs("//c:c", config, "c");
+    assertTransitiveClosureOfTargetContainsTopLevelDirs("//d:d", config, "d");
   }
 
   @Test
@@ -94,9 +105,7 @@ public final class ConfiguredTargetTransitivePackagesTest extends AnalysisTestCa
     ConfiguredTarget target = Iterables.getOnlyElement(update("//a/c:foo").getTargetsToBuild());
     BuildConfigurationValue config = getConfiguration(target);
 
-    // We expect 'extra' package because rule_with_extra_deps adds an aspect on attribute 'foo' with
-    // '//extra:extra' dependency.
-    assertTransitiveClosureOfTargetContainsPackages("//a/c:foo", config, "a/c", "extra");
+    assertTransitiveClosureOfTargetContainsRepositories("//a/c:foo", config, "");
   }
 
   @Test
@@ -111,13 +120,7 @@ public final class ConfiguredTargetTransitivePackagesTest extends AnalysisTestCa
 
     // We expect to get the mock crosstool in transitive dependencies, because it's required for c++
     // configuration.
-    assertTransitiveClosureOfTargetContainsPackages(
-        "//a:a",
-        config,
-        "a",
-        PackageIdentifier.create(
-                TestConstants.TOOLS_REPOSITORY,
-                PathFragment.create(TestConstants.MOCK_CC_CROSSTOOL_PATH))
-            .toString());
+    assertTransitiveClosureOfTargetContainsRepositories(
+        "//a:a", config, "", TestConstants.TOOLS_REPOSITORY.getName());
   }
 }

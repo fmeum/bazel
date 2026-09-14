@@ -71,7 +71,7 @@ import com.google.devtools.build.lib.packages.DeclaredExecGroup;
 import com.google.devtools.build.lib.packages.ImplicitOutputsFunction;
 import com.google.devtools.build.lib.packages.Info;
 import com.google.devtools.build.lib.packages.OutputFile;
-import com.google.devtools.build.lib.packages.Package;
+import com.google.devtools.build.lib.packages.RepositoryMetadata;
 import com.google.devtools.build.lib.packages.Package.ConfigSettingVisibilityPolicy;
 import com.google.devtools.build.lib.packages.PackageSpecification.PackageGroupContents;
 import com.google.devtools.build.lib.packages.RawAttributeMapper;
@@ -190,7 +190,7 @@ public class RuleContext extends TargetContext
   @Nullable private final RequiredConfigFragmentsProvider requiredConfigFragments;
 
   @Nullable
-  private final NestedSet<Package.Metadata> transitivePackagesForRunfileRepoMappingManifest;
+  private final NestedSet<RepositoryMetadata> transitiveRepositoriesForRunfileRepoMappingManifest;
 
   private final List<Expander> makeVariableExpanders = new ArrayList<>();
 
@@ -246,8 +246,8 @@ public class RuleContext extends TargetContext
     this.toolchainContexts = builder.toolchainContexts;
     this.execGroupCollection = execGroupCollection;
     this.requiredConfigFragments = builder.requiredConfigFragments;
-    this.transitivePackagesForRunfileRepoMappingManifest =
-        builder.transitivePackagesForRunfileRepoMappingManifest;
+    this.transitiveRepositoriesForRunfileRepoMappingManifest =
+        builder.transitiveRepositoriesForRunfileRepoMappingManifest;
     this.starlarkThread = createStarlarkThread(builder.mutability); // uses above state
     this.prerequisitesCollection = prerequisitesCollection;
     this.conflictFinder = builder.conflictFinder;
@@ -1172,14 +1172,14 @@ public class RuleContext extends TargetContext
   }
 
   /**
-   * Returns the set of transitive package metadata. This is only intended to be used to create the
-   * repo mapping manifest for the runfiles tree. Can be null if transitive packages are not tracked
-   * (see {@link
-   * com.google.devtools.build.lib.skyframe.SkyframeExecutor#shouldStoreTransitivePackagesInLoadingAndAnalysis}).
+   * Returns the set of transitive repository metadata. This is only intended to be used to create
+   * the repo mapping manifest for the runfiles tree. Can be null if transitive repositories are not
+   * tracked (see {@link
+   * com.google.devtools.build.lib.skyframe.SkyframeExecutor#shouldStoreTransitiveRepositoriesInLoadingAndAnalysis}).
    */
   @Nullable
-  public NestedSet<Package.Metadata> getTransitivePackagesForRunfileRepoMappingManifest() {
-    return transitivePackagesForRunfileRepoMappingManifest;
+  public NestedSet<RepositoryMetadata> getTransitiveRepositoriesForRunfileRepoMappingManifest() {
+    return transitiveRepositoriesForRunfileRepoMappingManifest;
   }
 
   private boolean isUserDefinedMakeVariable(String makeVariable) {
@@ -1431,7 +1431,8 @@ public class RuleContext extends TargetContext
     private Supplier<IncrementalArtifactConflictFinder> conflictFinder = () -> null;
     @Nullable private RequiredConfigFragmentsProvider requiredConfigFragments;
 
-    @Nullable private NestedSet<Package.Metadata> transitivePackagesForRunfileRepoMappingManifest;
+    @Nullable
+    private NestedSet<RepositoryMetadata> transitiveRepositoriesForRunfileRepoMappingManifest;
 
     @VisibleForTesting
     public Builder(
@@ -1671,9 +1672,9 @@ public class RuleContext extends TargetContext
     }
 
     @CanIgnoreReturnValue
-    public Builder setTransitivePackagesForRunfileRepoMappingManifest(
-        @Nullable NestedSet<Package.Metadata> packages) {
-      this.transitivePackagesForRunfileRepoMappingManifest = packages;
+    public Builder setTransitiveRepositoriesForRunfileRepoMappingManifest(
+        @Nullable NestedSet<RepositoryMetadata> packages) {
+      this.transitiveRepositoriesForRunfileRepoMappingManifest = packages;
       return this;
     }
 

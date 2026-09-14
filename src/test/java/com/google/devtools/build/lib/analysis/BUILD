@@ -457,8 +457,8 @@ java_test(
 )
 
 java_test(
-    name = "ConfiguredTargetTransitivePackagesTest",
-    srcs = ["ConfiguredTargetTransitivePackagesTest.java"],
+    name = "ConfiguredTargetTransitiveRepositoriesTest",
+    srcs = ["ConfiguredTargetTransitiveRepositoriesTest.java"],
     deps = [
         "//src/main/java/com/google/devtools/build/lib/analysis:configured_target",
         "//src/main/java/com/google/devtools/build/lib/analysis:configured_target_value",
@@ -1048,6 +1048,7 @@ java_test(
     name = "TransitiveDependencyStateTest",
     srcs = ["TransitiveDependencyStateTest.java"],
     deps = [
+        "//src/main/java/com/google/devtools/build/lib/vfs:pathfragment",
         "//src/main/java/com/google/devtools/build/lib/analysis:platform_options",
         "//src/main/java/com/google/devtools/build/lib/analysis:transitive_dependency_state",
         "//src/main/java/com/google/devtools/build/lib/analysis/config:build_options",

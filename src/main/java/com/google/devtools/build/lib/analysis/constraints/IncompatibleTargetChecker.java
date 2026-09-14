@@ -356,7 +356,10 @@ public class IncompatibleTargetChecker {
             providerBuilder.build(),
             configConditions.asProviders(),
             ruleClassId);
-    return new RuleConfiguredTargetValue(configuredTarget, transitiveState.transitivePackages());
+    return new RuleConfiguredTargetValue(
+        configuredTarget,
+        transitiveState.transitiveRepositories(),
+        transitiveState.transitiveTopLevelDirs());
   }
 
   /**

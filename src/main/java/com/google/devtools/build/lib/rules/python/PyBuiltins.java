@@ -208,7 +208,7 @@ public abstract class PyBuiltins implements StarlarkValue {
             new RepoMappingManifestAction(
                 ruleContext.getActionOwner(),
                 repoMappingManifest,
-                ruleContext.getTransitivePackagesForRunfileRepoMappingManifest(),
+                ruleContext.getTransitiveRepositoriesForRunfileRepoMappingManifest(),
                 runfiles.getArtifacts(),
                 runfiles.getSymlinks(),
                 runfiles.getRootSymlinks(),

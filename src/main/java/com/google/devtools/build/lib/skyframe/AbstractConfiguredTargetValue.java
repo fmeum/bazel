@@ -18,7 +18,7 @@ import com.google.common.base.Preconditions;
 import com.google.devtools.build.lib.analysis.ConfiguredTarget;
 import com.google.devtools.build.lib.analysis.ConfiguredTargetValue;
 import com.google.devtools.build.lib.collect.nestedset.NestedSet;
-import com.google.devtools.build.lib.packages.Package;
+import com.google.devtools.build.lib.packages.RepositoryMetadata;
 import javax.annotation.Nullable;
 
 /** Common base class for configured target values for rules and non-rules. */
@@ -28,14 +28,20 @@ abstract class AbstractConfiguredTargetValue<T extends ConfiguredTarget>
   // clear(true) is called.
   @Nullable private T configuredTarget;
 
-  // May be null after clearing; because transitive packages are not tracked; or after
+  // May be null after clearing; because transitive repositories are not tracked; or after
   // deserialization.
-  @Nullable private transient NestedSet<Package.Metadata> transitivePackages;
+  @Nullable private transient NestedSet<RepositoryMetadata> transitiveRepositories;
+
+  // Null iff transitiveRepositories is.
+  @Nullable private transient NestedSet<String> transitiveTopLevelDirs;
 
   AbstractConfiguredTargetValue(
-      T configuredTarget, @Nullable NestedSet<Package.Metadata> transitivePackages) {
+      T configuredTarget,
+      @Nullable NestedSet<RepositoryMetadata> transitiveRepositories,
+      @Nullable NestedSet<String> transitiveTopLevelDirs) {
     this.configuredTarget = Preconditions.checkNotNull(configuredTarget);
-    this.transitivePackages = transitivePackages;
+    this.transitiveRepositories = transitiveRepositories;
+    this.transitiveTopLevelDirs = transitiveTopLevelDirs;
   }
 
   @Nullable // May be null after clearing.
@@ -46,8 +52,14 @@ abstract class AbstractConfiguredTargetValue<T extends ConfiguredTarget>
 
   @Nullable
   @Override
-  public NestedSet<Package.Metadata> getTransitivePackages() {
-    return transitivePackages;
+  public NestedSet<RepositoryMetadata> getTransitiveRepositories() {
+    return transitiveRepositories;
+  }
+
+  @Nullable
+  @Override
+  public NestedSet<String> getTransitiveTopLevelDirs() {
+    return transitiveTopLevelDirs;
   }
 
   @Override
@@ -60,6 +72,7 @@ abstract class AbstractConfiguredTargetValue<T extends ConfiguredTarget>
     if (clearEverything) {
       this.configuredTarget = null;
     }
-    this.transitivePackages = null;
+    this.transitiveRepositories = null;
+    this.transitiveTopLevelDirs = null;
   }
 }

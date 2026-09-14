@@ -55,7 +55,7 @@ import com.google.devtools.build.lib.collect.nestedset.Order;
 import com.google.devtools.build.lib.events.Event;
 import com.google.devtools.build.lib.events.EventKind;
 import com.google.devtools.build.lib.events.StoredEventHandler;
-import com.google.devtools.build.lib.packages.Package;
+import com.google.devtools.build.lib.packages.RepositoryMetadata;
 import com.google.devtools.build.lib.packages.RuleClassProvider;
 import com.google.devtools.build.lib.packages.Target;
 import com.google.devtools.build.lib.rules.AliasConfiguredTarget;
@@ -132,10 +132,10 @@ public final class ConfiguredTargetFunction implements SkyFunction {
   /**
    * Indicates whether the set of packages transitively loaded for a given {@link
    * ConfiguredTargetValue} will be needed later (see {@link
-   * com.google.devtools.build.lib.analysis.ConfiguredObjectValue#getTransitivePackages}). If not,
+   * com.google.devtools.build.lib.analysis.ConfiguredObjectValue#getTransitiveRepositories}). If not,
    * they are not collected and stored.
    */
-  private final boolean storeTransitivePackages;
+  private final boolean storeTransitiveRepositories;
 
   private final boolean shouldUnblockCpuWorkWhenFetchingDeps;
 
@@ -158,7 +158,7 @@ public final class ConfiguredTargetFunction implements SkyFunction {
       BuildViewProvider buildViewProvider,
       RuleClassProvider ruleClassProvider,
       AtomicReference<Semaphore> cpuBoundSemaphore,
-      boolean storeTransitivePackages,
+      boolean storeTransitiveRepositories,
       boolean shouldUnblockCpuWorkWhenFetchingDeps,
       @Nullable AnalysisProgressReceiver analysisProgress,
       PrerequisitePackageFunction prerequisitePackages,
@@ -166,7 +166,7 @@ public final class ConfiguredTargetFunction implements SkyFunction {
     this.buildViewProvider = buildViewProvider;
     this.ruleClassProvider = ruleClassProvider;
     this.cpuBoundSemaphore = cpuBoundSemaphore;
-    this.storeTransitivePackages = storeTransitivePackages;
+    this.storeTransitiveRepositories = storeTransitiveRepositories;
     this.shouldUnblockCpuWorkWhenFetchingDeps = shouldUnblockCpuWorkWhenFetchingDeps;
     this.analysisProgress = analysisProgress;
     this.prerequisitePackages = prerequisitePackages;
@@ -219,9 +219,9 @@ public final class ConfiguredTargetFunction implements SkyFunction {
     @Nullable // Initialized lazily
     private RetrievalContext retrievalContext = null;
 
-    State(boolean storeTransitivePackages, PrerequisitePackageFunction prerequisitePackages) {
+    State(boolean storeTransitiveRepositories, PrerequisitePackageFunction prerequisitePackages) {
       this.computeDependenciesState =
-          new DependencyResolver.State(storeTransitivePackages, prerequisitePackages);
+          new DependencyResolver.State(storeTransitiveRepositories, prerequisitePackages);
     }
 
     @Override
@@ -255,7 +255,7 @@ public final class ConfiguredTargetFunction implements SkyFunction {
   @Override
   public SkyValue compute(SkyKey key, Environment env)
       throws ReportedException, UnreportedException, DependencyException, InterruptedException {
-    Supplier<State> stateSupplier = () -> new State(storeTransitivePackages, prerequisitePackages);
+    Supplier<State> stateSupplier = () -> new State(storeTransitiveRepositories, prerequisitePackages);
     ConfiguredTargetKey configuredTargetKey = (ConfiguredTargetKey) key.argument();
     SkyframeBuildView view = buildViewProvider.getSkyframeBuildView();
 
@@ -379,7 +379,8 @@ public final class ConfiguredTargetFunction implements SkyFunction {
               prereqs.getConfigConditions(),
               toolchainContexts,
               computeDependenciesState.execGroupCollectionBuilder,
-              state.computeDependenciesState.transitivePackages(),
+              state.computeDependenciesState.transitiveRepositories(),
+              state.computeDependenciesState.transitiveTopLevelDirs(),
               /* crashIfExecutionPhase= */ !remoteCachingDependencies.mode().isRetrievalEnabled(),
               remoteCachingDependencies.mode());
       if (ans != null) {
@@ -434,7 +435,8 @@ public final class ConfiguredTargetFunction implements SkyFunction {
       ConfigConditions configConditions,
       @Nullable ToolchainCollection<ResolvedToolchainContext> toolchainContexts,
       ExecGroupCollection.Builder execGroupCollectionBuilder,
-      @Nullable NestedSet<Package.Metadata> transitivePackages,
+      @Nullable NestedSet<RepositoryMetadata> transitiveRepositories,
+      @Nullable NestedSet<String> transitiveTopLevelDirs,
       boolean crashIfExecutionPhase,
       RemoteAnalysisCacheMode remoteAnalysisCacheMode)
       throws ConfiguredValueCreationException,
@@ -469,7 +471,7 @@ public final class ConfiguredTargetFunction implements SkyFunction {
               materializerTargets,
               configConditions,
               toolchainContexts,
-              transitivePackages,
+              transitiveRepositories,
               execGroupCollectionBuilder,
               crashIfExecutionPhase,
               remoteAnalysisCacheMode.isUploadEnabled());
@@ -522,7 +524,8 @@ public final class ConfiguredTargetFunction implements SkyFunction {
     Preconditions.checkNotNull(configuredTarget, target);
 
     if (configuredTarget instanceof RuleConfiguredTarget ruleConfiguredTarget) {
-      return new RuleConfiguredTargetValue(ruleConfiguredTarget, transitivePackages);
+      return new RuleConfiguredTargetValue(
+          ruleConfiguredTarget, transitiveRepositories, transitiveTopLevelDirs);
     } else {
       // Expected 4 args, but got 3.
       Preconditions.checkState(
@@ -544,10 +547,14 @@ public final class ConfiguredTargetFunction implements SkyFunction {
         }
         if (configuredTargetValue.getTargetData() != null) {
           return new NonRuleConfiguredTargetValue(
-              configuredTarget, transitivePackages, configuredTargetValue.getTargetData());
+              configuredTarget,
+              transitiveRepositories,
+              transitiveTopLevelDirs,
+              configuredTargetValue.getTargetData());
         }
       }
-      return new NonRuleConfiguredTargetValue(configuredTarget, transitivePackages);
+      return new NonRuleConfiguredTargetValue(
+          configuredTarget, transitiveRepositories, transitiveTopLevelDirs);
     }
   }
 
