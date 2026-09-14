@@ -120,10 +120,11 @@ public final class ConfiguredTargetAndDataProducer
 
   private void acceptValue(ConfiguredTargetValue configuredTargetValue) {
     this.configuredTargetValue = configuredTargetValue;
-    if (transitiveState.storeTransitivePackages()) {
-      transitiveState.updateTransitivePackages(
+    if (transitiveState.storeTransitiveRepositories()) {
+      transitiveState.addDependency(
           ConfiguredTargetKey.fromConfiguredTarget(configuredTargetValue.getConfiguredTarget()),
-          configuredTargetValue.getTransitivePackages());
+          configuredTargetValue.getTransitiveRepositories(),
+          configuredTargetValue.getTransitiveTopLevelDirs());
     }
   }
 

@@ -14,7 +14,6 @@
 package com.google.devtools.build.lib.analysis;
 
 import static com.google.common.collect.ImmutableList.toImmutableList;
-import static com.google.common.collect.ImmutableSortedMap.toImmutableSortedMap;
 import static com.google.devtools.build.lib.actions.ActionKeyContext.describeNestedSetFingerprint;
 import static java.nio.charset.StandardCharsets.ISO_8859_1;
 import static java.util.Comparator.comparing;
@@ -41,12 +40,13 @@ import com.google.devtools.build.lib.collect.nestedset.NestedSet;
 import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
 import com.google.devtools.build.lib.collect.nestedset.Order;
 import com.google.devtools.build.lib.events.EventHandler;
-import com.google.devtools.build.lib.packages.Package;
+import com.google.devtools.build.lib.packages.RepositoryMetadata;
 import com.google.devtools.build.lib.util.DeterministicWriter;
 import com.google.devtools.build.lib.util.Fingerprint;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.PrintWriter;
+import java.util.HashMap;
 import java.util.IdentityHashMap;
 import java.util.Map.Entry;
 import java.util.UUID;
@@ -77,12 +77,13 @@ public final class RepoMappingManifestAction extends AbstractFileWriteAction
                   });
 
   // Uses MapFn's args parameter just like Fingerprint#addString to compute a cacheable fingerprint
-  // of just the repo name and mapping of a given Package.
-  private static final CommandLineItem.ExceptionlessMapFn<Package.Metadata>
+  // of just the repo name and mapping of a given repository.
+  private static final CommandLineItem.ExceptionlessMapFn<RepositoryMetadata>
       REPO_AND_MAPPING_DIGEST_FN =
-          (pkgMetadata, args) -> {
-            args.accept(pkgMetadata.packageIdentifier().getRepository().getName());
-            args.accept(repoMappingFingerprintCache.get(pkgMetadata.repositoryMapping().entries()));
+          (repoMetadata, args) -> {
+            args.accept(repoMetadata.repository().getName());
+            args.accept(
+                repoMappingFingerprintCache.get(repoMetadata.repositoryMapping().entries()));
           };
 
   private static final CommandLineItem.ExceptionlessMapFn<Artifact> OWNER_REPO_FN =
@@ -94,7 +95,7 @@ public final class RepoMappingManifestAction extends AbstractFileWriteAction
   private static final CommandLineItem.ExceptionlessMapFn<SymlinkEntry> FIRST_SEGMENT_FN =
       (symlink, args) -> args.accept(symlink.getPath().getSegment(0));
 
-  private final NestedSet<Package.Metadata> transitivePackages;
+  private final NestedSet<RepositoryMetadata> transitiveRepositories;
   private final NestedSet<Artifact> runfilesArtifacts;
   private final boolean hasRunfilesSymlinks;
   private final NestedSet<SymlinkEntry> runfilesRootSymlinks;
@@ -104,14 +105,14 @@ public final class RepoMappingManifestAction extends AbstractFileWriteAction
   public RepoMappingManifestAction(
       ActionOwner owner,
       Artifact output,
-      NestedSet<Package.Metadata> transitivePackages,
+      NestedSet<RepositoryMetadata> transitiveRepositories,
       NestedSet<Artifact> runfilesArtifacts,
       NestedSet<SymlinkEntry> runfilesSymlinks,
       NestedSet<SymlinkEntry> runfilesRootSymlinks,
       String workspaceName,
       boolean emitCompactRepoMapping) {
     super(owner, NestedSetBuilder.emptySet(Order.STABLE_ORDER), output);
-    this.transitivePackages = transitivePackages;
+    this.transitiveRepositories = transitiveRepositories;
     this.runfilesArtifacts = runfilesArtifacts;
     this.hasRunfilesSymlinks = !runfilesSymlinks.isEmpty();
     this.runfilesRootSymlinks = runfilesRootSymlinks;
@@ -136,7 +137,8 @@ public final class RepoMappingManifestAction extends AbstractFileWriteAction
       Fingerprint fp)
       throws CommandLineExpansionException, EvalException, InterruptedException {
     fp.addUUID(MY_UUID);
-    actionKeyContext.addNestedSetToFingerprint(REPO_AND_MAPPING_DIGEST_FN, fp, transitivePackages);
+    actionKeyContext.addNestedSetToFingerprint(
+        REPO_AND_MAPPING_DIGEST_FN, fp, transitiveRepositories);
     actionKeyContext.addNestedSetToFingerprint(OWNER_REPO_FN, fp, runfilesArtifacts);
     fp.addBoolean(hasRunfilesSymlinks);
     actionKeyContext.addNestedSetToFingerprint(FIRST_SEGMENT_FN, fp, runfilesRootSymlinks);
@@ -148,7 +150,7 @@ public final class RepoMappingManifestAction extends AbstractFileWriteAction
   public String describeKey() {
     return """
     GUID: %s
-    transitivePackages: %s
+    transitiveRepositories: %s
     runfilesArtifacts: %s
     hasRunfilesSymlinks: %s
     runfilesRootSymlinks: %s
@@ -157,7 +159,7 @@ public final class RepoMappingManifestAction extends AbstractFileWriteAction
     """
         .formatted(
             MY_UUID,
-            describeNestedSetFingerprint(REPO_AND_MAPPING_DIGEST_FN, transitivePackages),
+            describeNestedSetFingerprint(REPO_AND_MAPPING_DIGEST_FN, transitiveRepositories),
             describeNestedSetFingerprint(OWNER_REPO_FN, runfilesArtifacts),
             hasRunfilesSymlinks,
             describeNestedSetFingerprint(FIRST_SEGMENT_FN, runfilesRootSymlinks),
@@ -214,16 +216,14 @@ public final class RepoMappingManifestAction extends AbstractFileWriteAction
       }
       var reposInRunfilesPaths = reposInRunfilesPathsBuilder.build();
 
+      // The main repository may appear more than once with different source roots when multiple
+      // package paths are in use, but its repository mapping is the same for all of them.
+      HashMap<RepositoryName, RepositoryMapping> repoMappings = new HashMap<>();
+      for (RepositoryMetadata repoMetadata : transitiveRepositories.toList()) {
+        repoMappings.putIfAbsent(repoMetadata.repository(), repoMetadata.repositoryMapping());
+      }
       ImmutableSortedMap<RepositoryName, RepositoryMapping> sortedRepoMappings =
-          transitivePackages.toList().stream()
-              .collect(
-                  toImmutableSortedMap(
-                      comparing(RepositoryName::getName),
-                      pkgMetadata -> pkgMetadata.packageIdentifier().getRepository(),
-                      Package.Metadata::repositoryMapping,
-                      // All packages in a given repository have the same repository mapping, so the
-                      // particular way of resolving duplicates does not matter.
-                      (first, second) -> first));
+          ImmutableSortedMap.copyOf(repoMappings, comparing(RepositoryName::getName));
       if (emitCompactRepoMapping) {
         var repoAndMappings = Iterators.peekingIterator(sortedRepoMappings.entrySet().iterator());
         while (repoAndMappings.hasNext()) {

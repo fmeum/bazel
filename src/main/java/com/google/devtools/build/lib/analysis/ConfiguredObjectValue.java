@@ -14,7 +14,7 @@
 package com.google.devtools.build.lib.analysis;
 
 import com.google.devtools.build.lib.collect.nestedset.NestedSet;
-import com.google.devtools.build.lib.packages.Package;
+import com.google.devtools.build.lib.packages.RepositoryMetadata;
 import com.google.devtools.build.skyframe.NotComparableSkyValue;
 
 /**
@@ -41,6 +41,15 @@ public interface ConfiguredObjectValue extends NotComparableSkyValue {
    * will crash.
    */
   // TODO(b/283125139): Most builds never need to build a repo mapping manifest. Store transitive
-  // packages outside of configured object values to save the wasted field.
-  NestedSet<Package.Metadata> getTransitivePackages();
+  // repositories outside of configured object values to save the wasted field.
+  NestedSet<RepositoryMetadata> getTransitiveRepositories();
+
+  /**
+   * Returns the top-level directories of the main repository containing the packages that were
+   * transitively loaded to construct this configured object. Tracked together with {@link
+   * #getTransitiveRepositories} and only used to plant the symlinks into the execroot with Skymeld
+   * on file systems on which top-level directory names may clash. Null iff {@link
+   * #getTransitiveRepositories} is.
+   */
+  NestedSet<String> getTransitiveTopLevelDirs();
 }

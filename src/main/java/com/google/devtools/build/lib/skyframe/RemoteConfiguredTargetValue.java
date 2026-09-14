@@ -27,6 +27,7 @@ import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.collect.nestedset.NestedSet;
 import com.google.devtools.build.lib.packages.NoSuchTargetException;
 import com.google.devtools.build.lib.packages.Package;
+import com.google.devtools.build.lib.packages.RepositoryMetadata;
 import com.google.devtools.build.lib.packages.Target;
 import com.google.devtools.build.lib.packages.TargetData;
 import com.google.devtools.build.lib.skyframe.serialization.AsyncDeserializationContext;
@@ -70,7 +71,13 @@ public sealed class RemoteConfiguredTargetValue
 
   @Nullable // Never serialized.
   @Override
-  public final NestedSet<Package.Metadata> getTransitivePackages() {
+  public final NestedSet<RepositoryMetadata> getTransitiveRepositories() {
+    return null;
+  }
+
+  @Nullable // Never serialized.
+  @Override
+  public final NestedSet<String> getTransitiveTopLevelDirs() {
     return null;
   }
 

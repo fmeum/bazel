@@ -47,6 +47,7 @@ import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.collect.nestedset.NestedSet;
 import com.google.devtools.build.lib.packages.NoSuchTargetException;
 import com.google.devtools.build.lib.packages.Package;
+import com.google.devtools.build.lib.packages.RepositoryMetadata;
 import com.google.devtools.build.lib.packages.Target;
 import com.google.devtools.build.lib.profiler.Profiler;
 import com.google.devtools.build.lib.profiler.SilentCloseable;
@@ -233,15 +234,17 @@ public class BuildDriverFunction implements SkyFunction {
     if (topLevelSkyValue instanceof ConfiguredTargetValue configuredTargetValue) {
       ConfiguredTarget configuredTarget = configuredTargetValue.getConfiguredTarget();
       // It's possible that this code path is triggered AFTER the analysis cache clean up and the
-      // transitive packages for package root resolution is already cleared. In such a case, the
+      // transitive repositories for package root resolution is already cleared. In such a case, the
       // symlinks should have already been planted.
-      NestedSet<Package.Metadata> transitivePackagesForSymlinkPlanting =
-          configuredTargetValue.getTransitivePackages();
-      if (transitivePackagesForSymlinkPlanting != null) {
+      NestedSet<RepositoryMetadata> transitiveRepositoriesForSymlinkPlanting =
+          configuredTargetValue.getTransitiveRepositories();
+      if (transitiveRepositoriesForSymlinkPlanting != null) {
         postEventIfNecessary(
             postedEventsTypes,
             env,
-            TopLevelTargetReadyForSymlinkPlanting.create(transitivePackagesForSymlinkPlanting));
+            TopLevelTargetReadyForSymlinkPlanting.create(
+                transitiveRepositoriesForSymlinkPlanting,
+                configuredTargetValue.getTransitiveTopLevelDirs()));
       }
 
       BuildConfigurationValue buildConfigurationValue =
@@ -336,11 +339,11 @@ public class BuildDriverFunction implements SkyFunction {
             buildDriverKey.isExtraActionTopLevelOnly());
 
         // It's possible that this code path is triggered AFTER the analysis cache clean up and the
-        // transitive packages for package root resolution is already cleared. In such a case, the
-        // symlinks should have already been planted.
-        NestedSet<Package.Metadata> transitivePackagesForSymlinkPlanting =
-            aspectValue.getTransitivePackages();
-        if (transitivePackagesForSymlinkPlanting != null) {
+        // transitive repositories for package root resolution is already cleared. In such a case,
+        // the symlinks should have already been planted.
+        NestedSet<RepositoryMetadata> transitiveRepositoriesForSymlinkPlanting =
+            aspectValue.getTransitiveRepositories();
+        if (transitiveRepositoriesForSymlinkPlanting != null) {
           // This event should be sent out exactly once per aspect in this BuildDriverKey, even with
           // resets. We achieve this by marking the event type as sent only after sending the event
           // for all aspects, but must avoid triggering Skyframe restarts while doing so.
@@ -349,7 +352,8 @@ public class BuildDriverFunction implements SkyFunction {
             env.getListener()
                 .post(
                     TopLevelTargetReadyForSymlinkPlanting.create(
-                        transitivePackagesForSymlinkPlanting));
+                        transitiveRepositoriesForSymlinkPlanting,
+                        aspectValue.getTransitiveTopLevelDirs()));
           }
         }
         aspectCompletionKeys.add(AspectCompletionKey.create(aspectKey, topLevelArtifactContext));

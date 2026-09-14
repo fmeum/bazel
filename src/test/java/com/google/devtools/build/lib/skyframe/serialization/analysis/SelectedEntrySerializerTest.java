@@ -33,7 +33,7 @@ import com.google.devtools.build.lib.compress.CompressionService;
 import com.google.devtools.build.lib.compress.CompressionServiceImpl;
 import com.google.devtools.build.lib.concurrent.QuiescingFuture;
 import com.google.devtools.build.lib.concurrent.safeexecutor.SafeExecutorOwner;
-import com.google.devtools.build.lib.packages.Package.Metadata;
+import com.google.devtools.build.lib.packages.RepositoryMetadata;
 import com.google.devtools.build.lib.skyframe.ConfiguredTargetKey;
 import com.google.devtools.build.lib.skyframe.FileKey;
 import com.google.devtools.build.lib.skyframe.serialization.AsyncDeserializationContext;
@@ -204,7 +204,12 @@ public final class SelectedEntrySerializerTest {
     }
 
     @Override
-    public NestedSet<Metadata> getTransitivePackages() {
+    public NestedSet<RepositoryMetadata> getTransitiveRepositories() {
+      return null;
+    }
+
+    @Override
+    public NestedSet<String> getTransitiveTopLevelDirs() {
       return null;
     }
 

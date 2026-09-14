@@ -22,7 +22,7 @@ import com.google.devtools.build.lib.actions.ActionAnalysisMetadata;
 import com.google.devtools.build.lib.actions.BasicActionLookupValue;
 import com.google.devtools.build.lib.collect.nestedset.NestedSet;
 import com.google.devtools.build.lib.packages.Aspect;
-import com.google.devtools.build.lib.packages.Package;
+import com.google.devtools.build.lib.packages.RepositoryMetadata;
 import com.google.devtools.build.lib.skyframe.AspectKeyCreator.AspectKey;
 import com.google.devtools.build.lib.skyframe.serialization.DeserializedSkyValue;
 import com.google.devtools.build.lib.skyframe.serialization.VisibleForSerialization;
@@ -38,25 +38,28 @@ public class AspectValue extends BasicActionLookupValue
       AspectKey key,
       Aspect aspect,
       ConfiguredAspect configuredAspect,
-      @Nullable NestedSet<Package.Metadata> transitivePackages) {
-    return transitivePackages == null
+      @Nullable NestedSet<RepositoryMetadata> transitiveRepositories,
+      @Nullable NestedSet<String> transitiveTopLevelDirs) {
+    return transitiveRepositories == null
         ? new AspectValue(aspect, configuredAspect)
-        : new AspectValueWithTransitivePackages(key, aspect, configuredAspect, transitivePackages);
+        : new AspectValueWithTransitiveRepositories(
+            key, aspect, configuredAspect, transitiveRepositories, transitiveTopLevelDirs);
   }
 
   public static AspectValue createForAlias(
       AspectKey key,
       Aspect aspect,
       ConfiguredAspect configuredAspect,
-      @Nullable NestedSet<Package.Metadata> transitivePackages) {
-    return transitivePackages == null
+      @Nullable NestedSet<RepositoryMetadata> transitiveRepositories,
+      @Nullable NestedSet<String> transitiveTopLevelDirs) {
+    return transitiveRepositories == null
         ? new AspectValueForAlias(aspect, configuredAspect)
-        : new AspectValueWithTransitivePackagesForAlias(
-            key, aspect, configuredAspect, transitivePackages);
+        : new AspectValueWithTransitiveRepositoriesForAlias(
+            key, aspect, configuredAspect, transitiveRepositories, transitiveTopLevelDirs);
   }
 
   // These variables are only non-final because they may be clear()ed to save memory. They are null
-  // only after they are cleared except for transitivePackagesForPackageRootResolution.
+  // only after they are cleared except for transitiveRepositoriesForPackageRootResolution.
   @Nullable private Aspect aspect;
   @Nullable private TransitiveInfoProviderMap providers;
 
@@ -84,8 +87,8 @@ public class AspectValue extends BasicActionLookupValue
     this.writesOutputToMasterLog = writesOutputToMasterLog;
   }
 
-  public AspectKey getKeyForTransitivePackageTracking() {
-    throw new UnsupportedOperationException("Only supported if transitive packages are tracked.");
+  public AspectKey getKeyForTransitiveRepositoryTracking() {
+    throw new UnsupportedOperationException("Only supported if transitive repositories are tracked.");
   }
 
   public final Aspect getAspect() {
@@ -121,7 +124,13 @@ public class AspectValue extends BasicActionLookupValue
 
   @Nullable
   @Override
-  public NestedSet<Package.Metadata> getTransitivePackages() {
+  public NestedSet<RepositoryMetadata> getTransitiveRepositories() {
+    return null;
+  }
+
+  @Nullable
+  @Override
+  public NestedSet<String> getTransitiveTopLevelDirs() {
     return null;
   }
 
@@ -140,42 +149,55 @@ public class AspectValue extends BasicActionLookupValue
     return getStringHelper().toString();
   }
 
-  private static class AspectValueWithTransitivePackages extends AspectValue {
+  private static class AspectValueWithTransitiveRepositories extends AspectValue {
     @Nullable
-    private transient NestedSet<Package.Metadata> transitivePackages; // Null after clear().
+    private transient NestedSet<RepositoryMetadata> transitiveRepositories; // Null after clear().
+
+    @Nullable
+    private transient NestedSet<String> transitiveTopLevelDirs; // Null after clear().
 
     @Nullable private AspectKey key;
 
-    private AspectValueWithTransitivePackages(
+    private AspectValueWithTransitiveRepositories(
         AspectKey key,
         Aspect aspect,
         ConfiguredAspect configuredAspect,
-        NestedSet<Package.Metadata> transitivePackages) {
+        NestedSet<RepositoryMetadata> transitiveRepositories,
+        NestedSet<String> transitiveTopLevelDirs) {
       super(aspect, configuredAspect);
-      this.transitivePackages = checkNotNull(transitivePackages);
+      this.transitiveRepositories = checkNotNull(transitiveRepositories);
+      this.transitiveTopLevelDirs = checkNotNull(transitiveTopLevelDirs);
       this.key = checkNotNull(key);
     }
 
     @Override
-    public NestedSet<Package.Metadata> getTransitivePackages() {
-      return transitivePackages;
+    public NestedSet<RepositoryMetadata> getTransitiveRepositories() {
+      return transitiveRepositories;
     }
 
     @Override
-    public AspectKey getKeyForTransitivePackageTracking() {
+    public NestedSet<String> getTransitiveTopLevelDirs() {
+      return transitiveTopLevelDirs;
+    }
+
+    @Override
+    public AspectKey getKeyForTransitiveRepositoryTracking() {
       return checkNotNull(key);
     }
 
     @Override
     public void clear(boolean clearEverything) {
       super.clear(clearEverything);
-      transitivePackages = null;
+      transitiveRepositories = null;
+      transitiveTopLevelDirs = null;
       key = null;
     }
 
     @Override
     protected ToStringHelper getStringHelper() {
-      return super.getStringHelper().add("key", key).add("transitivePackages", transitivePackages);
+      return super.getStringHelper()
+          .add("key", key)
+          .add("transitiveRepositories", transitiveRepositories);
     }
   }
 
@@ -196,19 +218,20 @@ public class AspectValue extends BasicActionLookupValue
     }
   }
 
-  private static final class AspectValueWithTransitivePackagesForAlias
-      extends AspectValueWithTransitivePackages {
-    private AspectValueWithTransitivePackagesForAlias(
+  private static final class AspectValueWithTransitiveRepositoriesForAlias
+      extends AspectValueWithTransitiveRepositories {
+    private AspectValueWithTransitiveRepositoriesForAlias(
         AspectKey key,
         Aspect aspect,
         ConfiguredAspect configuredAspect,
-        NestedSet<Package.Metadata> transitivePackages) {
-      super(key, aspect, configuredAspect, transitivePackages);
+        NestedSet<RepositoryMetadata> transitiveRepositories,
+        NestedSet<String> transitiveTopLevelDirs) {
+      super(key, aspect, configuredAspect, transitiveRepositories, transitiveTopLevelDirs);
     }
   }
 
   public static boolean isForAliasTarget(AspectValue aspectValue) {
     return aspectValue instanceof AspectValueForAlias
-        || aspectValue instanceof AspectValueWithTransitivePackagesForAlias;
+        || aspectValue instanceof AspectValueWithTransitiveRepositoriesForAlias;
   }
 }

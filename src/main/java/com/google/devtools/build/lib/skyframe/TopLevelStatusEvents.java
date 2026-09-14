@@ -21,7 +21,7 @@ import com.google.devtools.build.lib.analysis.ConfiguredTarget;
 import com.google.devtools.build.lib.analysis.config.BuildConfigurationValue;
 import com.google.devtools.build.lib.collect.nestedset.NestedSet;
 import com.google.devtools.build.lib.events.ExtendedEventHandler.Postable;
-import com.google.devtools.build.lib.packages.Package;
+import com.google.devtools.build.lib.packages.RepositoryMetadata;
 import com.google.devtools.build.lib.skyframe.AspectKeyCreator.AspectKey;
 import com.google.devtools.build.skyframe.SkyKey;
 
@@ -59,22 +59,25 @@ public final class TopLevelStatusEvents {
   }
 
   /**
-   * An event that signals that we can start planting the symlinks for the transitive packages under
-   * a top level target.
+   * An event that signals that we can start planting the symlinks for the transitive repositories
+   * under a top level target.
    *
    * <p>Should always be sent out before {@link TopLevelEntityAnalysisConcludedEvent} to ensure
    * consistency.
    */
   public record TopLevelTargetReadyForSymlinkPlanting(
-      NestedSet<Package.Metadata> transitivePackagesForSymlinkPlanting)
+      NestedSet<RepositoryMetadata> transitiveRepositories, NestedSet<String> transitiveTopLevelDirs)
       implements TopLevelStatusEventWithType {
     public TopLevelTargetReadyForSymlinkPlanting {
-      requireNonNull(transitivePackagesForSymlinkPlanting, "transitivePackagesForSymlinkPlanting");
+      requireNonNull(transitiveRepositories, "transitiveRepositories");
+      requireNonNull(transitiveTopLevelDirs, "transitiveTopLevelDirs");
     }
 
     public static TopLevelTargetReadyForSymlinkPlanting create(
-        NestedSet<Package.Metadata> transitivePackagesForSymlinkPlanting) {
-      return new TopLevelTargetReadyForSymlinkPlanting(transitivePackagesForSymlinkPlanting);
+        NestedSet<RepositoryMetadata> transitiveRepositories,
+        NestedSet<String> transitiveTopLevelDirs) {
+      return new TopLevelTargetReadyForSymlinkPlanting(
+          transitiveRepositories, transitiveTopLevelDirs);
     }
 
     @Override

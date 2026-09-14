@@ -74,7 +74,7 @@ import com.google.devtools.build.lib.events.ExtendedEventHandler;
 import com.google.devtools.build.lib.events.StoredEventHandler;
 import com.google.devtools.build.lib.packages.Aspect;
 import com.google.devtools.build.lib.packages.AspectClass;
-import com.google.devtools.build.lib.packages.Package;
+import com.google.devtools.build.lib.packages.RepositoryMetadata;
 import com.google.devtools.build.lib.packages.RuleClassProvider;
 import com.google.devtools.build.lib.packages.StarlarkAspectClass;
 import com.google.devtools.build.lib.packages.Target;
@@ -194,7 +194,7 @@ public final class DependencyResolver {
 
     public static State createForTesting(TargetAndConfiguration targetAndConfiguration) {
       var state =
-          new State(/* storeTransitivePackages= */ false, /* prerequisitePackages= */ p -> null);
+          new State(/* storeTransitiveRepositories= */ false, /* prerequisitePackages= */ p -> null);
       state.targetAndConfiguration = targetAndConfiguration;
       return state;
     }
@@ -203,23 +203,23 @@ public final class DependencyResolver {
         TargetAndConfiguration targetAndConfiguration, TransitionCollector transitionCollector) {
       var state =
           new State(
-              /* storeTransitivePackages= */ false,
+              /* storeTransitiveRepositories= */ false,
               /* prerequisitePackages= */ p -> null,
               transitionCollector);
       state.targetAndConfiguration = targetAndConfiguration;
       return state;
     }
 
-    State(boolean storeTransitivePackages, PrerequisitePackageFunction prerequisitePackages) {
-      this(storeTransitivePackages, prerequisitePackages, NULL_TRANSITION_COLLECTOR);
+    State(boolean storeTransitiveRepositories, PrerequisitePackageFunction prerequisitePackages) {
+      this(storeTransitiveRepositories, prerequisitePackages, NULL_TRANSITION_COLLECTOR);
     }
 
     private State(
-        boolean storeTransitivePackages,
+        boolean storeTransitiveRepositories,
         PrerequisitePackageFunction prerequisitePackages,
         TransitionCollector transitionCollector) {
       this.transitiveState =
-          new TransitiveDependencyState(storeTransitivePackages, prerequisitePackages);
+          new TransitiveDependencyState(storeTransitiveRepositories, prerequisitePackages);
       this.transitionCollector = transitionCollector;
     }
 
@@ -227,8 +227,12 @@ public final class DependencyResolver {
       return transitiveState.transitiveRootCauses();
     }
 
-    public NestedSet<Package.Metadata> transitivePackages() {
-      return transitiveState.transitivePackages();
+    public NestedSet<RepositoryMetadata> transitiveRepositories() {
+      return transitiveState.transitiveRepositories();
+    }
+
+    public NestedSet<String> transitiveTopLevelDirs() {
+      return transitiveState.transitiveTopLevelDirs();
     }
 
     @Override

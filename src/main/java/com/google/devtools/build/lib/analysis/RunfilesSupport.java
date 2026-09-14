@@ -440,7 +440,7 @@ public final class RunfilesSupport {
   /**
    * Returns the foo.repo_mapping file if Bazel is run with transitive package tracking turned on
    * (see {@code SkyframeExecutor#getForcedSingleSourceRootIfNoExecrootSymlinkCreation}) and any of
-   * the transitive packages come from a repository with strict deps (see {@code
+   * the transitive repositories come from a repository with strict deps (see {@code
    * #collectRepoMappings}). Otherwise, returns null.
    */
   @Nullable
@@ -703,8 +703,9 @@ public final class RunfilesSupport {
   @Nullable
   private static Artifact createRepoMappingManifestAction(
       RuleContext ruleContext, Runfiles runfiles, Artifact owningExecutable) {
-    if (ruleContext.getTransitivePackagesForRunfileRepoMappingManifest() == null) {
-      // If transitive packages are not tracked for repo mapping manifest, we don't need the action.
+    if (ruleContext.getTransitiveRepositoriesForRunfileRepoMappingManifest() == null) {
+      // If transitive repositories are not tracked for repo mapping manifest, we don't need the
+      // action.
       return null;
     }
 
@@ -722,7 +723,7 @@ public final class RunfilesSupport {
             new RepoMappingManifestAction(
                 ruleContext.getActionOwner(),
                 repoMappingManifest,
-                ruleContext.getTransitivePackagesForRunfileRepoMappingManifest(),
+                ruleContext.getTransitiveRepositoriesForRunfileRepoMappingManifest(),
                 runfiles.getArtifacts(),
                 runfiles.getSymlinks(),
                 runfiles.getRootSymlinks(),

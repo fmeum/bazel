@@ -2189,6 +2189,8 @@ java_library(
         "//src/main/java/com/google/devtools/build/lib/skyframe:configured_target_and_data",
         "//src/main/java/com/google/devtools/build/lib/skyframe:configured_target_key",
         "//src/main/java/com/google/devtools/build/lib/skyframe:prerequisite_package_function",
+        "//third_party/java/caffeine",
+        "//third_party/java/guava:collect",
         "//third_party/java/jsr305_annotations",
     ],
 )

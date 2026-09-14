@@ -19,7 +19,7 @@ import com.google.devtools.build.lib.analysis.ConfiguredTargetValue;
 import com.google.devtools.build.lib.collect.nestedset.NestedSet;
 import com.google.devtools.build.lib.concurrent.ThreadSafety.Immutable;
 import com.google.devtools.build.lib.concurrent.ThreadSafety.ThreadSafe;
-import com.google.devtools.build.lib.packages.Package;
+import com.google.devtools.build.lib.packages.RepositoryMetadata;
 import com.google.devtools.build.lib.packages.TargetData;
 import javax.annotation.Nullable;
 
@@ -33,16 +33,19 @@ public final class NonRuleConfiguredTargetValue
   private final TargetData targetData;
 
   NonRuleConfiguredTargetValue(
-      ConfiguredTarget configuredTarget, @Nullable NestedSet<Package.Metadata> transitivePackages) {
-    super(configuredTarget, transitivePackages);
+      ConfiguredTarget configuredTarget,
+      @Nullable NestedSet<RepositoryMetadata> transitiveRepositories,
+      @Nullable NestedSet<String> transitiveTopLevelDirs) {
+    super(configuredTarget, transitiveRepositories, transitiveTopLevelDirs);
     this.targetData = null;
   }
 
   NonRuleConfiguredTargetValue(
       ConfiguredTarget configuredTarget,
-      @Nullable NestedSet<Package.Metadata> transitivePackages,
+      @Nullable NestedSet<RepositoryMetadata> transitiveRepositories,
+      @Nullable NestedSet<String> transitiveTopLevelDirs,
       TargetData targetData) {
-    super(configuredTarget, transitivePackages);
+    super(configuredTarget, transitiveRepositories, transitiveTopLevelDirs);
     this.targetData = targetData;
   }
 
