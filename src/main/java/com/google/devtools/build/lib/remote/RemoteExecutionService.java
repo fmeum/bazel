@@ -798,30 +798,33 @@ public class RemoteExecutionService {
       return null;
     }
 
-    var result = RemoteActionResult.createFromCache(cachedActionResult);
+    return RemoteActionResult.createFromCache(cachedActionResult);
+  }
 
-    // We only add digests to `knownMissingCasDigests` when LostInputsEvent occurs which will cause
-    // the build to abort and rewind, so there is no data race here. This allows us to avoid the
-    // check until cache eviction happens.
-    if (!knownMissingCasDigests.isEmpty()) {
-      var metadata =
-          result.getOrParseActionResultMetadata(
-              combinedCache,
-              digestUtil,
-              action.getRemoteActionExecutionContext(),
-              action.getRemotePathResolver());
-
-      // If we already know digests referenced by this AC is missing from remote cache, ignore it so
-      // that we can fall back to execution. This could happen when the remote cache is an HTTP
-      // cache, or doesn't implement AC integrity check.
-      //
-      // See https://github.com/bazelbuild/bazel/issues/18696.
-      if (updateKnownMissingCasDigests(knownMissingCasDigests, metadata)) {
-        return null;
-      }
+  /**
+   * Returns whether the given cached result of the given action references blobs that are known to
+   * be missing from the remote cache and thus must not be used.
+   *
+   * <p>This can happen when the remote cache is an HTTP cache or doesn't implement AC integrity
+   * checks (see https://github.com/bazelbuild/bazel/issues/18696). Since the action is expected to
+   * be re-executed and re-upload the missing blobs, they are no longer considered missing after
+   * this method returns {@code true}. A remote executor that doesn't verify its action cache either
+   * would serve the same stale result again, so a re-execution must not accept cached results.
+   */
+  public boolean isStaleCachedResult(RemoteAction action, RemoteActionResult result)
+      throws IOException, InterruptedException {
+    // Digests are only added to `knownMissingCasDigests` when a LostInputsEvent is posted, which
+    // is rare. This allows us to avoid the check until cache eviction happens.
+    if (knownMissingCasDigests.isEmpty()) {
+      return false;
     }
-
-    return result;
+    var metadata =
+        result.getOrParseActionResultMetadata(
+            combinedCache,
+            digestUtil,
+            action.getRemoteActionExecutionContext(),
+            action.getRemotePathResolver());
+    return updateKnownMissingCasDigests(knownMissingCasDigests, metadata);
   }
 
   /**
