@@ -194,7 +194,6 @@ public final class SkyframeActionExecutor {
   private Reporter reporter;
   private ImmutableMap<String, String> clientEnv = ImmutableMap.of();
   private Executor executorEngine;
-  private ExtendedEventHandler progressSuppressingEventHandler;
   private ActionLogBufferPathGenerator actionLogBufferPathGenerator;
   private ActionCacheChecker actionCacheChecker;
 
@@ -215,14 +214,10 @@ public final class SkyframeActionExecutor {
   private ConcurrentMap<OwnerlessArtifactWrapper, ActionExecutionState> buildActionMap;
 
   // We also keep track of actions which were rewound this build, possibly from a
-  // previously-completed state. When re-evaluated, these actions should not emit progress events,
-  // in order to not confuse the downstream consumers of action-related event streams, which may
-  // (reasonably) have expected an action to be executed at most once per build.
-  //
-  // Note: actions which fail due to lost inputs, and get reset (having not completed successfully),
-  // will not have any events suppressed during their second evaluation. Consumers of events which
-  // get emitted before execution (e.g. ActionStartedEvent, SpawnExecutedEvent) must support
-  // receiving more than one of those events per action.
+  // previously-completed state. Consumers of action-related event streams must support receiving
+  // more than one event of each kind (e.g. ActionStartedEvent, ActionCompletionEvent,
+  // ActionExecutedEvent, SpawnExecutedEvent) per action and build and may use wasRewound to learn
+  // about the actions that could send duplicate events.
   private Set<OwnerlessArtifactWrapper> rewoundActions;
 
   private ActionOutputDirectoryHelper outputDirectoryHelper;
@@ -333,8 +328,6 @@ public final class SkyframeActionExecutor {
       boolean keepStateAfterBuild) {
     this.reporter = checkNotNull(reporter);
     this.executorEngine = checkNotNull(executor);
-    this.progressSuppressingEventHandler = new ProgressSuppressingEventHandler(reporter);
-
     var buildRequestOptions = options.getOptions(BuildRequestOptions.class);
 
     // Start with a new map each build so there's no issue with internal resizing.
@@ -503,7 +496,6 @@ public final class SkyframeActionExecutor {
     this.reporter = null;
     this.options = null;
     this.executorEngine = null;
-    this.progressSuppressingEventHandler = null;
     this.outputService = null;
     this.buildActionMap = null;
     this.rewoundActions = null;
@@ -563,16 +555,6 @@ public final class SkyframeActionExecutor {
    */
   public int getRewoundActionCount() {
     return rewoundActions.size();
-  }
-
-  /**
-   * Determines whether the action should have its progress events emitted.
-   *
-   * <p>Returns {@code false} for rewound actions, indicating that their progress events should be
-   * suppressed.
-   */
-  boolean shouldEmitProgressEvents(Action action) {
-    return !wasRewound(action);
   }
 
   /**
@@ -708,21 +690,12 @@ public final class SkyframeActionExecutor {
     actionConcurrencyMeter.release();
   }
 
-  private ExtendedEventHandler selectEventHandler(Action action) {
-    return selectEventHandler(shouldEmitProgressEvents(action));
-  }
-
-  private ExtendedEventHandler selectEventHandler(boolean emitProgressEvents) {
-    return emitProgressEvents ? reporter : progressSuppressingEventHandler;
-  }
-
   private ActionExecutionContext getContext(
       Action action,
       InputMetadataProvider compositeInputMetadataProvider,
       OutputMetadataStore outputMetadataStore,
       @Nullable FileSystem actionFileSystem,
       ActionLookupData actionLookupData) {
-    boolean emitProgressEvents = shouldEmitProgressEvents(action);
     ArtifactPathResolver artifactPathResolver =
         ArtifactPathResolver.createPathResolver(actionFileSystem, executorEngine.getExecRoot());
     FileOutErr fileOutErr = actionLogBufferPathGenerator.generate(artifactPathResolver);
@@ -738,7 +711,7 @@ public final class SkyframeActionExecutor {
         rewindingEnabled,
         lostInputsCheck(actionFileSystem, action, outputService),
         fileOutErr,
-        selectEventHandler(emitProgressEvents),
+        reporter,
         clientEnv,
         actionFileSystem,
         discoveredModulesPruner,
@@ -816,12 +789,11 @@ public final class SkyframeActionExecutor {
         boolean eventPosted = false;
 
         if (action instanceof NotifyOnActionCacheHit notify) {
-          ExtendedEventHandler contextEventHandler = selectEventHandler(action);
           ActionCachedContext context =
               new ActionCachedContext() {
                 @Override
                 public ExtendedEventHandler getEventHandler() {
-                  return contextEventHandler;
+                  return reporter;
                 }
 
                 @Override
@@ -947,7 +919,6 @@ public final class SkyframeActionExecutor {
         actionLogBufferPathGenerator.generate(
             ArtifactPathResolver.createPathResolver(
                 actionFileSystem, executorEngine.getExecRoot()));
-    ExtendedEventHandler eventHandler = selectEventHandler(action);
     ActionExecutionContext actionExecutionContext =
         ActionExecutionContext.forInputDiscovery(
             executorEngine,
@@ -957,7 +928,7 @@ public final class SkyframeActionExecutor {
             rewindingEnabled,
             lostInputsCheck(actionFileSystem, action, outputService),
             fileOutErr,
-            eventHandler,
+            reporter,
             clientEnv,
             env,
             actionFileSystem,
@@ -975,7 +946,7 @@ public final class SkyframeActionExecutor {
       // streams is sufficient.
       setupActionFsFileOutErr(fileOutErr, action);
     }
-    eventHandler.post(new ScanningActionEvent(action));
+    reporter.post(new ScanningActionEvent(action));
 
     ActionExecutionException finalException = null;
     try {
@@ -1019,7 +990,7 @@ public final class SkyframeActionExecutor {
       }
       throw finalException;
     } finally {
-      eventHandler.post(new StoppedScanningActionEvent(action));
+      reporter.post(new StoppedScanningActionEvent(action));
       closeContext(actionExecutionContext, action, finalException);
     }
   }
@@ -1118,9 +1089,7 @@ public final class SkyframeActionExecutor {
       //
       // Progress events that are generated in this class should be posted to env.getListener, while
       // progress events that are generated in the Action implementation are posted to
-      // actionExecutionContext.getEventHandler. The reason for this is action rewinding, in which
-      // case env.getListener may be a ProgressSuppressingEventHandler. See shouldEmitProgressEvents
-      // and rewoundActions.
+      // actionExecutionContext.getEventHandler.
       //
       // It is also unclear why we are posting anything directly to reporter. That probably
       // shouldn't happen.

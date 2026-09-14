@@ -286,6 +286,27 @@ public final class TestResultAggregatorTest {
     assertThat(underTest.aggregateAndReportSummary(false).getWarnings()).hasSize(1);
   }
 
+  @Test
+  public void rewoundTestAction_resultOfReexecutionIgnored() throws Exception {
+    TestResultAggregator underTest = createAggregatorWithTestRuns(1);
+
+    underTest.testEvent(
+        testResult(
+            TestResultData.newBuilder().setStatus(BlazeTestStatus.PASSED),
+            /* locallyCached= */ false));
+
+    // The coverage report action, which depends on the outputs of all test actions, lost one of
+    // them after the summary had been posted. The rewound test action executed again and reported
+    // a second result for the same run.
+    underTest.testEvent(
+        testResult(
+            TestResultData.newBuilder().setStatus(BlazeTestStatus.FAILED),
+            /* locallyCached= */ false));
+
+    assertThat(underTest.aggregateAndReportSummary(false).getStatus())
+        .isEqualTo(BlazeTestStatus.PASSED);
+  }
+
   private TestResultAggregator createAggregatorWithTestRuns(int testRuns) {
     return createAggregatorWithTestRuns(testRuns, /* testVerboseTimeoutWarnings= */ false);
   }

@@ -813,10 +813,8 @@ public class CriticalPathComputerTest extends FoundationTestCase {
     clock.advanceMillis(5);
     computer.actionRewound(new ActionRewoundEvent(consumerFirstStart, clock.nanoTime(), consumer));
 
-    // In a real rewinding case, "producer" would be re-evaluated, and the events for that
-    // re-evaluation would be suppressed. This statement simulates that process by advancing the
-    // clock without any associated events.
-    clock.advanceMillis(10);
+    long producerSecondStart = clock.nanoTime();
+    simulateActionExec(producer, 10);
     simulateActionExec(consumer, 20);
 
     AggregatedCriticalPath criticalPath = computer.aggregate();
@@ -826,6 +824,9 @@ public class CriticalPathComputerTest extends FoundationTestCase {
 
     assertThat(criticalPath.components().get(0).getElapsedTime()).isEqualTo(Duration.ofMillis(20));
     assertThat(criticalPath.components().get(1).getElapsedTime()).isEqualTo(Duration.ofMillis(10));
+    // The producer's component reflects its second execution, which the consumer waited for.
+    assertThat(criticalPath.components().get(1).getStartTimeNanos()).isEqualTo(producerSecondStart);
+    assertThat(criticalPath.getAggregatedElapsedTime()).isEqualTo(Duration.ofMillis(30));
 
     List<CriticalPathComponent> slowest = computer.getSlowestComponents();
     assertThat(slowest).hasSize(2);

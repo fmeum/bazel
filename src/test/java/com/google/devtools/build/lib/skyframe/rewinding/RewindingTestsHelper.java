@@ -694,10 +694,17 @@ public class RewindingTestsHelper {
 
     recorder.assertEvents(
         /* runOnce= */ ImmutableList.of(),
-        /* completedRewound= */ ImmutableList.of("Executing genrule //test:rule1"),
+        /* completedRewound= */ ImmutableList.of(),
         /* failedRewound= */ ImmutableList.of(),
-        /* expectResultReceivedForFailedRewound= */ false,
         /* actionRewindingPostLostInputCounts= */ ImmutableList.of(maxRepeatedLostInputs + 1));
+    // Rule1 is rewound each time rule2 loses its output and emits its events on every execution.
+    recorder.assertEventCounts(
+        "Executing genrule //test:rule1",
+        /* expectedStartedEvents= */ maxRepeatedLostInputs + 1,
+        /* expectedCompletionEvents= */ maxRepeatedLostInputs + 1,
+        /* expectedExecutedEvents= */ maxRepeatedLostInputs + 1,
+        /* expectedResultReceivedEvents= */ maxRepeatedLostInputs + 1,
+        /* expectedRewoundEvents= */ 0);
 
     assertOnlyActionsRewound(rewoundKeys);
     assertThat(Iterables.frequency(rewoundArtifactOwnerLabels(rewoundKeys), "//test:rule1"))
@@ -812,13 +819,14 @@ public class RewindingTestsHelper {
     List<SkyKey> rewoundKeys = collectOrderedRewoundKeys();
     assertThrows(InterruptedException.class, () -> testCase.buildTarget("//test:rule2"));
 
-    assertOutputForStopBeforeRewoundReexecution();
+    // The interrupted re-execution of rule1 doesn't report an ActionExecutedEvent.
+    assertOutputForStopDuringRewoundReexecution(/* rule1ExecutedEvents= */ 1);
 
     assertOnlyActionsRewound(rewoundKeys);
     assertThat(rewoundArtifactOwnerLabels(rewoundKeys)).containsExactly("//test:rule1");
   }
 
-  private void assertOutputForStopBeforeRewoundReexecution() {
+  private void assertOutputForStopDuringRewoundReexecution(int rule1ExecutedEvents) {
     assertThat(getExecutedSpawnDescriptions())
         .containsExactly(
             "Executing genrule //test:rule1",
@@ -827,43 +835,27 @@ public class RewindingTestsHelper {
         .inOrder();
 
     recorder.assertEvents(
-        /* runOnce= */ ImmutableList.of("Executing genrule //test:rule1"),
+        /* runOnce= */ ImmutableList.of(),
         /* completedRewound= */ ImmutableList.of(),
         /* failedRewound= */ ImmutableList.of(),
         /* actionRewindingPostLostInputCounts= */ ImmutableList.of(1));
-    assertThat(
-            recorder.getActionStartedEvents().stream()
-                .map(e -> ActionEventRecorder.progressMessageOrPrettyPrint(e.getAction()))
-                .filter("Executing genrule //test:rule2"::equals)
-                .count())
-        .isEqualTo(1);
-    assertThat(
-            recorder.getActionCompletionEvents().stream()
-                .map(e -> ActionEventRecorder.progressMessageOrPrettyPrint(e.getAction()))
-                .filter("Executing genrule //test:rule2"::equals)
-                .count())
-        .isEqualTo(0);
-    assertThat(
-            recorder.getActionExecutedEvents().stream()
-                .map(e -> ActionEventRecorder.progressMessageOrPrettyPrint(e.getAction()))
-                .filter("Executing genrule //test:rule2"::equals)
-                .count())
-        .isEqualTo(0);
-    assertThat(
-            recorder.getActionResultReceivedEvents().stream()
-                .map(e -> ActionEventRecorder.progressMessageOrPrettyPrint(e.getAction()))
-                .filter("Executing genrule //test:rule2"::equals)
-                .count())
-        .isEqualTo(0);
-    assertThat(
-            recorder.getActionRewoundEvents().stream()
-                .map(
-                    e ->
-                        ActionEventRecorder.progressMessageOrPrettyPrint(
-                            e.getFailedRewoundAction()))
-                .filter("Executing genrule //test:rule2"::equals)
-                .count())
-        .isEqualTo(1);
+    // Rule1 completes, is rewound and starts again, but its second execution doesn't complete
+    // successfully.
+    recorder.assertEventCounts(
+        "Executing genrule //test:rule1",
+        /* expectedStartedEvents= */ 2,
+        /* expectedCompletionEvents= */ 2,
+        /* expectedExecutedEvents= */ rule1ExecutedEvents,
+        /* expectedResultReceivedEvents= */ 1,
+        /* expectedRewoundEvents= */ 0);
+    // Rule2 fails with a lost input and is never executed again.
+    recorder.assertEventCounts(
+        "Executing genrule //test:rule2",
+        /* expectedStartedEvents= */ 1,
+        /* expectedCompletionEvents= */ 0,
+        /* expectedExecutedEvents= */ 0,
+        /* expectedResultReceivedEvents= */ 0,
+        /* expectedRewoundEvents= */ 1);
   }
 
   private static final SpawnResult FAILED_RESULT =
@@ -912,7 +904,8 @@ public class RewindingTestsHelper {
       assertThat(buildFailedException).hasMessageThat().contains(errorDetail);
     }
     testCase.assertContainsError(errorDetail);
-    assertOutputForStopBeforeRewoundReexecution();
+    // The failed re-execution of rule1 reports an ActionExecutedEvent.
+    assertOutputForStopDuringRewoundReexecution(/* rule1ExecutedEvents= */ 2);
     assertOnlyActionsRewound(rewoundKeys);
     assertThat(rewoundArtifactOwnerLabels(rewoundKeys)).containsExactly("//test:rule1");
   }
@@ -1084,10 +1077,18 @@ public class RewindingTestsHelper {
 
     recorder.assertEvents(
         /* runOnce= */ ImmutableList.of(),
-        /* completedRewound= */ ImmutableList.of(
-            "Executing genrule //test:rule1", "Executing genrule //test:rule2"),
+        /* completedRewound= */ ImmutableList.of("Executing genrule //test:rule1"),
         /* failedRewound= */ ImmutableList.of("Executing genrule //test:rule3"),
         /* actionRewindingPostLostInputCounts= */ ImmutableList.of(2));
+    // Rule2 completes, is rewound by rule3, fails with a lost input on its second execution and
+    // completes again on its third.
+    recorder.assertEventCounts(
+        "Executing genrule //test:rule2",
+        /* expectedStartedEvents= */ 3,
+        /* expectedCompletionEvents= */ 2,
+        /* expectedExecutedEvents= */ 2,
+        /* expectedResultReceivedEvents= */ 2,
+        /* expectedRewoundEvents= */ 1);
 
     assertOnlyActionsRewound(rewoundKeys);
     assertThat(rewoundArtifactOwnerLabels(rewoundKeys))

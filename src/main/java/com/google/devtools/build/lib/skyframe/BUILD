@@ -170,7 +170,6 @@ java_library(
         ":prepare_deps_of_targets_under_directory_function",
         ":prepare_deps_of_targets_under_directory_value",
         ":prerequisite_package_function",
-        ":progress_event_suppressing_environment",
         ":project_files_lookup_function",
         ":project_function",
         ":recursive_filesystem_traversal",
@@ -2321,27 +2320,6 @@ java_library(
 )
 
 java_library(
-    name = "progress_event_suppressing_environment",
-    srcs = ["ProgressEventSuppressingEnvironment.java"],
-    deps = [
-        ":progress_suppressing_event_handler",
-        "//src/main/java/com/google/devtools/build/skyframe:skyframe-objects",
-        "//src/main/java/com/google/devtools/build/skyframe:version",
-        "//third_party/java/guava:concurrent",
-        "//third_party/java/jsr305_annotations",
-    ],
-)
-
-java_library(
-    name = "progress_suppressing_event_handler",
-    srcs = ["ProgressSuppressingEventHandler.java"],
-    deps = [
-        "//src/main/java/com/google/devtools/build/lib/events",
-        "//src/main/java/com/google/devtools/build/lib/remote/common:lost_inputs_event",
-    ],
-)
-
-java_library(
     name = "recursive_directory_traversal_function",
     srcs = ["RecursiveDirectoryTraversalFunction.java"],
     deps = [
@@ -2658,7 +2636,6 @@ java_library(
         ":action_execution_value",
         ":action_output_metadata_store",
         ":metadata_consumer_for_metrics",
-        ":progress_suppressing_event_handler",
         ":track_source_directories_flag",
         ":tree_artifact_value",
         "//src/main/java/com/google/devtools/build/lib/actions",

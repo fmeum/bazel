@@ -33,6 +33,7 @@ import com.google.devtools.build.lib.remote.util.IntegrationTestUtils.WorkerInst
 import com.google.devtools.build.lib.runtime.BlazeModule;
 import com.google.devtools.build.lib.runtime.BlazeRuntime;
 import com.google.devtools.build.lib.runtime.BlockWaitingModule;
+import com.google.devtools.build.lib.runtime.BuildSummaryStatsModule;
 import com.google.devtools.build.lib.runtime.WorkspaceBuilder;
 import com.google.devtools.build.lib.testutil.ActionEventRecorder;
 import com.google.devtools.build.lib.testutil.TestConstants;
@@ -74,6 +75,9 @@ public final class RewindingTest extends BuildIntegrationTestCase {
     return super.getRuntimeBuilder()
         .addBlazeModule(new RemoteModule())
         .addBlazeModule(new BlockWaitingModule())
+        // Registers the CriticalPathComputer for additional assurance that it can handle rewound
+        // actions.
+        .addBlazeModule(new BuildSummaryStatsModule())
         .addBlazeModule(new IncludeScanningModule())
         .addBlazeModule(helper.makeControllableActionStrategyModule("remote", "standalone"))
         .addBlazeModule(helper.getLostOutputsModule())
