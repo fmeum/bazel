@@ -129,7 +129,8 @@ public final class BuildEventStreamerTest extends BuildEventStreamerTestBase {
           /* stderr= */ null,
           ErrorTiming.NO_ERROR,
           /* startTime= */ null,
-          /* endTime= */ null);
+          /* endTime= */ null,
+          /* rewindCount= */ 0);
 
   private static class GenericOrderEvent implements BuildEventWithOrderConstraint {
     private final BuildEventId id;
@@ -1425,7 +1426,8 @@ public final class BuildEventStreamerTest extends BuildEventStreamerTestBase {
             /* stderr= */ null,
             ErrorTiming.BEFORE_EXECUTION,
             /* startTime= */ null,
-            /* endTime= */ null);
+            /* endTime= */ null,
+            /* rewindCount= */ 0);
 
     streamer.buildEvent(SUCCESSFUL_ACTION_EXECUTED_EVENT);
     streamer.buildEvent(failedActionExecutedEvent);
@@ -1470,7 +1472,8 @@ public final class BuildEventStreamerTest extends BuildEventStreamerTestBase {
             /* stderr= */ null,
             ErrorTiming.BEFORE_EXECUTION,
             /* startTime= */ null,
-            /* endTime= */ null);
+            /* endTime= */ null,
+            /* rewindCount= */ 0);
 
     streamer.buildEvent(SUCCESSFUL_ACTION_EXECUTED_EVENT);
     streamer.buildEvent(failedActionExecutedEvent);

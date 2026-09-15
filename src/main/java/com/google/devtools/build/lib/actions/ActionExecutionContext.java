@@ -240,6 +240,7 @@ public class ActionExecutionContext implements Closeable, ActionContext.ActionCo
   private final ThreadStateReceiver threadStateReceiverForMetrics;
   private final boolean fileSystemSupportsInputDiscovery;
   private final boolean bustCaches;
+  private final int rewindCount;
 
   private ActionExecutionContext(
       Executor executor,
@@ -258,7 +259,8 @@ public class ActionExecutionContext implements Closeable, ActionContext.ActionCo
       SyscallCache syscallCache,
       ThreadStateReceiver threadStateReceiverForMetrics,
       boolean fileSystemSupportsInputDiscovery,
-      boolean bustCaches) {
+      boolean bustCaches,
+      int rewindCount) {
     this.inputMetadataProvider = inputMetadataProvider;
     this.actionInputPrefetcher = actionInputPrefetcher;
     this.actionKeyContext = actionKeyContext;
@@ -279,6 +281,7 @@ public class ActionExecutionContext implements Closeable, ActionContext.ActionCo
     this.syscallCache = syscallCache;
     this.fileSystemSupportsInputDiscovery = fileSystemSupportsInputDiscovery;
     this.bustCaches = bustCaches;
+    this.rewindCount = rewindCount;
   }
 
   public ActionExecutionContext(
@@ -313,7 +316,8 @@ public class ActionExecutionContext implements Closeable, ActionContext.ActionCo
         syscallCache,
         threadStateReceiverForMetrics,
         /* fileSystemSupportsInputDiscovery= */ false,
-        /* bustCaches= */ false);
+        /* bustCaches= */ false,
+        /* rewindCount= */ 0);
   }
 
   public ActionExecutionContext(
@@ -331,7 +335,8 @@ public class ActionExecutionContext implements Closeable, ActionContext.ActionCo
       DiscoveredModulesPruner discoveredModulesPruner,
       SyscallCache syscallCache,
       ThreadStateReceiver threadStateReceiverForMetrics,
-      boolean bustCaches) {
+      boolean bustCaches,
+      int rewindCount) {
     this(
         executor,
         inputMetadataProvider,
@@ -349,7 +354,8 @@ public class ActionExecutionContext implements Closeable, ActionContext.ActionCo
         syscallCache,
         threadStateReceiverForMetrics,
         /* fileSystemSupportsInputDiscovery= */ false,
-        bustCaches);
+        bustCaches,
+        rewindCount);
   }
 
   public static ActionExecutionContext forInputDiscovery(
@@ -367,7 +373,8 @@ public class ActionExecutionContext implements Closeable, ActionContext.ActionCo
       DiscoveredModulesPruner discoveredModulesPruner,
       SyscallCache syscalls,
       ThreadStateReceiver threadStateReceiverForMetrics,
-      boolean fileSystemSupportsInputDiscovery) {
+      boolean fileSystemSupportsInputDiscovery,
+      int rewindCount) {
     return new ActionExecutionContext(
         executor,
         actionInputFileCache,
@@ -385,7 +392,8 @@ public class ActionExecutionContext implements Closeable, ActionContext.ActionCo
         syscalls,
         threadStateReceiverForMetrics,
         fileSystemSupportsInputDiscovery,
-        /* bustCaches= */ false);
+        /* bustCaches= */ false,
+        rewindCount);
   }
 
   public boolean bustCaches() {
@@ -428,6 +436,15 @@ public class ActionExecutionContext implements Closeable, ActionContext.ActionCo
 
   public boolean isRewindingEnabled() {
     return rewindingEnabled;
+  }
+
+  /**
+   * Returns how many times the action was rewound before this execution, i.e. how many earlier
+   * executions of it in this build completed before a later action lost one of their outputs. Zero
+   * for the first execution.
+   */
+  public int getRewindCount() {
+    return rewindCount;
   }
 
   public void checkForLostInputs() throws LostInputsActionExecutionException {
@@ -612,7 +629,8 @@ public class ActionExecutionContext implements Closeable, ActionContext.ActionCo
         syscallCache,
         threadStateReceiverForMetrics,
         fileSystemSupportsInputDiscovery,
-        bustCaches);
+        bustCaches,
+        rewindCount);
   }
 
   /**
@@ -667,7 +685,8 @@ public class ActionExecutionContext implements Closeable, ActionContext.ActionCo
         syscallCache,
         threadStateReceiverForMetrics,
         fileSystemSupportsInputDiscovery,
-        bustCaches);
+        bustCaches,
+        rewindCount);
   }
 
   /**

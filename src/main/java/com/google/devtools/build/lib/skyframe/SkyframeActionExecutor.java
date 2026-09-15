@@ -25,7 +25,6 @@ import static java.lang.Math.min;
 import com.google.common.base.Stopwatch;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
-import com.google.common.collect.Sets;
 import com.google.common.flogger.GoogleLogger;
 import com.google.devtools.build.lib.actions.Action;
 import com.google.devtools.build.lib.actions.ActionAnalysisMetadata;
@@ -125,7 +124,6 @@ import java.io.IOException;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.Semaphore;
@@ -214,11 +212,11 @@ public final class SkyframeActionExecutor {
   private ConcurrentMap<OwnerlessArtifactWrapper, ActionExecutionState> buildActionMap;
 
   // We also keep track of actions which were rewound this build, possibly from a
-  // previously-completed state. Consumers of action-related event streams must support receiving
-  // more than one event of each kind (e.g. ActionStartedEvent, ActionCompletionEvent,
-  // ActionExecutedEvent, SpawnExecutedEvent) per action and build and may use wasRewound to learn
-  // about the actions that could send duplicate events.
-  private Set<OwnerlessArtifactWrapper> rewoundActions;
+  // previously-completed state, and how many times. Consumers of action-related event streams must
+  // support receiving more than one event of each kind (e.g. ActionStartedEvent,
+  // ActionCompletionEvent, ActionExecutedEvent, SpawnExecutedEvent) per action and build and may
+  // use wasRewound and getRewindCount to tell the executions apart.
+  private ConcurrentMap<OwnerlessArtifactWrapper, Integer> rewindCounts;
 
   private ActionOutputDirectoryHelper outputDirectoryHelper;
 
@@ -332,7 +330,7 @@ public final class SkyframeActionExecutor {
 
     // Start with a new map each build so there's no issue with internal resizing.
     this.buildActionMap = new ConcurrentHashMap<>();
-    this.rewoundActions = Sets.newConcurrentHashSet();
+    this.rewindCounts = new ConcurrentHashMap<>();
     this.hadExecutionError.set(false);
     this.actionCacheChecker = checkNotNull(actionCacheChecker);
     // Don't cache possibly stale data from the last build.
@@ -498,7 +496,7 @@ public final class SkyframeActionExecutor {
     this.executorEngine = null;
     this.outputService = null;
     this.buildActionMap = null;
-    this.rewoundActions = null;
+    this.rewindCounts = null;
     this.actionCacheChecker = null;
     this.bustActionCachesTarget = null;
     this.outputDirectoryHelper = null;
@@ -521,7 +519,18 @@ public final class SkyframeActionExecutor {
     Artifact primaryOutput = action.getPrimaryOutput();
     // Only GrepIncludesAction (from include scanning) has a null primary output.
     return primaryOutput != null
-        && rewoundActions.contains(new OwnerlessArtifactWrapper(primaryOutput));
+        && rewindCounts.containsKey(new OwnerlessArtifactWrapper(primaryOutput));
+  }
+
+  /**
+   * Returns how many times the given action was rewound during the current build, which
+   * distinguishes the BEP ids of the events of its executions.
+   */
+  public int getRewindCount(ActionAnalysisMetadata action) {
+    Artifact primaryOutput = action.getPrimaryOutput();
+    return primaryOutput == null
+        ? 0
+        : rewindCounts.getOrDefault(new OwnerlessArtifactWrapper(primaryOutput), 0);
   }
 
   /**
@@ -554,7 +563,7 @@ public final class SkyframeActionExecutor {
    * <p>If an action is rewound multiple times, it is only counted once.
    */
   public int getRewoundActionCount() {
-    return rewoundActions.size();
+    return rewindCounts.size();
   }
 
   /**
@@ -587,14 +596,14 @@ public final class SkyframeActionExecutor {
       // ActionTemplate does not have an ActionExecutionState and it is not executed, so we just
       // mark it as rewound.
       checkState(dep instanceof ActionTemplate, "dep of unexpected type %s", dep);
-      rewoundActions.add(ownerlessArtifactWrapper);
+      rewindCounts.merge(ownerlessArtifactWrapper, 1, Integer::sum);
       return;
     }
     ActionExecutionState actionExecutionState = buildActionMap.get(ownerlessArtifactWrapper);
     if (actionExecutionState != null) {
       actionExecutionState.obsolete(failedKey, buildActionMap, ownerlessArtifactWrapper);
     }
-    rewoundActions.add(ownerlessArtifactWrapper);
+    rewindCounts.merge(ownerlessArtifactWrapper, 1, Integer::sum);
     if (!actionFileSystemType().inMemoryFileSystem()) {
       outputDirectoryHelper.invalidateTreeArtifactDirectoryCreation(action.getOutputs());
     }
@@ -717,7 +726,8 @@ public final class SkyframeActionExecutor {
         discoveredModulesPruner,
         syscallCache,
         threadStateReceiverFactory.apply(actionLookupData),
-        bustActionCache);
+        bustActionCache,
+        getRewindCount(action));
   }
 
   private static void closeContext(
@@ -809,6 +819,11 @@ public final class SkyframeActionExecutor {
                 @Override
                 public <T extends ActionContext> T getContext(Class<? extends T> type) {
                   return executorEngine.getContext(type);
+                }
+
+                @Override
+                public int getRewindCount() {
+                  return SkyframeActionExecutor.this.getRewindCount(action);
                 }
               };
           boolean recordActionCacheHit = notify.actionCacheHit(context);
@@ -935,7 +950,8 @@ public final class SkyframeActionExecutor {
             discoveredModulesPruner,
             syscallCache,
             threadStateReceiverFactory.apply(actionLookupData),
-            outputService.actionFileSystemType().supportsInputDiscovery());
+            outputService.actionFileSystemType().supportsInputDiscovery(),
+            getRewindCount(action));
     if (actionFileSystem != null) {
       updateActionFileSystemContext(
           action,
@@ -1931,7 +1947,7 @@ public final class SkyframeActionExecutor {
     }
   }
 
-  private static void reportActionExecution(
+  private void reportActionExecution(
       ExtendedEventHandler eventHandler,
       Path primaryOutputPath,
       @Nullable FileArtifactValue primaryOutputMetadata,
@@ -1975,7 +1991,8 @@ public final class SkyframeActionExecutor {
             stderr,
             errorTiming,
             firstStartTime.equals(Instant.MAX) ? null : firstStartTime,
-            lastEndTime.equals(Instant.MIN) ? null : lastEndTime));
+            lastEndTime.equals(Instant.MIN) ? null : lastEndTime,
+            getRewindCount(action)));
   }
 
   /**

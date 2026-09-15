@@ -60,9 +60,10 @@ public class ExclusiveTestStrategy implements TestActionContext {
       Path execRoot,
       TestRunnerAction action,
       TestResultData cachedResult,
-      ImmutableMultimap<String, Path> testOutputs)
+      ImmutableMultimap<String, Path> testOutputs,
+      int rewindCount)
       throws IOException {
-    return parent.newCachedTestResult(execRoot, action, cachedResult, testOutputs);
+    return parent.newCachedTestResult(execRoot, action, cachedResult, testOutputs, rewindCount);
   }
 
   @Override

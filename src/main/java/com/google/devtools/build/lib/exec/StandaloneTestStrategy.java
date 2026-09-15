@@ -237,8 +237,10 @@ public class StandaloneTestStrategy extends TestStrategy {
             action,
             data,
             lastAttempt.testOutputs(),
-            false,
-            standaloneTestResult.primarySystemFailure());
+            /* cached= */ false,
+            /* execRoot= */ null,
+            standaloneTestResult.primarySystemFailure(),
+            actionExecutionContext.getRewindCount());
     postTestResult(actionExecutionContext, result);
   }
 
@@ -287,7 +289,13 @@ public class StandaloneTestStrategy extends TestStrategy {
         .getEventHandler()
         .post(
             TestAttempt.forExecutedTestResult(
-                action, data, attemptId, testOutputs, result.executionInfo(), isLastAttempt));
+                action,
+                data,
+                attemptId,
+                actionExecutionContext.getRewindCount(),
+                testOutputs,
+                result.executionInfo(),
+                isLastAttempt));
     processTestOutput(actionExecutionContext, data, action.getTestName(), renamedTestLog);
     return new StandaloneProcessedAttemptResult(data, testOutputs);
   }
@@ -541,9 +549,16 @@ public class StandaloneTestStrategy extends TestStrategy {
       Path execRoot,
       TestRunnerAction action,
       TestResultData cachedResult,
-      ImmutableMultimap<String, Path> testOutputs) {
+      ImmutableMultimap<String, Path> testOutputs,
+      int rewindCount) {
     return new TestResult(
-        action, cachedResult, testOutputs, /* cached= */ true, execRoot, /* systemFailure= */ null);
+        action,
+        cachedResult,
+        testOutputs,
+        /* cached= */ true,
+        execRoot,
+        /* systemFailure= */ null,
+        rewindCount);
   }
 
   @VisibleForTesting

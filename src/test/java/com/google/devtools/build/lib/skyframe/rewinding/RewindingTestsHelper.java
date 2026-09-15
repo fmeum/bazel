@@ -3821,6 +3821,20 @@ public class RewindingTestsHelper {
             countEventsFor(
                 action, recorder.getActionExecutedEvents(), ActionExecutedEvent::getAction))
         .isEqualTo(expectedExecutedEvents);
+    // Each executed event carries the number of times the action was rewound before the execution
+    // it reports on, which distinguishes the BEP ids of the events of the action's executions.
+    assertWithMessage("rewind counts of actionExecutedEvents for \"%s\"", action)
+        .that(
+            recorder.getActionExecutedEvents().stream()
+                .filter(
+                    e ->
+                        action.equals(
+                            ActionEventRecorder.progressMessageOrPrettyPrint(e.getAction())))
+                .map(e -> e.getEventId().getActionCompleted().getRewindCount())
+                .collect(toImmutableList()))
+        .containsExactlyElementsIn(
+            IntStream.range(0, expectedExecutedEvents).boxed().collect(toImmutableList()))
+        .inOrder();
     assertWithMessage("actionResultReceivedEvents for \"%s\"", action)
         .that(
             countEventsFor(

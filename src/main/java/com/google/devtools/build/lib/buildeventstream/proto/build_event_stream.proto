@@ -180,6 +180,12 @@ message BuildEventId {
     string label = 2;
     // Optional, the id of the configuration of the action owner.
     ConfigurationId configuration = 3;
+    // How many times the action was rewound before the execution this event
+    // belongs to, i.e. how many earlier executions of the action in this
+    // invocation completed before a later action lost one of their outputs
+    // and the action executed again. Unset for the first execution, so that
+    // the ids of actions that are never rewound are unaffected.
+    int32 rewind_count = 4;
   }
 
   // Identifier of an event reporting an event associated with an unconfigured
@@ -211,6 +217,10 @@ message BuildEventId {
     int32 run = 2;
     int32 shard = 3;
     int32 attempt = 4;
+    // How many times the test action was rewound before the execution this
+    // attempt belongs to, see ActionCompletedId.rewind_count. Attempts are
+    // numbered from 1 in every execution.
+    int32 rewind_count = 6;
   }
 
   // Identifier of an event reporting progress of an individual test run.

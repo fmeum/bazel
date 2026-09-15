@@ -216,8 +216,20 @@ public final class BuildEventIdUtil {
 
   public static BuildEventId actionCompleted(
       PathFragment path, @Nullable Label label, @Nullable String configurationChecksum) {
+    return actionCompleted(path, label, configurationChecksum, /* rewindCount= */ 0);
+  }
+
+  /**
+   * @param rewindCount how many times the action was rewound before the execution the event belongs
+   *     to, see {@link ActionCompletedId#getRewindCount}
+   */
+  public static BuildEventId actionCompleted(
+      PathFragment path,
+      @Nullable Label label,
+      @Nullable String configurationChecksum,
+      int rewindCount) {
     ActionCompletedId.Builder actionId =
-        ActionCompletedId.newBuilder().setPrimaryOutput(path.toString());
+        ActionCompletedId.newBuilder().setPrimaryOutput(path.toString()).setRewindCount(rewindCount);
     if (label != null) {
       actionId.setLabel(label.toString());
     }
@@ -235,6 +247,20 @@ public final class BuildEventIdUtil {
 
   public static BuildEventId testResult(
       Label target, int run, int shard, int attempt, BuildEventId configuration) {
+    return testResult(target, run, shard, attempt, /* rewindCount= */ 0, configuration);
+  }
+
+  /**
+   * @param rewindCount how many times the test action was rewound before the execution the attempt
+   *     belongs to, see {@link BuildEventId.TestResultId#getRewindCount}
+   */
+  public static BuildEventId testResult(
+      Label target,
+      int run,
+      int shard,
+      int attempt,
+      int rewindCount,
+      BuildEventId configuration) {
     BuildEventId.ConfigurationId configId = configuration.getConfiguration();
     BuildEventId.TestResultId resultId =
         BuildEventId.TestResultId.newBuilder()
@@ -243,6 +269,7 @@ public final class BuildEventIdUtil {
             .setRun(run + 1)
             .setShard(shard + 1)
             .setAttempt(attempt)
+            .setRewindCount(rewindCount)
             .build();
     return BuildEventId.newBuilder().setTestResult(resultId).build();
   }
