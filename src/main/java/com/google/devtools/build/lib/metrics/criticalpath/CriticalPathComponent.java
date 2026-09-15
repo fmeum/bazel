@@ -44,6 +44,7 @@ public class CriticalPathComponent {
   private long startNanos;
   private long finishNanos = 0;
   private volatile boolean isRunning = false;
+  private volatile boolean finished = false;
 
   /** The longest aggregate runtime of this component and its critical path. */
   private long aggregatedElapsedTime = 0;
@@ -82,21 +83,14 @@ public class CriticalPathComponent {
 
   /**
    * Record the elapsed time in case the new duration is greater. This method could be called
-   * multiple times in the following cases:
-   *
-   * <ol>
-   *   <li>Shared actions run concurrently, and the one that really gets executed takes more time to
-   *       send the finish event and the one that was a cache hit manages to send the event before.
-   *   <li>An action gets rewound, and is later reattempted.
-   * </ol>
-   *
-   * <p>In both these cases we overwrite the components' times if the later call specifies a greater
+   * multiple times if shared actions run concurrently, and the one that really gets executed takes
+   * more time to send the finish event and the one that was a cache hit manages to send the event
+   * before. In this case we overwrite the components' times if the later call specifies a greater
    * duration.
    *
-   * <p>In the former case the logic is known to be incorrect, as other actions that depend on this
-   * action will not necessarily use the correct getElapsedTimeNanos(). But we do not want to block
-   * action execution because of this. So in certain conditions we might see another path as the
-   * critical path.
+   * <p>This logic is known to be incorrect, as other actions that depend on this action will not
+   * necessarily use the correct getElapsedTimeNanos(). But we do not want to block action execution
+   * because of this. So in certain conditions we might see another path as the critical path.
    *
    * <p>In addition, in the case of sequential spawns, Aggregate the last phase's duration values
    * with the total spawn metrics. To make sure not to add the last phase's duration multiple times,
@@ -104,6 +98,7 @@ public class CriticalPathComponent {
    */
   public synchronized void finishActionExecution(
       long startNanos, long finishNanos, String finalizeReason) {
+    finished = true;
     if (isRunning || finishNanos - startNanos > getElapsedTimeNanos()) {
       this.startNanos = startNanos;
       this.finishNanos = finishNanos;
@@ -141,12 +136,11 @@ public class CriticalPathComponent {
 
   /**
    * This is called by {@link CriticalPathComputer#actionStarted} to start running the action. The
-   * three scenarios where this would occur is:
+   * two scenarios where this would occur is:
    *
    * <ol>
    *   <li>A new CriticalPathComponent is created and should start running.
    *   <li>A CriticalPathComponent has been created with discover inputs and beginning to execute.
-   *   <li>An action was rewound and starts again.
    * </ol>
    */
   void startRunning() {
@@ -155,6 +149,15 @@ public class CriticalPathComponent {
 
   public boolean isRunning() {
     return isRunning;
+  }
+
+  /**
+   * Returns whether an execution of the action has finished, successfully or not, or the action
+   * was found to be cached or change pruned. If the action starts again afterwards, e.g. because it
+   * was rewound, that execution is tracked by a new component.
+   */
+  boolean hasFinished() {
+    return finished;
   }
 
   public String prettyPrintAction() {

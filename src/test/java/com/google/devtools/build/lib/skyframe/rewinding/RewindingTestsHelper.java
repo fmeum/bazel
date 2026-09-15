@@ -489,6 +489,21 @@ public class RewindingTestsHelper {
     runDependentActionsReevaluated(
         (spawn, context) ->
             createLostInputsExecException(context, getIntermediate1And2LostInputs(spawn)));
+
+    // The critical path runs through both executions of rule2 and of one of its inputs: rule2's
+    // second execution waited for the re-execution of the input, which ran because rule2's first
+    // execution failed after the input's first execution.
+    assertThat(recorder.getCriticalPath()).isNotNull();
+    ImmutableList<String> criticalPath =
+        recorder.getCriticalPath().components().stream()
+            .map(c -> ActionEventRecorder.progressMessageOrPrettyPrint(c.getAction()))
+            .collect(toImmutableList());
+    assertThat(criticalPath).hasSize(5);
+    assertThat(criticalPath.get(0)).isEqualTo("Executing genrule //test:consume_output");
+    assertThat(criticalPath.get(1)).isEqualTo("Executing genrule //test:rule2");
+    assertThat(criticalPath.get(2)).matches("Executing genrule //test:rule1_[12]");
+    assertThat(criticalPath.get(3)).isEqualTo("Executing genrule //test:rule2");
+    assertThat(criticalPath.get(4)).matches("Executing genrule //test:rule1_[12]");
   }
 
   static ImmutableList<ActionInput> getIntermediate1And2LostInputs(Spawn spawn) {

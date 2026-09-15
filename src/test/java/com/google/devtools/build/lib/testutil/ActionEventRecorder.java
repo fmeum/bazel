@@ -26,6 +26,8 @@ import com.google.devtools.build.lib.actions.ActionExecutionMetadata;
 import com.google.devtools.build.lib.actions.ActionResultReceivedEvent;
 import com.google.devtools.build.lib.actions.ActionStartedEvent;
 import com.google.devtools.build.lib.actions.CachedActionEvent;
+import com.google.devtools.build.lib.buildtool.buildevent.CriticalPathEvent;
+import com.google.devtools.build.lib.metrics.criticalpath.AggregatedCriticalPath;
 import com.google.devtools.build.lib.skyframe.rewinding.ActionRewoundEvent;
 import com.google.devtools.build.lib.skyframe.rewinding.PostableActionRewindingStats;
 import java.util.ArrayList;
@@ -33,6 +35,7 @@ import java.util.Collections;
 import java.util.List;
 import java.util.function.Consumer;
 import java.util.function.Function;
+import javax.annotation.Nullable;
 
 /** Records various action-related events for tests. */
 public final class ActionEventRecorder {
@@ -58,6 +61,8 @@ public final class ActionEventRecorder {
     actionRewoundEventSubscriber = subscriber;
   }
 
+  @Nullable private volatile AggregatedCriticalPath criticalPath;
+
   public List<ActionStartedEvent> getActionStartedEvents() {
     return actionStartedEvents;
   }
@@ -76,6 +81,20 @@ public final class ActionEventRecorder {
 
   public List<ActionRewoundEvent> getActionRewoundEvents() {
     return actionRewoundEvents;
+  }
+
+  /**
+   * Returns the critical path of the last build, or null if no {@link CriticalPathEvent} was
+   * posted.
+   */
+  @Nullable
+  public AggregatedCriticalPath getCriticalPath() {
+    return criticalPath;
+  }
+
+  @Subscribe
+  void criticalPath(CriticalPathEvent event) {
+    criticalPath = event.getCriticalPath();
   }
 
   public List<PostableActionRewindingStats> getActionRewindingStatsPosts() {

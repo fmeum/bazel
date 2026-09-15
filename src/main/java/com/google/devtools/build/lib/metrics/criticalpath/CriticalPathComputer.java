@@ -44,7 +44,9 @@ import java.time.Duration;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
+import java.util.Queue;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BinaryOperator;
@@ -80,9 +82,31 @@ public class CriticalPathComputer {
         return a.getAggregatedElapsedTime().compareTo(b.getAggregatedElapsedTime()) < 0 ? b : a;
       };
 
-  // outputArtifactToComponent is accessed from multiple event handlers.
+  // outputArtifactToComponent is accessed from multiple event handlers. It points at the component
+  // of the latest execution of the generating action.
   private final ConcurrentMap<Artifact, CriticalPathComponent> outputArtifactToComponent =
       new ConcurrentHashMap<>();
+
+  /**
+   * Components of earlier executions of actions that executed again, e.g. after they were rewound.
+   * They are no longer reachable through {@link #outputArtifactToComponent}.
+   */
+  private final Queue<CriticalPathComponent> supersededComponents = new ConcurrentLinkedQueue<>();
+
+  /**
+   * The components of failed executions that rewound an action, keyed by the action's primary
+   * output. The next execution of the action depends on them.
+   */
+  private final ConcurrentMap<Artifact, Queue<CriticalPathComponent>> rewindTriggers =
+      new ConcurrentHashMap<>();
+
+  /**
+   * Components that an execution depends on in addition to the generating actions of its inputs:
+   * the earlier execution of the same action and the failed executions that rewound it. Consumed
+   * when the execution finishes.
+   */
+  private final ConcurrentMap<CriticalPathComponent, ImmutableList<CriticalPathComponent>>
+      executionPredecessors = new ConcurrentHashMap<>();
   private final ActionKeyContext actionKeyContext;
   @Nullable private final WalkableGraph graph;
 
@@ -175,7 +199,7 @@ public class CriticalPathComputer {
 
   /** Returns the list of components using the most memory. */
   public List<CriticalPathComponent> getLargestMemoryComponents() {
-    return uniqueActions()
+    return uniqueComponents()
         .collect(
             Comparators.greatest(
                 LARGEST_MEMORY_COMPONENTS_SIZE,
@@ -186,7 +210,7 @@ public class CriticalPathComputer {
 
   /** Returns the list of components with the largest input sizes. */
   public List<CriticalPathComponent> getLargestInputSizeComponents() {
-    return uniqueActions()
+    return uniqueComponents()
         .collect(
             Comparators.greatest(
                 LARGEST_INPUT_SIZE_COMPONENTS_SIZE,
@@ -196,7 +220,7 @@ public class CriticalPathComputer {
 
   /** Returns the list of components with the largest input counts. */
   public List<CriticalPathComponent> getLargestInputCountComponents() {
-    return uniqueActions()
+    return uniqueComponents()
         .collect(
             Comparators.greatest(
                 LARGEST_INPUT_COUNT_COMPONENTS_SIZE,
@@ -206,17 +230,20 @@ public class CriticalPathComputer {
 
   /** Returns the list of slowest components. */
   public List<CriticalPathComponent> getSlowestComponents() {
-    return uniqueActions()
+    return uniqueComponents()
         .collect(
             Comparators.greatest(
                 SLOWEST_COMPONENTS_SIZE,
                 Comparator.comparingLong(CriticalPathComponent::getElapsedTimeNanos)));
   }
 
-  private Stream<CriticalPathComponent> uniqueActions() {
-    return outputArtifactToComponent.entrySet().stream()
-        .filter(e -> e.getValue().isPrimaryOutput(e.getKey()))
-        .map(Map.Entry::getValue);
+  /** Returns one component per execution of an action. */
+  private Stream<CriticalPathComponent> uniqueComponents() {
+    return Stream.concat(
+        outputArtifactToComponent.entrySet().stream()
+            .filter(e -> e.getValue().isPrimaryOutput(e.getKey()))
+            .map(Map.Entry::getValue),
+        supersededComponents.stream());
   }
 
   /** Creates a CriticalPathComponent and adds the duration of input discovery and changes phase. */
@@ -231,7 +258,10 @@ public class CriticalPathComputer {
 
   /**
    * Record an action that has started to run. If the CriticalPathComponent has not been created,
-   * initialize it and then start running.
+   * initialize it and then start running. If an earlier execution of the action has finished, the
+   * action is executing again (e.g. because it was rewound after a later action lost one of its
+   * outputs), which is tracked by a new component so that both executions can be on the critical
+   * path.
    *
    * @param event information about the started action
    */
@@ -239,7 +269,44 @@ public class CriticalPathComputer {
   @AllowConcurrentEvents
   public void actionStarted(ActionStartedEvent event) throws InterruptedException {
     Action action = event.getAction();
-    tryAddComponent(createComponent(action, event.getNanoTimeStart())).startRunning();
+    CriticalPathComponent component = createComponent(action, event.getNanoTimeStart());
+    CriticalPathComponent stored = tryAddComponent(component);
+    if (stored == component || !stored.hasFinished()) {
+      stored.startRunning();
+      return;
+    }
+    startNewExecution(stored, component);
+    component.startRunning();
+  }
+
+  /**
+   * Makes {@code component} the current component of its action, superseding {@code previous},
+   * the component of the action's earlier execution.
+   *
+   * <p>The new execution depends on the earlier one and on the failed executions that rewound the
+   * action, which is recorded when it finishes.
+   */
+  private void startNewExecution(
+      CriticalPathComponent previous, CriticalPathComponent component) {
+    Action action = component.getAction();
+    for (Artifact output : action.getOutputs()) {
+      outputArtifactToComponent.put(output, component);
+      // Parent tree artifacts of template expansion outputs point at the longest sibling (see
+      // finalizeActionStat). Keep them pointing at the latest execution of this action.
+      Artifact parent = output.hasParent() ? output.getParent() : null;
+      while (parent != null) {
+        outputArtifactToComponent.replace(parent, previous, component);
+        parent = parent.hasParent() ? parent.getParent() : null;
+      }
+    }
+    supersededComponents.add(previous);
+    ImmutableList.Builder<CriticalPathComponent> predecessors = ImmutableList.builder();
+    predecessors.add(previous);
+    Queue<CriticalPathComponent> triggers = rewindTriggers.remove(action.getPrimaryOutput());
+    if (triggers != null) {
+      predecessors.addAll(triggers);
+    }
+    executionPredecessors.put(component, predecessors.build());
   }
 
   /**
@@ -339,6 +406,11 @@ public class CriticalPathComputer {
   /**
    * Record that the failed rewound action is no longer running. The action may or may not start
    * again later.
+   *
+   * <p>The failed execution keeps its dependencies on the generating actions of its inputs, and the
+   * actions that are rewound to regenerate the lost inputs execute again because of it, so their
+   * next execution depends on the failed execution. This keeps the time lost to rewinding on the
+   * critical path.
    */
   @Subscribe
   @AllowConcurrentEvents
@@ -346,10 +418,20 @@ public class CriticalPathComputer {
     Action action = event.getFailedRewoundAction();
     CriticalPathComponent component =
         Preconditions.checkNotNull(outputArtifactToComponent.get(action.getPrimaryOutput()));
-    component.finishActionExecution(
+    finalizeActionStat(
         event.getRelativeActionStartTimeNanos(),
         event.getRelativeActionFinishTimeNanos(),
+        action,
+        component,
         "action rewound");
+    for (ActionAnalysisMetadata dep : event.getDepsToRewind()) {
+      Artifact primaryOutput = dep.getPrimaryOutput();
+      if (primaryOutput != null) {
+        rewindTriggers
+            .computeIfAbsent(primaryOutput, unused -> new ConcurrentLinkedQueue<>())
+            .add(component);
+      }
+    }
   }
 
   /** Maximum critical path component found during the build. */
@@ -365,6 +447,14 @@ public class CriticalPathComputer {
       String finalizeReason) {
     for (Artifact input : action.getInputs().toList()) {
       addArtifactDependency(component, input, finishTimeNanos);
+    }
+    ImmutableList<CriticalPathComponent> predecessors = executionPredecessors.remove(component);
+    if (predecessors != null) {
+      for (CriticalPathComponent predecessor : predecessors) {
+        if (!predecessor.isRunning()) {
+          component.addDepInfo(predecessor, finishTimeNanos);
+        }
+      }
     }
     if (Duration.ofNanos(finishTimeNanos - startTimeNanos).compareTo(Duration.ofMillis(-5)) < 0) {
       // See note in {@link Clock#nanoTime} about non increasing subsequent #nanoTime calls.

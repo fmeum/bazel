@@ -106,12 +106,15 @@ java_library(
     srcs = ["ActionEventRecorder.java"],
     deps = [
         "//src/main/java/com/google/devtools/build/lib/actions",
+        "//src/main/java/com/google/devtools/build/lib/buildtool/buildevent",
+        "//src/main/java/com/google/devtools/build/lib/metrics/criticalpath",
         "//src/main/java/com/google/devtools/build/lib/skyframe/proto:action_rewind_event_java_proto",
         "//src/main/java/com/google/devtools/build/lib/skyframe/rewinding",
         "//src/main/java/com/google/devtools/build/lib/skyframe/rewinding:action_rewound_event",
         "//third_party/java/auto:auto_value",
         "//third_party/java/guava:collect",
         "//third_party/java/guava:eventbus",
+        "//third_party/java/jsr305_annotations",
         "//third_party/java/truth",
     ],
 )
