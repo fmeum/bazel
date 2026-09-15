@@ -686,7 +686,11 @@ public class TestRunnerAction extends AbstractAction
               executor
                   .getContext(TestActionContext.class)
                   .newCachedTestResult(
-                      executor.getExecRoot(), this, cachedTestResultData.get(), testOutputs));
+                      executor.getExecRoot(),
+                      this,
+                      cachedTestResultData.get(),
+                      testOutputs,
+                      executor.getRewindCount()));
     } catch (IOException e) {
       logger.atInfo().log("%s", getErrorMessageOnNewCachedTestResultError(e.getMessage()));
       executor

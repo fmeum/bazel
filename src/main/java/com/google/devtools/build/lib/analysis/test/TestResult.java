@@ -45,6 +45,7 @@ public class TestResult implements ExtendedEventHandler.Postable {
   private final TestResultData data;
   private final ImmutableMultimap<String, Path> testOutputs;
   private final boolean cached;
+  private final int rewindCount;
   @Nullable protected final Path execRoot;
   @Nullable private final DetailedExitCode systemFailure;
 
@@ -58,6 +59,8 @@ public class TestResult implements ExtendedEventHandler.Postable {
    *     case everything depending on the execution root is ignored.
    * @param systemFailure Description of the system failure responsible for the test not succeeding;
    *     null if no such failure occurred
+   * @param rewindCount how many times the test action was rewound before the execution this result
+   *     belongs to
    */
   public TestResult(
       TestRunnerAction testAction,
@@ -65,13 +68,15 @@ public class TestResult implements ExtendedEventHandler.Postable {
       ImmutableMultimap<String, Path> testOutputs,
       boolean cached,
       @Nullable Path execRoot,
-      @Nullable DetailedExitCode systemFailure) {
+      @Nullable DetailedExitCode systemFailure,
+      int rewindCount) {
     this.testAction = checkNotNull(testAction);
     this.data = checkNotNull(data);
     this.testOutputs = checkNotNull(testOutputs);
     this.cached = cached;
     this.execRoot = execRoot;
     this.systemFailure = systemFailure;
+    this.rewindCount = rewindCount;
   }
 
   public TestResult(
@@ -80,7 +85,7 @@ public class TestResult implements ExtendedEventHandler.Postable {
       ImmutableMultimap<String, Path> testOutputs,
       boolean cached,
       @Nullable DetailedExitCode systemFailure) {
-    this(testAction, data, testOutputs, cached, null, systemFailure);
+    this(testAction, data, testOutputs, cached, null, systemFailure, /* rewindCount= */ 0);
   }
 
   public static boolean isBlazeTestStatusPassed(BlazeTestStatus status) {
@@ -112,6 +117,14 @@ public class TestResult implements ExtendedEventHandler.Postable {
   }
 
   /**
+   * Returns how many times the test action was rewound before the execution this result belongs
+   * to.
+   */
+  public int getRewindCount() {
+    return rewindCount;
+  }
+
+  /**
    * Returns the list of locally cached test attempts. This method must only be called if {@link
    * #isCached} returns <code>true</code>.
    */
@@ -121,7 +134,8 @@ public class TestResult implements ExtendedEventHandler.Postable {
         TestAttempt.fromCachedTestResult(
             testAction,
             data,
-            1,
+            /* attempt= */ 1,
+            rewindCount,
             testOutputs,
             BuildEventStreamProtos.TestResult.ExecutionInfo.getDefaultInstance(),
             /* lastAttempt= */ true));

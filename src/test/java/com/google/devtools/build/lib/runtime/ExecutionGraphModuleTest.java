@@ -798,6 +798,101 @@ public final class ExecutionGraphModuleTest extends FoundationTestCase {
         .inOrder();
   }
 
+  @Test
+  public void rewoundAction_reexecutionRecordedAsRetryAndDependedOn() throws Exception {
+    // A producer completes, a consumer loses the producer's output and rewinds it, the producer
+    // executes again and the consumer then executes with the recreated output. The consumer's spawn
+    // depends on the re-execution of the producer, which is a retry of its first execution.
+    var buffer = new ByteArrayOutputStream();
+    startLogging(eventBus, buffer, DependencyInfo.ALL);
+    Artifact producerOutput = createOutputArtifact("foo/out");
+    Spawn producerSpawn = new SpawnBuilder().withOwnerPrimaryOutput(producerOutput).build();
+    Spawn consumerSpawn =
+        new SpawnBuilder()
+            .withOwnerPrimaryOutput(createOutputArtifact("bar/out"))
+            .withInput(producerOutput)
+            .build();
+    var producerAction = new ActionsTestUtil.NullAction(producerOutput);
+
+    module.spawnExecuted(
+        new SpawnExecutedEvent(
+            producerSpawn,
+            new FakeActionInputFileCache(),
+            null,
+            new TestFileOutErr(),
+            createLocalSpawnResult(100),
+            Instant.EPOCH,
+            /* spawnIdentifier= */ "producer1"));
+    module.actionComplete(producerCompletion(producerAction));
+    // The consumer fails with a lost input before executing a spawn, so it doesn't report one.
+    module.spawnExecuted(
+        new SpawnExecutedEvent(
+            producerSpawn,
+            new FakeActionInputFileCache(),
+            null,
+            new TestFileOutErr(),
+            createLocalSpawnResult(100),
+            Instant.ofEpochMilli(300),
+            /* spawnIdentifier= */ "producer2"));
+    module.actionComplete(producerCompletion(producerAction));
+    module.spawnExecuted(
+        new SpawnExecutedEvent(
+            consumerSpawn,
+            new FakeActionInputFileCache(),
+            null,
+            new TestFileOutErr(),
+            createRemoteSpawnResult(200),
+            Instant.ofEpochMilli(400),
+            /* spawnIdentifier= */ "consumer"));
+    module.buildComplete(new BuildCompleteEvent(new BuildResult(1000)));
+
+    assertThat(parse(buffer))
+        .containsExactly(
+            executionGraphNodeBuilderForSpawnBuilderSpawn()
+                .setIndex(0)
+                .setMetrics(
+                    ExecutionGraph.Metrics.newBuilder()
+                        .setStartTimestampMillis(0)
+                        .setDurationMillis(100)
+                        .setOtherMillis(100))
+                .setRunner("local")
+                .setIdentifier("producer1")
+                .build(),
+            executionGraphNodeBuilderForSpawnBuilderSpawn()
+                .setIndex(1)
+                .setMetrics(
+                    ExecutionGraph.Metrics.newBuilder()
+                        .setStartTimestampMillis(300)
+                        .setDurationMillis(100)
+                        .setOtherMillis(100))
+                .setRunner("local")
+                .setIdentifier("producer2")
+                .setRetryOf(0)
+                .build(),
+            executionGraphNodeBuilderForSpawnBuilderSpawn()
+                .setIndex(2)
+                .setMetrics(
+                    ExecutionGraph.Metrics.newBuilder()
+                        .setStartTimestampMillis(400)
+                        .setDurationMillis(200)
+                        .setOtherMillis(200))
+                .setRunner("remote")
+                .setIdentifier("consumer")
+                .addDependentIndex(1)
+                .build())
+        .inOrder();
+  }
+
+  private static ActionCompletionEvent producerCompletion(Action action) {
+    return new ActionCompletionEvent(
+        0,
+        0,
+        action,
+        new FakeActionInputFileCache(),
+        mock(OutputMetadataStore.class),
+        mock(ActionLookupData.class));
+  }
+
   enum LocalLockFreeOutput {
     LOCAL_LOCK_FREE_OUTPUT_ENABLED(/* optionValue= */ true) {
       @Override

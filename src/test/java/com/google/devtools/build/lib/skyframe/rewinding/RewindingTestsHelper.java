@@ -39,9 +39,14 @@ import com.google.common.eventbus.AllowConcurrentEvents;
 import com.google.common.eventbus.Subscribe;
 import com.google.common.flogger.GoogleLogger;
 import com.google.common.util.concurrent.Uninterruptibles;
+import com.google.devtools.build.lib.actions.ActionCompletionEvent;
+import com.google.devtools.build.lib.actions.ActionExecutedEvent;
 import com.google.devtools.build.lib.actions.ActionExecutionContext;
+import com.google.devtools.build.lib.actions.ActionExecutionMetadata;
 import com.google.devtools.build.lib.actions.ActionInput;
 import com.google.devtools.build.lib.actions.ActionLookupData;
+import com.google.devtools.build.lib.actions.ActionResultReceivedEvent;
+import com.google.devtools.build.lib.actions.ActionStartedEvent;
 import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.actions.Artifact.SpecialArtifact;
 import com.google.devtools.build.lib.actions.BuildFailedException;
@@ -109,6 +114,7 @@ import java.util.concurrent.CyclicBarrier;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Function;
 import java.util.stream.IntStream;
 
 /**
@@ -694,10 +700,17 @@ public class RewindingTestsHelper {
 
     recorder.assertEvents(
         /* runOnce= */ ImmutableList.of(),
-        /* completedRewound= */ ImmutableList.of("Executing genrule //test:rule1"),
+        /* completedRewound= */ ImmutableList.of(),
         /* failedRewound= */ ImmutableList.of(),
-        /* expectResultReceivedForFailedRewound= */ false,
         /* actionRewindingPostLostInputCounts= */ ImmutableList.of(maxRepeatedLostInputs + 1));
+    // Rule1 is rewound each time rule2 loses its output and emits its events on every execution.
+    assertEventCounts(
+        "Executing genrule //test:rule1",
+        /* expectedStartedEvents= */ maxRepeatedLostInputs + 1,
+        /* expectedCompletionEvents= */ maxRepeatedLostInputs + 1,
+        /* expectedExecutedEvents= */ maxRepeatedLostInputs + 1,
+        /* expectedResultReceivedEvents= */ maxRepeatedLostInputs + 1,
+        /* expectedRewoundEvents= */ 0);
 
     assertOnlyActionsRewound(rewoundKeys);
     assertThat(Iterables.frequency(rewoundArtifactOwnerLabels(rewoundKeys), "//test:rule1"))
@@ -812,13 +825,14 @@ public class RewindingTestsHelper {
     List<SkyKey> rewoundKeys = collectOrderedRewoundKeys();
     assertThrows(InterruptedException.class, () -> testCase.buildTarget("//test:rule2"));
 
-    assertOutputForStopBeforeRewoundReexecution();
+    // The interrupted re-execution of rule1 doesn't report an ActionExecutedEvent.
+    assertOutputForStopDuringRewoundReexecution(/* rule1ExecutedEvents= */ 1);
 
     assertOnlyActionsRewound(rewoundKeys);
     assertThat(rewoundArtifactOwnerLabels(rewoundKeys)).containsExactly("//test:rule1");
   }
 
-  private void assertOutputForStopBeforeRewoundReexecution() {
+  private void assertOutputForStopDuringRewoundReexecution(int rule1ExecutedEvents) {
     assertThat(getExecutedSpawnDescriptions())
         .containsExactly(
             "Executing genrule //test:rule1",
@@ -827,43 +841,27 @@ public class RewindingTestsHelper {
         .inOrder();
 
     recorder.assertEvents(
-        /* runOnce= */ ImmutableList.of("Executing genrule //test:rule1"),
+        /* runOnce= */ ImmutableList.of(),
         /* completedRewound= */ ImmutableList.of(),
         /* failedRewound= */ ImmutableList.of(),
         /* actionRewindingPostLostInputCounts= */ ImmutableList.of(1));
-    assertThat(
-            recorder.getActionStartedEvents().stream()
-                .map(e -> ActionEventRecorder.progressMessageOrPrettyPrint(e.getAction()))
-                .filter("Executing genrule //test:rule2"::equals)
-                .count())
-        .isEqualTo(1);
-    assertThat(
-            recorder.getActionCompletionEvents().stream()
-                .map(e -> ActionEventRecorder.progressMessageOrPrettyPrint(e.getAction()))
-                .filter("Executing genrule //test:rule2"::equals)
-                .count())
-        .isEqualTo(0);
-    assertThat(
-            recorder.getActionExecutedEvents().stream()
-                .map(e -> ActionEventRecorder.progressMessageOrPrettyPrint(e.getAction()))
-                .filter("Executing genrule //test:rule2"::equals)
-                .count())
-        .isEqualTo(0);
-    assertThat(
-            recorder.getActionResultReceivedEvents().stream()
-                .map(e -> ActionEventRecorder.progressMessageOrPrettyPrint(e.getAction()))
-                .filter("Executing genrule //test:rule2"::equals)
-                .count())
-        .isEqualTo(0);
-    assertThat(
-            recorder.getActionRewoundEvents().stream()
-                .map(
-                    e ->
-                        ActionEventRecorder.progressMessageOrPrettyPrint(
-                            e.getFailedRewoundAction()))
-                .filter("Executing genrule //test:rule2"::equals)
-                .count())
-        .isEqualTo(1);
+    // Rule1 completes, is rewound and starts again, but its second execution doesn't complete
+    // successfully.
+    assertEventCounts(
+        "Executing genrule //test:rule1",
+        /* expectedStartedEvents= */ 2,
+        /* expectedCompletionEvents= */ 2,
+        /* expectedExecutedEvents= */ rule1ExecutedEvents,
+        /* expectedResultReceivedEvents= */ 1,
+        /* expectedRewoundEvents= */ 0);
+    // Rule2 fails with a lost input and is never executed again.
+    assertEventCounts(
+        "Executing genrule //test:rule2",
+        /* expectedStartedEvents= */ 1,
+        /* expectedCompletionEvents= */ 0,
+        /* expectedExecutedEvents= */ 0,
+        /* expectedResultReceivedEvents= */ 0,
+        /* expectedRewoundEvents= */ 1);
   }
 
   private static final SpawnResult FAILED_RESULT =
@@ -912,7 +910,8 @@ public class RewindingTestsHelper {
       assertThat(buildFailedException).hasMessageThat().contains(errorDetail);
     }
     testCase.assertContainsError(errorDetail);
-    assertOutputForStopBeforeRewoundReexecution();
+    // The failed re-execution of rule1 reports an ActionExecutedEvent.
+    assertOutputForStopDuringRewoundReexecution(/* rule1ExecutedEvents= */ 2);
     assertOnlyActionsRewound(rewoundKeys);
     assertThat(rewoundArtifactOwnerLabels(rewoundKeys)).containsExactly("//test:rule1");
   }
@@ -1084,10 +1083,18 @@ public class RewindingTestsHelper {
 
     recorder.assertEvents(
         /* runOnce= */ ImmutableList.of(),
-        /* completedRewound= */ ImmutableList.of(
-            "Executing genrule //test:rule1", "Executing genrule //test:rule2"),
+        /* completedRewound= */ ImmutableList.of("Executing genrule //test:rule1"),
         /* failedRewound= */ ImmutableList.of("Executing genrule //test:rule3"),
         /* actionRewindingPostLostInputCounts= */ ImmutableList.of(2));
+    // Rule2 completes, is rewound by rule3, fails with a lost input on its second execution and
+    // completes again on its third.
+    assertEventCounts(
+        "Executing genrule //test:rule2",
+        /* expectedStartedEvents= */ 3,
+        /* expectedCompletionEvents= */ 2,
+        /* expectedExecutedEvents= */ 2,
+        /* expectedResultReceivedEvents= */ 2,
+        /* expectedRewoundEvents= */ 1);
 
     assertOnlyActionsRewound(rewoundKeys);
     assertThat(rewoundArtifactOwnerLabels(rewoundKeys))
@@ -3771,6 +3778,86 @@ public class RewindingTestsHelper {
     assertOutputsReported(event, "bin/foo/found.out");
 
     recorder.assertTotalLostOutputCountsFromStats(ImmutableList.of(maxRepeatedLostInputs + 1));
+  }
+
+  /**
+   * Asserts how many events of each type were emitted for the action with the given progress
+   * message (or pretty-printed representation).
+   */
+  private void assertEventCounts(
+      String action,
+      int expectedStartedEvents,
+      int expectedCompletionEvents,
+      int expectedExecutedEvents,
+      int expectedResultReceivedEvents,
+      int expectedRewoundEvents) {
+    assertWithMessage("actionStartedEvents for \"%s\"", action)
+        .that(
+            countEventsFor(
+                action, recorder.getActionStartedEvents(), ActionStartedEvent::getAction))
+        .isEqualTo(expectedStartedEvents);
+    // The first execution of an action isn't a re-execution after rewinding, all later ones are.
+    assertWithMessage("rewound flags of actionStartedEvents for \"%s\"", action)
+        .that(
+            recorder.getActionStartedEvents().stream()
+                .filter(
+                    e ->
+                        action.equals(
+                            ActionEventRecorder.progressMessageOrPrettyPrint(e.getAction())))
+                .map(ActionStartedEvent::wasRewound)
+                .collect(toImmutableList()))
+        .containsExactlyElementsIn(
+            IntStream.range(0, expectedStartedEvents)
+                .mapToObj(i -> i > 0)
+                .collect(toImmutableList()))
+        .inOrder();
+    assertWithMessage("actionCompletionEvents for \"%s\"", action)
+        .that(
+            countEventsFor(
+                action, recorder.getActionCompletionEvents(), ActionCompletionEvent::getAction))
+        .isEqualTo(expectedCompletionEvents);
+    assertWithMessage("actionExecutedEvents for \"%s\"", action)
+        .that(
+            countEventsFor(
+                action, recorder.getActionExecutedEvents(), ActionExecutedEvent::getAction))
+        .isEqualTo(expectedExecutedEvents);
+    // Each executed event carries the number of times the action was rewound before the execution
+    // it reports on, which distinguishes the BEP ids of the events of the action's executions.
+    assertWithMessage("rewind counts of actionExecutedEvents for \"%s\"", action)
+        .that(
+            recorder.getActionExecutedEvents().stream()
+                .filter(
+                    e ->
+                        action.equals(
+                            ActionEventRecorder.progressMessageOrPrettyPrint(e.getAction())))
+                .map(e -> e.getEventId().getActionCompleted().getRewindCount())
+                .collect(toImmutableList()))
+        .containsExactlyElementsIn(
+            IntStream.range(0, expectedExecutedEvents).boxed().collect(toImmutableList()))
+        .inOrder();
+    assertWithMessage("actionResultReceivedEvents for \"%s\"", action)
+        .that(
+            countEventsFor(
+                action,
+                recorder.getActionResultReceivedEvents(),
+                ActionResultReceivedEvent::getAction))
+        .isEqualTo(expectedResultReceivedEvents);
+    assertWithMessage("actionRewoundEvents for \"%s\"", action)
+        .that(
+            countEventsFor(
+                action,
+                recorder.getActionRewoundEvents(),
+                ActionRewoundEvent::getFailedRewoundAction))
+        .isEqualTo(expectedRewoundEvents);
+  }
+
+  private static <T> long countEventsFor(
+      String action, List<T> events, Function<T, ActionExecutionMetadata> actionGetter) {
+    return events.stream()
+        .map(actionGetter)
+        .map(ActionEventRecorder::progressMessageOrPrettyPrint)
+        .filter(action::equals)
+        .count();
   }
 
   final void listenForNoCompletionEventsBeforeRewinding(

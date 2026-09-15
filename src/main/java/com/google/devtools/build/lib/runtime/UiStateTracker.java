@@ -242,6 +242,9 @@ class UiStateTracker {
     /** The set of strategies that have been applied to this action. */
     int strategyBitmap = 0;
 
+    /** Whether the action was rewound after it completed and is executing again. */
+    volatile boolean rewound;
+
     private static class ProgressState {
       final String id;
       ActionProgressEvent latestEvent;
@@ -564,7 +567,7 @@ class UiStateTracker {
     Action action = event.getAction();
     Artifact actionId = action.getPrimaryOutput();
 
-    getActionState(action, actionId, event.getNanoTimeStart());
+    getActionState(action, actionId, event.getNanoTimeStart()).rewound = event.wasRewound();
 
     if (action.getOwner() != null
         && action.getOwner().getBuildConfigurationMnemonic().equals("TestRunner")) {
@@ -865,6 +868,9 @@ class UiStateTracker {
     String message = action.getProgressMessage(mainRepositoryMapping);
     if (message == null) {
       message = action.prettyPrint();
+    }
+    if (actionState.rewound) {
+      message += " (rewound)";
     }
 
     String progress = describeActionProgress(actionState, 0);

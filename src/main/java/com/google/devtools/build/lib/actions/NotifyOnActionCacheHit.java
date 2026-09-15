@@ -42,6 +42,12 @@ public interface NotifyOnActionCacheHit extends Action {
      * Looks up and returns an action context implementation of the given interface type.
      */
     <T extends ActionContext> T getContext(Class<? extends T> type);
+
+    /**
+     * Returns how many times the action was rewound before this cache check, see {@link
+     * ActionExecutionContext#getRewindCount}.
+     */
+    int getRewindCount();
   }
 
   /**

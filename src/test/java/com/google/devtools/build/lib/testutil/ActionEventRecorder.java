@@ -146,7 +146,8 @@ public final class ActionEventRecorder {
    * Check how many of each type of event was emitted during a successful build.
    *
    * @param runOnce Actions which ran and are not rewound
-   * @param completedRewound Actions which ran and then are rewound by a later failed action
+   * @param completedRewound Actions which ran and then are rewound (once) by a later failed action,
+   *     which causes them to run a second time and to emit all of their events again
    * @param failedRewound Actions which fail because of lost inputs and which rewind themselves and
    *     the actions that generate those lost inputs
    */
@@ -186,7 +187,7 @@ public final class ActionEventRecorder {
         /* eventsName= */ "actionStartedEvents",
         /* converter= */ e -> progressMessageOrPrettyPrint(e.getAction()),
         /* expectedRunOnceEventCount= */ 1,
-        /* expectedCompletedRewoundEventCount= */ 1,
+        /* expectedCompletedRewoundEventCount= */ 2,
         /* expectedFailedRewoundEventCount= */ 2);
 
     eventCountAsserter.assertEventCounts(
@@ -194,7 +195,7 @@ public final class ActionEventRecorder {
         /*eventsName=*/ "actionCompletionEvents",
         /*converter=*/ e -> progressMessageOrPrettyPrint(e.getAction()),
         /*expectedRunOnceEventCount=*/ 1,
-        /*expectedCompletedRewoundEventCount=*/ 1,
+        /*expectedCompletedRewoundEventCount=*/ 2,
         /*expectedFailedRewoundEventCount=*/ 1);
 
     eventCountAsserter.assertEventCounts(
@@ -202,7 +203,7 @@ public final class ActionEventRecorder {
         /*eventsName=*/ "actionExecutedEvents",
         /*converter=*/ e -> progressMessageOrPrettyPrint(e.getAction()),
         /*expectedRunOnceEventCount=*/ 1,
-        /*expectedCompletedRewoundEventCount=*/ 1,
+        /*expectedCompletedRewoundEventCount=*/ 2,
         /*expectedFailedRewoundEventCount=*/ 1);
 
     eventCountAsserter.assertEventCounts(
@@ -210,7 +211,7 @@ public final class ActionEventRecorder {
         /*eventsName=*/ "actionResultReceivedEvents",
         /*converter=*/ e -> progressMessageOrPrettyPrint(e.getAction()),
         /*expectedRunOnceEventCount=*/ 1,
-        /*expectedCompletedRewoundEventCount=*/ 1,
+        /*expectedCompletedRewoundEventCount=*/ 2,
         /*expectedFailedRewoundEventCount=*/ expectResultReceivedForFailedRewound ? 1 : 0);
 
     eventCountAsserter.assertEventCounts(

@@ -108,12 +108,17 @@ public interface TestActionContext extends ActionContext {
     return false;
   }
 
-  /** Creates a cached test result. */
+  /**
+   * Creates a cached test result.
+   *
+   * @param rewindCount how many times the test action was rewound before this cache hit
+   */
   TestResult newCachedTestResult(
       Path execRoot,
       TestRunnerAction action,
       TestResultData cached,
-      ImmutableMultimap<String, Path> testOutputs)
+      ImmutableMultimap<String, Path> testOutputs,
+      int rewindCount)
       throws IOException;
 
   /** Returns the attempt group associaed with the given shard. */

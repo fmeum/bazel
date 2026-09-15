@@ -412,6 +412,66 @@ public class UiStateTrackerTest extends FoundationTestCase {
   }
 
   @Test
+  public void rewoundAction_shownAsRunningAgainAfterCompletion() throws IOException {
+    // An action that completed and was then rewound because a later action lost one of its outputs
+    // starts again. It should be reported as running and marked as rewound until it completes a
+    // second time.
+
+    String message = "Running rewound action";
+    ManualClock clock = new ManualClock();
+    clock.advanceMillis(120000);
+    Action action = mockAction(message, "foo/rewound");
+    ActionLookupData actionLookupData = ActionLookupData.create(mock(ActionLookupKey.class), 1);
+    UiStateTracker stateTracker = getUiStateTracker(clock);
+    // Mimic being at the execution phase.
+    simulateExecutionPhase(stateTracker);
+
+    stateTracker.actionStarted(new ActionStartedEvent(action, clock.nanoTime()));
+    clock.advanceMillis(1000);
+    LoggingTerminalWriter terminalWriter = new LoggingTerminalWriter(/* discardHighlight= */ true);
+    stateTracker.writeProgressBar(terminalWriter);
+    String output = terminalWriter.getTranscript();
+    assertThat(output).contains(message);
+    assertThat(output).doesNotContain("(rewound)");
+
+    stateTracker.actionCompletion(
+        new ActionCompletionEvent(
+            clock.nanoTime() - 1000,
+            clock.nanoTime(),
+            action,
+            new FakeActionInputFileCache(),
+            mock(OutputMetadataStore.class),
+            actionLookupData));
+    terminalWriter = new LoggingTerminalWriter(/* discardHighlight= */ true);
+    stateTracker.writeProgressBar(terminalWriter);
+    output = terminalWriter.getTranscript();
+    assertThat(output).doesNotContain(message);
+
+    stateTracker.actionStarted(
+        new ActionStartedEvent(action, clock.nanoTime(), /* rewound= */ true));
+    clock.advanceMillis(1000);
+    terminalWriter = new LoggingTerminalWriter(/* discardHighlight= */ true);
+    stateTracker.writeProgressBar(terminalWriter);
+    output = terminalWriter.getTranscript();
+    assertThat(output).contains(message + " (rewound)");
+
+    stateTracker.actionCompletion(
+        new ActionCompletionEvent(
+            clock.nanoTime() - 1000,
+            clock.nanoTime(),
+            action,
+            new FakeActionInputFileCache(),
+            mock(OutputMetadataStore.class),
+            actionLookupData));
+    terminalWriter = new LoggingTerminalWriter(/* discardHighlight= */ true);
+    stateTracker.writeProgressBar(terminalWriter);
+    output = terminalWriter.getTranscript();
+    assertThat(output).doesNotContain(message);
+    // Both executions count as completed actions.
+    assertThat(stateTracker.actionsCompleted.get()).isEqualTo(2);
+  }
+
+  @Test
   public void testCompletedActionNotShown() throws IOException {
     // Completed actions should not be reported in the progress bar, nor in the
     // short progress bar.

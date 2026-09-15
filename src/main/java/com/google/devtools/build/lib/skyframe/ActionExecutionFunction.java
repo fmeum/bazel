@@ -263,13 +263,6 @@ public class ActionExecutionFunction implements SkyFunction {
     // possible for an action to both be shared and also discover inputs; see b/72764586.
     ActionExecutionState previousExecution = skyframeActionExecutor.probeActionExecution(action);
 
-    // If this action was previously completed this build, then this evaluation must be happening
-    // because of rewinding. Prevent any progress events from being published a second time for this
-    // action; downstream consumers of action events reasonably don't expect them.
-    if (!skyframeActionExecutor.shouldEmitProgressEvents(action)) {
-      env = new ProgressEventSuppressingEnvironment(env);
-    }
-
     InputDiscoveryState state;
     if (action.discoversInputs()) {
       state = env.getState(InputDiscoveryState::new);

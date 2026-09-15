@@ -60,6 +60,13 @@ public final class ActionExecutedEvent implements BuildEventWithConfiguration {
   /** Timestamp of the action finishing; if no timestamp is available will be {@code null}. */
   @Nullable private final Instant endTime;
 
+  /** How many times the action was rewound before the execution this event reports on. */
+  private final int rewindCount;
+
+  /**
+   * @param rewindCount how many times the action was rewound before the execution this event
+   *     reports on, which distinguishes the ids of the events of the action's executions
+   */
   public ActionExecutedEvent(
       PathFragment actionId,
       Action action,
@@ -71,7 +78,8 @@ public final class ActionExecutedEvent implements BuildEventWithConfiguration {
       Path stderr,
       ErrorTiming timing,
       @Nullable Instant startTime,
-      @Nullable Instant endTime) {
+      @Nullable Instant endTime,
+      int rewindCount) {
     this.actionId = actionId;
     this.action = action;
     this.exception = exception;
@@ -83,6 +91,7 @@ public final class ActionExecutedEvent implements BuildEventWithConfiguration {
     this.timing = timing;
     this.startTime = startTime;
     this.endTime = endTime;
+    this.rewindCount = rewindCount;
     Preconditions.checkState(
         (this.exception == null) == (this.timing == ErrorTiming.NO_ERROR), this);
     Preconditions.checkState(
@@ -123,13 +132,20 @@ public final class ActionExecutedEvent implements BuildEventWithConfiguration {
     return primaryOutputMetadata;
   }
 
+  public int getRewindCount() {
+    return rewindCount;
+  }
+
   @Override
   public BuildEventId getEventId() {
     if (action.getOwner() == null) {
-      return BuildEventIdUtil.actionCompleted(actionId);
+      return BuildEventIdUtil.actionCompleted(actionId, null, null, rewindCount);
     } else {
       return BuildEventIdUtil.actionCompleted(
-          actionId, action.getOwner().getLabel(), action.getOwner().getConfigurationChecksum());
+          actionId,
+          action.getOwner().getLabel(),
+          action.getOwner().getConfigurationChecksum(),
+          rewindCount);
     }
   }
 

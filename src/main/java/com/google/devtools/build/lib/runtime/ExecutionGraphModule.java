@@ -601,8 +601,10 @@ public class ExecutionGraphModule extends BlazeModule {
           //   - Test retries.
           //   - Java compilation (fallback) after an attempt with a reduced classpath.
           //   - Retry of a spawn after remote execution failure when using `--local_fallback`.
+          //   - Re-execution of an action that was rewound after another action lost one of its
+          //     outputs.
           //
-          /// Running in parallel:
+          // Running in parallel:
           //   - Dynamic execution with `--experimental_local_lockfree_output`--with that setting,
           //     it is possible for both local and remote spawns to finish and send a corresponding
           //     event.

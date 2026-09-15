@@ -145,18 +145,28 @@ public final class StandaloneTestStrategyTest extends BuildViewTestCase {
         FileOutErr fileOutErr,
         InputMetadataProvider inputMetadataProvider,
         SpawnStrategy spawnStrategy) {
+      this(fileOutErr, inputMetadataProvider, spawnStrategy, /* rewindCount= */ 0);
+    }
+
+    FakeActionExecutionContext(
+        FileOutErr fileOutErr,
+        InputMetadataProvider inputMetadataProvider,
+        SpawnStrategy spawnStrategy,
+        int rewindCount) {
       this(
           fileOutErr,
           toContextRegistry(spawnStrategy, fileSystem, directories),
           inputMetadataProvider,
-          org.mockito.Mockito.mock(OutputMetadataStore.class));
+          org.mockito.Mockito.mock(OutputMetadataStore.class),
+          rewindCount);
     }
 
     FakeActionExecutionContext(
         FileOutErr fileOutErr,
         ActionContext.ActionContextRegistry actionContextRegistry,
         InputMetadataProvider inputMetadataProvider,
-        OutputMetadataStore outputMetadataStore) {
+        OutputMetadataStore outputMetadataStore,
+        int rewindCount) {
       super(
           /* executor= */ null,
           inputMetadataProvider,
@@ -171,7 +181,9 @@ public final class StandaloneTestStrategyTest extends BuildViewTestCase {
           /* actionFileSystem= */ null,
           DiscoveredModulesPruner.DEFAULT,
           SyscallCache.NO_CACHE,
-          ThreadStateReceiver.NULL_INSTANCE);
+          ThreadStateReceiver.NULL_INSTANCE,
+          /* bustCaches= */ false,
+          rewindCount);
       this.actionContextRegistry = actionContextRegistry;
     }
 
@@ -204,7 +216,11 @@ public final class StandaloneTestStrategyTest extends BuildViewTestCase {
     @Override
     public ActionExecutionContext withFileOutErr(FileOutErr fileOutErr) {
       return new FakeActionExecutionContext(
-          fileOutErr, actionContextRegistry, getInputMetadataProvider(), getOutputMetadataStore());
+          fileOutErr,
+          actionContextRegistry,
+          getInputMetadataProvider(),
+          getOutputMetadataStore(),
+          getRewindCount());
     }
   }
 
@@ -282,6 +298,56 @@ public final class StandaloneTestStrategyTest extends BuildViewTestCase {
     // because Windows and macOS have limitations on file path length.
     // Note: It's OK to update 32 to a smaller number if tmpDirName gets shorter.
     assertThat(tmpDirName.length()).isEqualTo(32);
+  }
+
+  @Test
+  public void testRewoundTest_eventsCarryRewindCount() throws Exception {
+    ExecutionOptions executionOptions = Options.getDefaults(ExecutionOptions.class);
+    TestSummaryOptions testSummaryOptions = TestSummaryOptions.DEFAULTS;
+    Path tmpDirRoot = TestStrategy.getTmpRoot(rootDirectory, outputBase, executionOptions);
+    TestedStandaloneTestStrategy standaloneTestStrategy =
+        new TestedStandaloneTestStrategy(executionOptions, testSummaryOptions, tmpDirRoot);
+
+    scratch.file("standalone/simple_test.sh", "this does not get executed, it is mocked out");
+    scratch.file(
+        "standalone/BUILD",
+        """
+        load('//test_defs:foo_test.bzl', 'foo_test')
+        foo_test(
+            name = "simple_test",
+            size = "small",
+            srcs = ["simple_test.sh"],
+        )
+        """);
+    TestRunnerAction testRunnerAction = getTestAction("//standalone:simple_test");
+    when(spawnStrategy.exec(any(), any()))
+        .thenReturn(
+            ImmutableList.of(
+                new SpawnResult.Builder()
+                    .setStatus(Status.SUCCESS)
+                    .setWallTimeInMs(10)
+                    .setRunnerName("test")
+                    .build()));
+    // The test action executes for the third time after it was rewound twice.
+    ActionExecutionContext actionExecutionContext =
+        new FakeActionExecutionContext(
+            createTempOutErr(tmpDirRoot),
+            inputMetadataFor(testRunnerAction),
+            spawnStrategy,
+            /* rewindCount= */ 2);
+
+    var unused = execute(testRunnerAction, actionExecutionContext, standaloneTestStrategy);
+
+    // The rewind count tells the attempt's BEP event apart from those of the earlier executions.
+    TestAttempt attempt =
+        storedEvents.getPosts().stream()
+            .filter(TestAttempt.class::isInstance)
+            .map(TestAttempt.class::cast)
+            .collect(MoreCollectors.onlyElement());
+    assertThat(attempt.getRewindCount()).isEqualTo(2);
+    assertThat(attempt.getEventId().getTestResult().getAttempt()).isEqualTo(1);
+    assertThat(attempt.getEventId().getTestResult().getRewindCount()).isEqualTo(2);
+    assertThat(standaloneTestStrategy.postedResult.getRewindCount()).isEqualTo(2);
   }
 
   @Test
@@ -1172,7 +1238,8 @@ public final class StandaloneTestStrategyTest extends BuildViewTestCase {
             createTempOutErr(outputBase),
             toContextRegistry(spawnStrategy, fileSystem, directories),
             inputMetadataFor(testRunnerAction),
-            outputMetadataStore);
+            outputMetadataStore,
+            /* rewindCount= */ 0);
 
     when(spawnStrategy.exec(any(), any()))
         .thenThrow(new SpawnExecException("failed", FAILED_TEST_SPAWN, false))

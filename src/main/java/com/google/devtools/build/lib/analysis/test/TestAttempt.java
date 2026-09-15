@@ -53,6 +53,7 @@ public class TestAttempt implements BuildEventWithOrderConstraint {
   private final long durationMillis;
   private final long startTimeMillis;
   private final BuildEventStreamProtos.TestResult.ExecutionInfo executionInfo;
+  private final int rewindCount;
 
   /**
    * Construct the event given the test action and attempt number.
@@ -60,12 +61,15 @@ public class TestAttempt implements BuildEventWithOrderConstraint {
    * @param cachedLocally True if the reported attempt is taken from the tool's local cache.
    * @param testAction The test that was run.
    * @param attempt The number of the attempt for this action.
+   * @param rewindCount How many times the test action was rewound before the execution this attempt
+   *     belongs to.
    */
   private TestAttempt(
       boolean cachedLocally,
       TestRunnerAction testAction,
       BuildEventStreamProtos.TestResult.ExecutionInfo executionInfo,
       int attempt,
+      int rewindCount,
       BlazeTestStatus status,
       String statusDetails,
       long startTimeMillis,
@@ -76,6 +80,7 @@ public class TestAttempt implements BuildEventWithOrderConstraint {
     this.testAction = testAction;
     this.executionInfo = Preconditions.checkNotNull(executionInfo);
     this.attempt = attempt;
+    this.rewindCount = rewindCount;
     this.status = BuildEventStreamerUtils.bepStatus(Preconditions.checkNotNull(status));
     this.statusDetails = statusDetails;
     this.cachedLocally = cachedLocally;
@@ -94,6 +99,7 @@ public class TestAttempt implements BuildEventWithOrderConstraint {
       TestRunnerAction testAction,
       TestResultData attemptData,
       int attempt,
+      int rewindCount,
       ImmutableMultimap<String, Path> files,
       BuildEventStreamProtos.TestResult.ExecutionInfo executionInfo,
       boolean lastAttempt) {
@@ -102,6 +108,7 @@ public class TestAttempt implements BuildEventWithOrderConstraint {
         testAction,
         executionInfo,
         attempt,
+        rewindCount,
         attemptData.getStatus(),
         attemptData.getStatusDetails(),
         attemptData.getStartTimeMillisEpoch(),
@@ -119,6 +126,7 @@ public class TestAttempt implements BuildEventWithOrderConstraint {
       TestRunnerAction testAction,
       TestResultData attemptData,
       int attempt,
+      int rewindCount,
       ImmutableMultimap<String, Path> files,
       BuildEventStreamProtos.TestResult.ExecutionInfo executionInfo,
       boolean lastAttempt) {
@@ -127,6 +135,7 @@ public class TestAttempt implements BuildEventWithOrderConstraint {
         testAction,
         executionInfo,
         attempt,
+        rewindCount,
         attemptData.getStatus(),
         attemptData.getStatusDetails(),
         attemptData.getStartTimeMillisEpoch(),
@@ -150,6 +159,7 @@ public class TestAttempt implements BuildEventWithOrderConstraint {
         testAction,
         /* executionInfo= */ BuildEventStreamProtos.TestResult.ExecutionInfo.getDefaultInstance(),
         /* attempt= */ 1,
+        /* rewindCount= */ 0,
         attemptData.getStatus(),
         attemptData.getStatusDetails(),
         attemptData.getStartTimeMillisEpoch(),
@@ -189,6 +199,11 @@ public class TestAttempt implements BuildEventWithOrderConstraint {
     return attempt;
   }
 
+  @VisibleForTesting
+  public int getRewindCount() {
+    return rewindCount;
+  }
+
   @Override
   public BuildEventId getEventId() {
     return BuildEventIdUtil.testResult(
@@ -196,6 +211,7 @@ public class TestAttempt implements BuildEventWithOrderConstraint {
         testAction.getRunNumber(),
         testAction.getShardNum(),
         attempt,
+        rewindCount,
         configurationId(testAction.getConfiguration()));
   }
 
@@ -217,6 +233,7 @@ public class TestAttempt implements BuildEventWithOrderConstraint {
               testAction.getRunNumber(),
               testAction.getShardNum(),
               attempt + 1,
+              rewindCount,
               configurationId(testAction.getConfiguration())));
     }
   }
