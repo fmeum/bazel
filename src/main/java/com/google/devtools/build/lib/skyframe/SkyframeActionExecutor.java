@@ -1110,14 +1110,15 @@ public final class SkyframeActionExecutor {
         boolean lostInputs = false;
 
         try {
-          ActionStartedEvent event = new ActionStartedEvent(action, actionStartTimeNanos);
+          boolean wasRewound = wasRewound(action);
+          ActionStartedEvent event =
+              new ActionStartedEvent(action, actionStartTimeNanos, wasRewound);
           if (statusReporter != null) {
             statusReporter.updateStatus(event);
             statusReported = true;
           }
           env.getListener().post(event);
           var rewoundActionSynchronizer = outputService.getRewoundActionSynchronizer();
-          boolean wasRewound = wasRewound(action);
           try (SilentCloseable outerLock =
               rewoundActionSynchronizer.enterActionPreparation(action, wasRewound)) {
             if (actionFileSystemType().shouldDoEagerActionPrep()) {

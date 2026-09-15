@@ -3796,6 +3796,21 @@ public class RewindingTestsHelper {
             countEventsFor(
                 action, recorder.getActionStartedEvents(), ActionStartedEvent::getAction))
         .isEqualTo(expectedStartedEvents);
+    // The first execution of an action isn't a re-execution after rewinding, all later ones are.
+    assertWithMessage("rewound flags of actionStartedEvents for \"%s\"", action)
+        .that(
+            recorder.getActionStartedEvents().stream()
+                .filter(
+                    e ->
+                        action.equals(
+                            ActionEventRecorder.progressMessageOrPrettyPrint(e.getAction())))
+                .map(ActionStartedEvent::wasRewound)
+                .collect(toImmutableList()))
+        .containsExactlyElementsIn(
+            IntStream.range(0, expectedStartedEvents)
+                .mapToObj(i -> i > 0)
+                .collect(toImmutableList()))
+        .inOrder();
     assertWithMessage("actionCompletionEvents for \"%s\"", action)
         .that(
             countEventsFor(

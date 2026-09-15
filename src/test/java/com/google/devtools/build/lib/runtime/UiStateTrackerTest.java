@@ -414,7 +414,8 @@ public class UiStateTrackerTest extends FoundationTestCase {
   @Test
   public void rewoundAction_shownAsRunningAgainAfterCompletion() throws IOException {
     // An action that completed and was then rewound because a later action lost one of its outputs
-    // starts again. It should be reported as running until it completes a second time.
+    // starts again. It should be reported as running and marked as rewound until it completes a
+    // second time.
 
     String message = "Running rewound action";
     ManualClock clock = new ManualClock();
@@ -427,6 +428,12 @@ public class UiStateTrackerTest extends FoundationTestCase {
 
     stateTracker.actionStarted(new ActionStartedEvent(action, clock.nanoTime()));
     clock.advanceMillis(1000);
+    LoggingTerminalWriter terminalWriter = new LoggingTerminalWriter(/* discardHighlight= */ true);
+    stateTracker.writeProgressBar(terminalWriter);
+    String output = terminalWriter.getTranscript();
+    assertThat(output).contains(message);
+    assertThat(output).doesNotContain("(rewound)");
+
     stateTracker.actionCompletion(
         new ActionCompletionEvent(
             clock.nanoTime() - 1000,
@@ -435,17 +442,18 @@ public class UiStateTrackerTest extends FoundationTestCase {
             new FakeActionInputFileCache(),
             mock(OutputMetadataStore.class),
             actionLookupData));
-    LoggingTerminalWriter terminalWriter = new LoggingTerminalWriter(/* discardHighlight= */ true);
+    terminalWriter = new LoggingTerminalWriter(/* discardHighlight= */ true);
     stateTracker.writeProgressBar(terminalWriter);
-    String output = terminalWriter.getTranscript();
+    output = terminalWriter.getTranscript();
     assertThat(output).doesNotContain(message);
 
-    stateTracker.actionStarted(new ActionStartedEvent(action, clock.nanoTime()));
+    stateTracker.actionStarted(
+        new ActionStartedEvent(action, clock.nanoTime(), /* rewound= */ true));
     clock.advanceMillis(1000);
     terminalWriter = new LoggingTerminalWriter(/* discardHighlight= */ true);
     stateTracker.writeProgressBar(terminalWriter);
     output = terminalWriter.getTranscript();
-    assertThat(output).contains(message);
+    assertThat(output).contains(message + " (rewound)");
 
     stateTracker.actionCompletion(
         new ActionCompletionEvent(

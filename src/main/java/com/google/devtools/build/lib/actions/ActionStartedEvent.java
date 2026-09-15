@@ -19,6 +19,12 @@ import com.google.devtools.build.lib.events.ExtendedEventHandler.Postable;
 public final class ActionStartedEvent implements Postable {
   private final Action action;
   private final long nanoTimeStart;
+  private final boolean rewound;
+
+  /** Creates an event for an action that was not rewound. */
+  public ActionStartedEvent(Action action, long nanoTimeStart) {
+    this(action, nanoTimeStart, /* rewound= */ false);
+  }
 
   /**
    * Create an event for action that has been started.
@@ -27,10 +33,13 @@ public final class ActionStartedEvent implements Postable {
    * @param nanoTimeStart the time when the action was started. This allow us to
    * record more accurately the time spend by the action, since we execute some code before
    * deciding if we execute the action or not.
+   * @param rewound whether the action completed earlier in this build and executes again because
+   *     it was rewound after a later action lost one of its outputs.
    */
-  public ActionStartedEvent(Action action, long nanoTimeStart) {
+  public ActionStartedEvent(Action action, long nanoTimeStart, boolean rewound) {
     this.action = action;
     this.nanoTimeStart = nanoTimeStart;
+    this.rewound = rewound;
   }
 
   /**
@@ -42,5 +51,13 @@ public final class ActionStartedEvent implements Postable {
 
   public long getNanoTimeStart() {
     return nanoTimeStart;
+  }
+
+  /**
+   * Returns whether the action completed earlier in this build and executes again because it was
+   * rewound after a later action lost one of its outputs.
+   */
+  public boolean wasRewound() {
+    return rewound;
   }
 }
