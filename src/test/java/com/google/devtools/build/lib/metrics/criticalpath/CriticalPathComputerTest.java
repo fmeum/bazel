@@ -796,10 +796,11 @@ public class CriticalPathComputerTest extends FoundationTestCase {
   }
 
   @Test
-  public void rewoundActionMayStartTwice() throws Exception {
-    // This test demonstrates that a rewound action can cause two ActionStartedEvents to be emitted,
-    // one paired with an ActionRewoundEvent and the other with an ActionCompletedEvent, and the
-    // CriticalPathComputer handles it.
+  public void rewoundAction_bothExecutionsOnCriticalPath() throws Exception {
+    // The consumer fails with a lost input after the producer completed, which rewinds the
+    // producer. Both executions of the producer and both attempts of the consumer are on the
+    // critical path: the consumer's second execution waited for the producer's second execution,
+    // which ran because the consumer's first attempt failed after the producer's first execution.
     MockAction producer =
         new MockAction(ImmutableSet.of(), ImmutableSet.of(artifact("shared.out")));
     MockAction consumer =
@@ -807,37 +808,79 @@ public class CriticalPathComputerTest extends FoundationTestCase {
             Collections.singleton(artifact("shared.out")),
             ImmutableSet.of(artifact("consumer.out")));
 
+    long producerFirstStart = clock.nanoTime();
     simulateActionExec(producer, 10);
     long consumerFirstStart = clock.nanoTime();
     computer.actionStarted(new ActionStartedEvent(consumer, consumerFirstStart));
     clock.advanceMillis(5);
-    computer.actionRewound(new ActionRewoundEvent(consumerFirstStart, clock.nanoTime(), consumer));
+    computer.actionRewound(
+        new ActionRewoundEvent(
+            consumerFirstStart, clock.nanoTime(), consumer, ImmutableList.of(producer)));
 
+    long producerSecondStart = clock.nanoTime();
+    simulateActionExec(producer, 10);
+    long consumerSecondStart = clock.nanoTime();
+    simulateActionExec(consumer, 20);
+
+    AggregatedCriticalPath criticalPath = computer.aggregate();
+
+    assertThat(criticalPath.getAggregatedElapsedTime()).isEqualTo(Duration.ofMillis(45));
+    ImmutableList<CriticalPathComponent> components = criticalPath.components();
+    assertThat(components).hasSize(4);
+    assertActionMatches(consumer, components.get(0));
+    assertThat(components.get(0).getStartTimeNanos()).isEqualTo(consumerSecondStart);
+    assertThat(components.get(0).getElapsedTime()).isEqualTo(Duration.ofMillis(20));
+    assertActionMatches(producer, components.get(1));
+    assertThat(components.get(1).getStartTimeNanos()).isEqualTo(producerSecondStart);
+    assertThat(components.get(1).getElapsedTime()).isEqualTo(Duration.ofMillis(10));
+    assertActionMatches(consumer, components.get(2));
+    assertThat(components.get(2).getStartTimeNanos()).isEqualTo(consumerFirstStart);
+    assertThat(components.get(2).getElapsedTime()).isEqualTo(Duration.ofMillis(5));
+    assertThat(components.get(2).getLongestPhaseSpawnRunnerName()).isEqualTo("action rewound");
+    assertActionMatches(producer, components.get(3));
+    assertThat(components.get(3).getStartTimeNanos()).isEqualTo(producerFirstStart);
+    assertThat(components.get(3).getElapsedTime()).isEqualTo(Duration.ofMillis(10));
+
+    // Every execution is a component of its own.
+    List<CriticalPathComponent> slowest = computer.getSlowestComponents();
+    assertThat(slowest).hasSize(4);
+    assertThat(slowest.stream().map(CriticalPathComponent::getElapsedTime))
+        .containsExactly(
+            Duration.ofMillis(20),
+            Duration.ofMillis(10),
+            Duration.ofMillis(10),
+            Duration.ofMillis(5))
+        .inOrder();
+  }
+
+  @Test
+  public void rewoundAction_withoutRewoundEvent_earlierExecutionOnCriticalPath() throws Exception {
+    // The producer is rewound without a failed action being reported, e.g. because a top-level
+    // output was lost or the lost input was noticed before the consumer started. The producer's
+    // second execution still depends on its first one.
+    MockAction producer =
+        new MockAction(ImmutableSet.of(), ImmutableSet.of(artifact("shared.out")));
+    MockAction consumer =
+        new MockAction(
+            Collections.singleton(artifact("shared.out")),
+            ImmutableSet.of(artifact("consumer.out")));
+
+    long producerFirstStart = clock.nanoTime();
+    simulateActionExec(producer, 10);
     long producerSecondStart = clock.nanoTime();
     simulateActionExec(producer, 10);
     simulateActionExec(consumer, 20);
 
     AggregatedCriticalPath criticalPath = computer.aggregate();
 
-    assertActionMatches(consumer, criticalPath.components().get(0));
-    assertActionMatches(producer, criticalPath.components().get(1));
-
-    assertThat(criticalPath.components().get(0).getElapsedTime()).isEqualTo(Duration.ofMillis(20));
-    assertThat(criticalPath.components().get(1).getElapsedTime()).isEqualTo(Duration.ofMillis(10));
-    // The producer's component reflects its second execution, which the consumer waited for.
-    assertThat(criticalPath.components().get(1).getStartTimeNanos()).isEqualTo(producerSecondStart);
-    assertThat(criticalPath.getAggregatedElapsedTime()).isEqualTo(Duration.ofMillis(30));
-
-    List<CriticalPathComponent> slowest = computer.getSlowestComponents();
-    assertThat(slowest).hasSize(2);
-    for (CriticalPathComponent cpath : slowest) {
-      if (actionMatches(producer, cpath)) {
-        assertThat(cpath.getElapsedTime()).isEqualTo(Duration.ofMillis(10));
-      }
-      if (actionMatches(consumer, cpath)) {
-        assertThat(cpath.getElapsedTime()).isEqualTo(Duration.ofMillis(20));
-      }
-    }
+    assertThat(criticalPath.getAggregatedElapsedTime()).isEqualTo(Duration.ofMillis(40));
+    ImmutableList<CriticalPathComponent> components = criticalPath.components();
+    assertThat(components).hasSize(3);
+    assertActionMatches(consumer, components.get(0));
+    assertActionMatches(producer, components.get(1));
+    assertThat(components.get(1).getStartTimeNanos()).isEqualTo(producerSecondStart);
+    assertActionMatches(producer, components.get(2));
+    assertThat(components.get(2).getStartTimeNanos()).isEqualTo(producerFirstStart);
   }
 
   /**

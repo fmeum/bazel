@@ -264,11 +264,14 @@ public final class ActionRewindStrategy {
           createLostInputRewindEvent(failedAction, rewindPlan, lostInputRecords));
     }
 
+    ImmutableList<ActionAnalysisMetadata> deps = depsToRewind.build();
     if (e.isActionStartedEventAlreadyEmitted()) {
       env.getListener()
-          .post(new ActionRewoundEvent(actionStartTimeNanos, BlazeClock.nanoTime(), failedAction));
+          .post(
+              new ActionRewoundEvent(
+                  actionStartTimeNanos, BlazeClock.nanoTime(), failedAction, deps));
     }
-    skyframeActionExecutor.prepareForRewinding(failedKey, failedAction, depsToRewind.build());
+    skyframeActionExecutor.prepareForRewinding(failedKey, failedAction, deps);
 
     return rewindPlanResult;
   }

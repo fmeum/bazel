@@ -13,7 +13,9 @@
 // limitations under the License.
 package com.google.devtools.build.lib.skyframe.rewinding;
 
+import com.google.common.collect.ImmutableList;
 import com.google.devtools.build.lib.actions.Action;
+import com.google.devtools.build.lib.actions.ActionAnalysisMetadata;
 import com.google.devtools.build.lib.events.ExtendedEventHandler.Postable;
 
 /**
@@ -25,6 +27,7 @@ public final class ActionRewoundEvent implements Postable {
   private final long relativeActionStartTimeNanos;
   private final long relativeActionFinishTimeNanos;
   private final Action failedRewoundAction;
+  private final ImmutableList<ActionAnalysisMetadata> depsToRewind;
 
   /**
    * Create an event for action that that failed because of lost inputs, and that will try to
@@ -32,14 +35,18 @@ public final class ActionRewoundEvent implements Postable {
    *
    * @param relativeActionStartTime a nanotime taken before action execution began
    * @param failedRewoundAction the failed action.
+   * @param depsToRewind the actions that are rewound to regenerate the lost inputs and thus
+   *     execute again after this event.
    */
   public ActionRewoundEvent(
       long relativeActionStartTimeNanos,
       long relativeActionFinishTimeNanos,
-      Action failedRewoundAction) {
+      Action failedRewoundAction,
+      ImmutableList<ActionAnalysisMetadata> depsToRewind) {
     this.relativeActionStartTimeNanos = relativeActionStartTimeNanos;
     this.relativeActionFinishTimeNanos = relativeActionFinishTimeNanos;
     this.failedRewoundAction = failedRewoundAction;
+    this.depsToRewind = depsToRewind;
   }
 
   /** Returns a nanotime taken before action execution began. */
@@ -55,5 +62,13 @@ public final class ActionRewoundEvent implements Postable {
   /** Returns the associated action. */
   public Action getFailedRewoundAction() {
     return failedRewoundAction;
+  }
+
+  /**
+   * Returns the actions that are rewound to regenerate the lost inputs and thus execute again after
+   * this event.
+   */
+  public ImmutableList<ActionAnalysisMetadata> getDepsToRewind() {
+    return depsToRewind;
   }
 }
