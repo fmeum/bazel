@@ -62,7 +62,10 @@ public class RegistryFactoryImpl implements RegistryFactory {
               switch (lockfileMode) {
                 case ERROR -> KnownFileHashesMode.ENFORCE;
                 case REFRESH -> KnownFileHashesMode.USE_IMMUTABLE_AND_UPDATE;
-                case OFF, UPDATE -> KnownFileHashesMode.USE_AND_UPDATE;
+                case UPDATE -> KnownFileHashesMode.USE_AND_UPDATE;
+                // The lockfile is neither read nor written in this mode, so hashes recorded in it
+                // must not be used to validate registry downloads.
+                case OFF -> KnownFileHashesMode.IGNORE;
               };
           case "file" -> KnownFileHashesMode.IGNORE;
           default ->

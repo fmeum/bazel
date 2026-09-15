@@ -168,6 +168,48 @@ class BazelLockfileTest(test_base.TestBase):
         stderr,
     )
 
+  def testStaleRegistryFileHashIgnoredWithoutLockfile(self):
+    # Regression test for https://github.com/bazelbuild/bazel/issues/31101:
+    # --lockfile_mode=off must not read registry file hashes from the lockfile.
+    self.main_registry.createShModule('sss', '1.3', {'aaa': '1.1'})
+    self.ScratchFile(
+        'MODULE.bazel',
+        [
+            'bazel_dep(name = "sss", version = "1.3")',
+        ],
+    )
+    self.ScratchFile('BUILD', ['filegroup(name = "hello")'])
+    self.RunBazel(['build', '--nobuild', '--lockfile_mode=update', '//:all'])
+
+    # Corrupt the recorded hash of the module file of 'sss'.
+    with open(self.Path('MODULE.bazel.lock'), 'r') as f:
+      lockfile = json.loads(f.read().strip())
+    module_file_url = (
+        self.main_registry.getURL() + '/modules/sss/1.3/MODULE.bazel'
+    )
+    self.assertIn(module_file_url, lockfile['registryFileHashes'])
+    lockfile['registryFileHashes'][module_file_url] = 'sha256-' + 'A' * 43 + '='
+    with open(self.Path('MODULE.bazel.lock'), 'w') as f:
+      f.write(json.dumps(lockfile))
+
+    # Shutdown bazel to empty any cache of the deps tree
+    self.RunBazel(['shutdown'])
+    # The corrupted lockfile must not be consulted with --lockfile_mode=off.
+    self.RunBazel(['build', '--nobuild', '--lockfile_mode=off', '//:all'])
+    # The lockfile must not have been touched either.
+    with open(self.Path('MODULE.bazel.lock'), 'r') as f:
+      self.assertEqual(json.loads(f.read().strip()), lockfile)
+
+    # Shutdown bazel to empty any cache of the deps tree
+    self.RunBazel(['shutdown'])
+    # With the lockfile in use, the corrupted hash is detected.
+    exit_code, _, stderr = self.RunBazel(
+        ['build', '--nobuild', '--lockfile_mode=update', '//:all'],
+        allow_failure=True,
+    )
+    self.AssertExitCode(exit_code, 48, stderr)
+    self.assertIn('Checksum was', '\n'.join(stderr))
+
   def testChangeModuleInRegistryWithLockfile(self):
     # Add module 'sss' to the registry with dep on 'aaa'
     self.main_registry.createShModule('sss', '1.3', {'aaa': '1.1'})

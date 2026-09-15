@@ -69,9 +69,16 @@ public class RegistryFunction implements SkyFunction {
       LAST_INVALIDATION.get(env);
     }
 
-    BazelLockFileValue lockfile = (BazelLockFileValue) env.getValue(BazelLockFileValue.KEY);
-    if (lockfile == null) {
-      return null;
+    BazelLockFileValue lockfile;
+    if (lockfileMode == LockfileMode.OFF) {
+      // The lockfile must neither be read nor written in this mode, so don't let any registry file
+      // hashes or yanked version information recorded in it influence registry access.
+      lockfile = BazelLockFileValue.EMPTY_LOCKFILE;
+    } else {
+      lockfile = (BazelLockFileValue) env.getValue(BazelLockFileValue.KEY);
+      if (lockfile == null) {
+        return null;
+      }
     }
 
     RegistryKey key = (RegistryKey) skyKey.argument();
