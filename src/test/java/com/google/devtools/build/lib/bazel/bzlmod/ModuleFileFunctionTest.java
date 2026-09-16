@@ -76,6 +76,7 @@ import com.google.devtools.build.skyframe.SequencedRecordingDifferencer;
 import com.google.devtools.build.skyframe.SkyFunction;
 import com.google.devtools.build.skyframe.SkyFunctionName;
 import com.google.devtools.build.skyframe.SkyKey;
+import com.google.devtools.build.skyframe.SkyValue;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Optional;
@@ -2394,5 +2395,87 @@ public class ModuleFileFunctionTest extends FoundationTestCase {
         module extension 'ext' at /workspace/MODULE.bazel:4:12. Please refer \
         to @my_repo directly.\
         """);
+  }
+  @Test
+  public void testLockfileChangeUnrelatedToRegistriesIsChangePruned() throws Exception {
+    scratch.overwriteFile(
+        rootDirectory.getRelative("MODULE.bazel").getPathString(),
+        "module(name='aaa',version='0.1')",
+        "bazel_dep(name='bbb',version='1.0')");
+    FakeRegistry registry =
+        registryFactory
+            .newFakeRegistry("/foo")
+            .addModule(createModuleKey("bbb", "1.0"), "module(name='bbb',version='1.0')");
+    ModuleFileFunction.REGISTRIES.set(differencer, ImmutableSet.of(registry.getUrl()));
+    RootedPath lockfilePath =
+        RootedPath.toRootedPath(Root.fromPath(rootDirectory), LabelConstants.MODULE_LOCKFILE_NAME);
+    scratch.overwriteFile(
+        lockfilePath.asPath().getPathString(),
+        """
+        {
+          "lockFileVersion": %d,
+          "registryFileHashes": {},
+          "selectedYankedVersions": {},
+          "moduleExtensions": {},
+          "facts": {},
+          "factsVersions": {}
+        }
+        """
+            .formatted(BazelLockFileValue.LOCK_FILE_VERSION));
+
+    ModuleFileValue.Key moduleFileKey = ModuleFileValue.key(createModuleKey("bbb", "1.0"));
+    EvaluationResult<ModuleFileValue> result =
+        evaluator.evaluate(ImmutableList.of(moduleFileKey), evaluationContext);
+    if (result.hasError()) {
+      throw result.getError().getException();
+    }
+    ModuleFileValue moduleFileValue = result.get(moduleFileKey);
+    SkyValue lockfileValue = evaluator.getExistingValue(BazelLockFileValue.KEY);
+    SkyValue registryValue = evaluator.getExistingValue(RegistryKey.create(registry.getUrl()));
+    assertThat(lockfileValue).isNotNull();
+    assertThat(registryValue).isNotNull();
+
+    // Simulate Bazel updating the lockfile with the result of a module extension evaluation, which
+    // doesn't affect the information relevant to registries.
+    scratch.overwriteFile(
+        lockfilePath.asPath().getPathString(),
+        """
+        {
+          "lockFileVersion": %d,
+          "registryFileHashes": {},
+          "selectedYankedVersions": {},
+          "moduleExtensions": {
+            "//:ext.bzl%%ext": {
+              "general": {
+                "bzlTransitiveDigest": "/52x0MXN1/7a7iXXVFd/DSeo5qsPavA2xIPA90pb1IQ=",
+                "usagesDigest": "iQ94K7suyvfa+i5YPE70p6v21KP8z5OyhrrMYC34bms=",
+                "recordedInputs": [],
+                "generatedRepoSpecs": {
+                  "gen": {
+                    "repoRuleId": "@@//:ext.bzl%%_repo",
+                    "attributes": {}
+                  }
+                }
+              }
+            }
+          },
+          "facts": {},
+          "factsVersions": {}
+        }
+        """
+            .formatted(BazelLockFileValue.LOCK_FILE_VERSION));
+    differencer.invalidate(ImmutableList.of(FileStateValue.key(lockfilePath)));
+
+    result = evaluator.evaluate(ImmutableList.of(moduleFileKey), evaluationContext);
+    if (result.hasError()) {
+      throw result.getError().getException();
+    }
+    // The lockfile value itself changed, ...
+    assertThat(evaluator.getExistingValue(BazelLockFileValue.KEY)).isNotEqualTo(lockfileValue);
+    // ... but the registry value was change-pruned, ...
+    assertThat(evaluator.getExistingValue(RegistryKey.create(registry.getUrl())))
+        .isSameInstanceAs(registryValue);
+    // ... so the module file wasn't re-evaluated either.
+    assertThat(result.get(moduleFileKey)).isSameInstanceAs(moduleFileValue);
   }
 }

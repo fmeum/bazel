@@ -1119,4 +1119,118 @@ public class IndexRegistryTest extends FoundationTestCase {
     return Checksum.fromString(
         DownloadCache.KeyType.SHA256, Hashing.sha256().hashString(content, UTF_8).toString());
   }
+  @Test
+  public void testEquality() throws Exception {
+    // RegistryFunction relies on value equality of registries for change pruning: Skyframe must
+    // not re-evaluate module file fetches and resolution when the lockfile changed in ways that
+    // don't affect registries.
+    ImmutableMap<String, Optional<Checksum>> hashes =
+        ImmutableMap.of(
+            "https://example.com/reg/modules/foo/1.0/MODULE.bazel", Optional.of(sha256("a")));
+    ImmutableMap<ModuleKey, String> yankedVersions =
+        ImmutableMap.of(createModuleKey("foo", "1.0"), "reason");
+    Registry registry =
+        registryFactory.createRegistry(
+            "https://example.com/reg",
+            LockfileMode.UPDATE,
+            hashes,
+            yankedVersions,
+            Optional.empty(),
+            ImmutableSet.of());
+    Registry sameRegistry =
+        registryFactory.createRegistry(
+            "https://example.com/reg",
+            LockfileMode.UPDATE,
+            hashes,
+            yankedVersions,
+            Optional.empty(),
+            ImmutableSet.of());
+    assertThat(sameRegistry).isEqualTo(registry);
+    assertThat(sameRegistry.hashCode()).isEqualTo(registry.hashCode());
+    // OFF and UPDATE mode both result in the same handling of known file hashes.
+    assertThat(
+            registryFactory.createRegistry(
+                "https://example.com/reg",
+                LockfileMode.OFF,
+                hashes,
+                yankedVersions,
+                Optional.empty(),
+                ImmutableSet.of()))
+        .isEqualTo(registry);
+
+    // Different URL.
+    assertThat(
+            registryFactory.createRegistry(
+                "https://example.com/other",
+                LockfileMode.UPDATE,
+                hashes,
+                yankedVersions,
+                Optional.empty(),
+                ImmutableSet.of()))
+        .isNotEqualTo(registry);
+    // Different handling of known file hashes.
+    assertThat(
+            registryFactory.createRegistry(
+                "https://example.com/reg",
+                LockfileMode.ERROR,
+                hashes,
+                yankedVersions,
+                Optional.empty(),
+                ImmutableSet.of()))
+        .isNotEqualTo(registry);
+    // Different known file hashes.
+    assertThat(
+            registryFactory.createRegistry(
+                "https://example.com/reg",
+                LockfileMode.UPDATE,
+                ImmutableMap.of(
+                    "https://example.com/reg/modules/foo/1.0/MODULE.bazel",
+                    Optional.of(sha256("b"))),
+                yankedVersions,
+                Optional.empty(),
+                ImmutableSet.of()))
+        .isNotEqualTo(registry);
+    // Different previously selected yanked versions.
+    assertThat(
+            registryFactory.createRegistry(
+                "https://example.com/reg",
+                LockfileMode.UPDATE,
+                hashes,
+                ImmutableMap.of(),
+                Optional.empty(),
+                ImmutableSet.of()))
+        .isNotEqualTo(registry);
+    // Different vendor directory.
+    assertThat(
+            registryFactory.createRegistry(
+                "https://example.com/reg",
+                LockfileMode.UPDATE,
+                hashes,
+                yankedVersions,
+                Optional.of(rootDirectory.getRelative("vendor")),
+                ImmutableSet.of()))
+        .isNotEqualTo(registry);
+    // Different module mirrors.
+    assertThat(
+            registryFactory.createRegistry(
+                "https://example.com/reg",
+                LockfileMode.UPDATE,
+                hashes,
+                yankedVersions,
+                Optional.empty(),
+                ImmutableSet.of("https://mirror.example.com/")))
+        .isNotEqualTo(registry);
+    // Different client environment (not tracked by Skyframe, but captured by the registry).
+    RegistryFactoryImpl otherEnvRegistryFactory =
+        new RegistryFactoryImpl(Suppliers.ofInstance(ImmutableMap.of("SOME_VAR", "value")));
+    assertThat(
+            otherEnvRegistryFactory.createRegistry(
+                "https://example.com/reg",
+                LockfileMode.UPDATE,
+                hashes,
+                yankedVersions,
+                Optional.empty(),
+                ImmutableSet.of()))
+        .isNotEqualTo(registry);
+  }
 }

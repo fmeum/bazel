@@ -95,6 +95,7 @@ public class IndexRegistry implements Registry {
   private final Gson gson;
   private final ImmutableMap<String, Optional<Checksum>> knownFileHashes;
   private final ImmutableMap<ModuleKey, String> previouslySelectedYankedVersions;
+  private final Optional<Path> vendorDir;
   @Nullable private final VendorManager vendorManager;
   private final KnownFileHashesMode knownFileHashesMode;
   private final ImmutableSet<URI> moduleMirrors;
@@ -123,6 +124,7 @@ public class IndexRegistry implements Registry {
     this.knownFileHashes = knownFileHashes;
     this.knownFileHashesMode = knownFileHashesMode;
     this.previouslySelectedYankedVersions = previouslySelectedYankedVersions;
+    this.vendorDir = vendorDir;
     this.vendorManager = vendorDir.map(VendorManager::new).orElse(null);
     this.moduleMirrors = moduleMirrors;
   }
@@ -130,6 +132,39 @@ public class IndexRegistry implements Registry {
   @Override
   public String getUrl() {
     return uri.toString();
+  }
+
+  // Equality is defined over all constructor arguments so that Skyframe can change-prune the
+  // dependents of RegistryFunction (every module file fetched from this registry, module
+  // resolution, ...) when the lockfile changes in ways that don't affect this registry, e.g. when
+  // only module extension results were updated. The lazily cached bazel_registry.json is derived
+  // from these inputs (it is fetched with the checksum recorded in knownFileHashes), so it doesn't
+  // need to be part of the comparison.
+  @Override
+  public boolean equals(Object other) {
+    if (this == other) {
+      return true;
+    }
+    return other instanceof IndexRegistry that
+        && uri.equals(that.uri)
+        && clientEnv.equals(that.clientEnv)
+        && knownFileHashes.equals(that.knownFileHashes)
+        && knownFileHashesMode == that.knownFileHashesMode
+        && previouslySelectedYankedVersions.equals(that.previouslySelectedYankedVersions)
+        && vendorDir.equals(that.vendorDir)
+        && moduleMirrors.equals(that.moduleMirrors);
+  }
+
+  @Override
+  public int hashCode() {
+    return Objects.hash(
+        uri,
+        clientEnv,
+        knownFileHashes,
+        knownFileHashesMode,
+        previouslySelectedYankedVersions,
+        vendorDir,
+        moduleMirrors);
   }
 
   private String constructUrl(String base, String... segments) {
