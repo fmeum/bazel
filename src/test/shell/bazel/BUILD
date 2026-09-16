@@ -962,6 +962,13 @@ sh_test(
 )
 
 sh_test(
+    name = "cmd_script_test",
+    size = "large",
+    srcs = ["cmd_script_test.sh"],
+    data = [":test-deps"],
+)
+
+sh_test(
     name = "starlark_rule_test",
     size = "large",
     srcs = ["starlark_rule_test.sh"],

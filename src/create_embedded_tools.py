@@ -47,6 +47,8 @@ output_paths = [
     ('*launcher.exe', lambda x: 'tools/launcher/launcher.exe'),
     ('*launcher_maker.exe', lambda x: 'tools/launcher/launcher_maker.exe'),
     ('*def_parser.exe', lambda x: 'tools/def_parser/def_parser.exe'),
+    ('*cmd_runner.exe', lambda x: 'tools/cmd/cmd_runner/cmd_runner.exe'),
+    ('*src/tools/cmd_runner/cmd_runner', lambda x: 'tools/cmd/cmd_runner/cmd_runner'),
     ('*zipper.exe', lambda x: 'tools/zip/zipper/zipper.exe'),
     ('*zipper', lambda x: 'tools/zip/zipper/zipper'),
     ('*xcode*xcode-locator', lambda x: 'tools/objc/xcode-locator'),

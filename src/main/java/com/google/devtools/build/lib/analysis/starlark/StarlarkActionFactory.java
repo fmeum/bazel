@@ -30,6 +30,7 @@ import com.google.devtools.build.lib.actions.CommandLine;
 import com.google.devtools.build.lib.actions.ExecException;
 import com.google.devtools.build.lib.actions.ExecutionRequirements;
 import com.google.devtools.build.lib.actions.ParamFileInfo;
+import com.google.devtools.build.lib.actions.ParameterFile.ParameterFileType;
 import com.google.devtools.build.lib.actions.ResourceSet;
 import com.google.devtools.build.lib.actions.ResourceSetOrBuilder;
 import com.google.devtools.build.lib.actions.UserExecException;
@@ -55,6 +56,10 @@ import com.google.devtools.build.lib.analysis.actions.SymlinkAction;
 import com.google.devtools.build.lib.analysis.actions.TemplateExpansionAction;
 import com.google.devtools.build.lib.analysis.config.ToolchainTypeRequirement;
 import com.google.devtools.build.lib.analysis.platform.PlatformInfo;
+import com.google.devtools.build.lib.analysis.platform.ToolchainInfo;
+import com.google.devtools.build.lib.analysis.starlark.cmd.CmdElement;
+import com.google.devtools.build.lib.analysis.starlark.cmd.CmdModule;
+import com.google.devtools.build.lib.analysis.starlark.cmd.CmdScriptCommandLine;
 import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.cmdline.LabelSyntaxException;
 import com.google.devtools.build.lib.cmdline.RepositoryMapping;
@@ -84,6 +89,7 @@ import com.google.protobuf.GeneratedMessage;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -100,6 +106,7 @@ import net.starlark.java.eval.StarlarkCallable;
 import net.starlark.java.eval.StarlarkFloat;
 import net.starlark.java.eval.StarlarkFunction;
 import net.starlark.java.eval.StarlarkInt;
+import net.starlark.java.eval.StarlarkList;
 import net.starlark.java.eval.StarlarkSemantics;
 import net.starlark.java.eval.StarlarkThread;
 import net.starlark.java.eval.StarlarkValue;
@@ -678,6 +685,144 @@ public class StarlarkActionFactory implements StarlarkActionFactoryApi {
         executionRequirementsUnchecked,
         execGroupUnchecked,
         shadowedActionUnchecked,
+        resourceSetUnchecked,
+        toolchainUnchecked,
+        builder);
+  }
+
+  @Override
+  public void runScript(
+      Object script,
+      Sequence<?> outputs,
+      Object inputs,
+      Object toolsUnchecked,
+      Object mnemonicUnchecked,
+      Object progressMessage,
+      Boolean useDefaultShellEnv,
+      Object envUnchecked,
+      Object executionRequirementsUnchecked,
+      Object execGroupUnchecked,
+      Object resourceSetUnchecked,
+      Object toolchainUnchecked)
+      throws EvalException, InterruptedException {
+    context.checkMutable("actions.run_script");
+    if (!getSemantics().getBool(StarlarkSemantics.EXPERIMENTAL_STARLARK_CMD)) {
+      throw Starlark.errorf("actions.run_script requires --experimental_starlark_cmd");
+    }
+    execGroupUnchecked = context.maybeOverrideExecGroup(execGroupUnchecked);
+    toolchainUnchecked = context.maybeOverrideToolchain(toolchainUnchecked);
+    if (toolchainUnchecked == Starlark.UNBOUND) {
+      toolchainUnchecked = CmdModule.TOOLCHAIN_TYPE;
+    }
+    RuleContext ruleContext = getRuleContext();
+
+    ImmutableList<CmdElement> elements = CmdModule.toScript(script);
+
+    // Infer inputs, outputs and tools from the script.
+    LinkedHashSet<Artifact> inferredInputs = new LinkedHashSet<>();
+    LinkedHashSet<Artifact> allOutputs =
+        new LinkedHashSet<>(Sequence.cast(outputs, Artifact.class, "outputs"));
+    LinkedHashSet<FilesToRunProvider> inferredTools = new LinkedHashSet<>();
+    LinkedHashSet<Artifact> inferredExecutables = new LinkedHashSet<>();
+    CmdElement.Collector collector =
+        new CmdElement.Collector() {
+          @Override
+          public void input(Artifact artifact) {
+            inferredInputs.add(artifact);
+          }
+
+          @Override
+          public void output(Artifact artifact) {
+            allOutputs.add(artifact);
+          }
+
+          @Override
+          public void tool(FilesToRunProvider tool) {
+            inferredTools.add(tool);
+          }
+
+          @Override
+          public void executable(Artifact artifact) {
+            inferredExecutables.add(artifact);
+          }
+        };
+    for (CmdElement element : elements) {
+      element.collect(collector);
+    }
+    for (Artifact output : allOutputs) {
+      if (output.isSourceArtifact()) {
+        throw Starlark.errorf(
+            "the script writes to %s, which is a source file", output.getExecPathString());
+      }
+    }
+    inferredInputs.removeAll(allOutputs);
+    if (allOutputs.isEmpty()) {
+      throw Starlark.errorf(
+          "the script has no outputs: redirect the output of a command to a File or list the"
+              + " files written by the script in 'outputs'");
+    }
+
+    StarlarkAction.Builder builder = new StarlarkAction.Builder();
+
+    // The runner comes from the cmd toolchain of the exec group the action runs in.
+    String execGroup = determineExecGroup(ruleContext, execGroupUnchecked, toolchainUnchecked);
+    ToolchainInfo toolchainInfo = null;
+    if (ruleContext.getToolchainContexts() != null
+        && ruleContext.getToolchainContexts().hasToolchainContext(execGroup)) {
+      toolchainInfo =
+          ruleContext
+              .getToolchainContexts()
+              .getToolchainContext(execGroup)
+              .forToolchainType(CmdModule.TOOLCHAIN_TYPE);
+    }
+    if (toolchainInfo == null) {
+      throw Starlark.errorf(
+          "actions.run_script requires the rule to declare the toolchain type %s in its"
+              + " 'toolchains' (or the exec group '%s' to declare it)",
+          CmdModule.TOOLCHAIN_TYPE, execGroup);
+    }
+    Object runner = toolchainInfo.getValue("runner");
+    if (runner instanceof FilesToRunProvider provider) {
+      builder.setExecutable(provider);
+    } else if (runner instanceof Artifact artifact) {
+      builder.setExecutable(artifact);
+    } else {
+      throw Starlark.errorf(
+          "the cmd toolchain %s does not provide a 'runner' executable",
+          Starlark.repr(toolchainInfo, getSemantics()));
+    }
+    builder.addCommandLine(
+        new CmdScriptCommandLine(elements),
+        ParamFileInfo.builder(ParameterFileType.UNQUOTED).setUseAlways(true).build());
+
+    if (inputs instanceof Sequence) {
+      builder.addInputs(Sequence.cast(inputs, Artifact.class, "inputs"));
+    } else {
+      builder.addTransitiveInputs(Depset.cast(inputs, Artifact.class, "inputs"));
+    }
+    for (FilesToRunProvider tool : inferredTools) {
+      builder.addTool(tool);
+    }
+    for (Artifact executable : inferredExecutables) {
+      builder.addTool(executable);
+      FilesToRunProvider provider = context.getExecutableRunfiles(executable, "cmd");
+      if (provider != null) {
+        builder.addTool(provider);
+      }
+    }
+
+    registerStarlarkAction(
+        StarlarkList.immutableCopyOf(allOutputs),
+        StarlarkList.immutableCopyOf(inferredInputs),
+        /* unusedInputsList= */ Starlark.NONE,
+        toolsUnchecked,
+        mnemonicUnchecked,
+        progressMessage,
+        useDefaultShellEnv,
+        envUnchecked,
+        executionRequirementsUnchecked,
+        execGroupUnchecked,
+        /* shadowedActionUnchecked= */ Starlark.NONE,
         resourceSetUnchecked,
         toolchainUnchecked,
         builder);

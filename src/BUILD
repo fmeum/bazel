@@ -98,6 +98,8 @@ JAVA_TOOLS = [
                "//src/main/cpp/util:embedded_tools",
                "//src/main/native:embedded_tools",
                "//src/main/protobuf:srcs",
+               "//src/tools/cmd_runner",
+               "//src/tools/cmd_runner:srcs",
                "//src/tools/launcher:srcs",
                "//third_party:gpl-srcs",
                "//third_party/def_parser:srcs",

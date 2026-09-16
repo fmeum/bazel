@@ -716,8 +716,32 @@ launcher_flag_alias(
         """
         module(name='bazel_tools')
         register_toolchains("//tools/test:all")
+        register_toolchains("//tools/cmd:all")
         """);
     config.create("embedded_tools/tools/build_defs/repo/BUILD");
+    config.copyTool("tools/cmd/cmd_toolchain.bzl", "embedded_tools/tools/cmd/cmd_toolchain.bzl");
+    config.copyTool("tools/cmd/defs.bzl", "embedded_tools/tools/cmd/defs.bzl");
+    config.create("embedded_tools/tools/cmd/cmd_runner", "");
+    config.create(
+        "embedded_tools/tools/cmd/BUILD",
+        """
+        load(":cmd_toolchain.bzl", "cmd_toolchain")
+
+        package(default_visibility = ["//visibility:public"])
+
+        toolchain_type(name = "toolchain_type")
+
+        cmd_toolchain(
+            name = "default_cmd_toolchain_impl",
+            runner = "cmd_runner",
+        )
+
+        toolchain(
+            name = "default_cmd_toolchain",
+            toolchain = ":default_cmd_toolchain_impl",
+            toolchain_type = ":toolchain_type",
+        )
+        """);
     config.create(
         "embedded_tools/tools/build_defs/build_info/bazel_cc_build_info.bzl",
         """

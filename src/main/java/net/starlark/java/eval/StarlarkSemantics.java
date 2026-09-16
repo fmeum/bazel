@@ -263,6 +263,9 @@ public class StarlarkSemantics {
   /** Whether StarlarkSet objects may be constructed by the interpreter. */
   public static final String EXPERIMENTAL_ENABLE_STARLARK_SET = "+experimental_enable_starlark_set";
 
+  /** Whether the {@code cmd} module and {@code ctx.actions.run_script} are available. */
+  public static final String EXPERIMENTAL_STARLARK_CMD = "-experimental_starlark_cmd";
+
   /** Whether the Starlark interpreter uses UTF-8 byte strings instead of UTF-16 strings. */
   public static final String INTERNAL_BAZEL_ONLY_UTF_8_BYTE_STRINGS =
       "-internal_bazel_only_utf_8_byte_strings";

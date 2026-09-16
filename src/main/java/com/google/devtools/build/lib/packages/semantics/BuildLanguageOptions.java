@@ -725,6 +725,17 @@ public abstract class BuildLanguageOptions extends OptionsBase {
   public abstract boolean getExperimentalEnableStarlarkSet();
 
   @Option(
+      name = "experimental_starlark_cmd",
+      defaultValue = "false",
+      documentationCategory = OptionDocumentationCategory.STARLARK_SEMANTICS,
+      effectTags = {OptionEffectTag.BUILD_FILE_SEMANTICS},
+      metadataTags = {OptionMetadataTag.EXPERIMENTAL},
+      help =
+          "If true, enable the `cmd` module for building portable command pipelines and the"
+              + " `ctx.actions.run_script` action, which executes them without a shell.")
+  public abstract boolean getExperimentalStarlarkCmd();
+
+  @Option(
       name = "incompatible_locations_prefers_executable",
       defaultValue = "true",
       documentationCategory = OptionDocumentationCategory.STARLARK_SEMANTICS,
@@ -944,6 +955,7 @@ public abstract class BuildLanguageOptions extends OptionsBase {
             .setBool(
                 StarlarkSemantics.EXPERIMENTAL_ENABLE_STARLARK_SET,
                 getExperimentalEnableStarlarkSet())
+            .setBool(StarlarkSemantics.EXPERIMENTAL_STARLARK_CMD, getExperimentalStarlarkCmd())
             .setBool(
                 StarlarkSemantics.INTERNAL_BAZEL_ONLY_UTF_8_BYTE_STRINGS,
                 getInternalStarlarkUtf8ByteStrings())

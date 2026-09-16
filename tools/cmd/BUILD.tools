@@ -1,0 +1,34 @@
+load("@platforms//host:constraints.bzl", "HOST_CONSTRAINTS")
+load(":cmd_toolchain.bzl", "cmd_toolchain")
+
+package(default_visibility = ["//visibility:public"])
+
+# The runner executing scripts created with the `cmd` module. A prebuilt binary
+# is used when building for the host platform, otherwise the runner is built
+# from source with the C++ toolchain of the execution platform.
+filegroup(
+    name = "cmd_runner",
+    srcs = select({
+        ":matches_host_constraints": glob(["cmd_runner/*"]),
+        "//conditions:default": ["//src/tools/cmd_runner"],
+    }),
+)
+
+config_setting(
+    name = "matches_host_constraints",
+    constraint_values = HOST_CONSTRAINTS,
+    visibility = ["//visibility:private"],
+)
+
+toolchain_type(name = "toolchain_type")
+
+cmd_toolchain(
+    name = "default_cmd_toolchain_impl",
+    runner = ":cmd_runner",
+)
+
+toolchain(
+    name = "default_cmd_toolchain",
+    toolchain = ":default_cmd_toolchain_impl",
+    toolchain_type = ":toolchain_type",
+)

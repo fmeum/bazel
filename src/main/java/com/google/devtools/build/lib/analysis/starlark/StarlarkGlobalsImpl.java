@@ -22,6 +22,7 @@ import com.google.devtools.build.lib.analysis.DefaultInfo;
 import com.google.devtools.build.lib.analysis.MaterializedDepsInfo;
 import com.google.devtools.build.lib.analysis.OutputGroupInfo;
 import com.google.devtools.build.lib.analysis.RunEnvironmentInfo;
+import com.google.devtools.build.lib.analysis.starlark.cmd.CmdModule;
 import com.google.devtools.build.lib.bazel.bzlmod.ModuleFileGlobals;
 import com.google.devtools.build.lib.collect.nestedset.Depset;
 import com.google.devtools.build.lib.packages.BuildGlobals;
@@ -39,7 +40,9 @@ import com.google.devtools.build.lib.starlarkbuildapi.RunfilesApi;
 import com.google.devtools.build.lib.starlarkbuildapi.StarlarkRuleContextApi;
 import com.google.devtools.build.lib.starlarkbuildapi.core.TransitiveInfoCollectionApi;
 import net.starlark.java.eval.CallUtils;
+import net.starlark.java.eval.FlagGuardedValue;
 import net.starlark.java.eval.Starlark;
+import net.starlark.java.eval.StarlarkSemantics;
 import net.starlark.java.eval.TypeConstructorValue;
 import net.starlark.java.lib.json.Json;
 
@@ -62,6 +65,10 @@ public final class StarlarkGlobalsImpl implements StarlarkGlobals {
     Starlark.addMethods(env, Depset.DepsetLibrary.INSTANCE);
     env.put("json", Json.INSTANCE);
     env.put("proto", Proto.INSTANCE);
+    env.put(
+        "cmd",
+        FlagGuardedValue.onlyWhenExperimentalFlagIsTrue(
+            StarlarkSemantics.EXPERIMENTAL_STARLARK_CMD, CmdModule.INSTANCE));
   }
 
   @Override

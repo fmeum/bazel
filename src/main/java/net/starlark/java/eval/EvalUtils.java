@@ -346,16 +346,23 @@ final class EvalUtils {
         return !Starlark.checkedEquals(x, y);
 
       case LESS:
-        return compare(x, y) < 0;
-
       case LESS_EQUALS:
-        return compare(x, y) <= 0;
-
       case GREATER:
-        return compare(x, y) > 0;
-
       case GREATER_EQUALS:
-        return compare(x, y) >= 0;
+        {
+          // Application-defined types may overload the ordered comparison operators.
+          Object z = customBinaryOp(op, x, y);
+          if (z != null) {
+            return z;
+          }
+          int cmp = compare(x, y);
+          return switch (op) {
+            case LESS -> cmp < 0;
+            case LESS_EQUALS -> cmp <= 0;
+            case GREATER -> cmp > 0;
+            default -> cmp >= 0;
+          };
+        }
 
       case IN:
         if (y instanceof StarlarkMembershipTestable) {
@@ -383,6 +390,21 @@ final class EvalUtils {
     }
 
     // custom binary operator?
+    Object z = customBinaryOp(op, x, y);
+    if (z != null) {
+      return z;
+    }
+
+    throw Starlark.errorf(
+        "unsupported binary operation: %s %s %s", Starlark.type(x), op, Starlark.type(y));
+  }
+
+  /**
+   * Evaluates {@code x op y} using the {@link HasBinary} implementation of either operand, if any.
+   * Returns null if neither operand handles the operation.
+   */
+  @Nullable
+  private static Object customBinaryOp(TokenKind op, Object x, Object y) throws EvalException {
     if (x instanceof HasBinary) {
       Object z = ((HasBinary) x).binaryOp(op, y, true);
       if (z != null) {
@@ -395,9 +417,7 @@ final class EvalUtils {
         return z;
       }
     }
-
-    throw Starlark.errorf(
-        "unsupported binary operation: %s %s %s", Starlark.type(x), op, Starlark.type(y));
+    return null;
   }
 
   // Defines the behavior of the language's ordered comparison operators (< <= => >).

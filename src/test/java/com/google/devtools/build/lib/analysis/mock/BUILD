@@ -19,6 +19,7 @@ java_library(
         "*.java",
     ]),
     data = [
+        "//tools/cmd:bzl_srcs",
         "//tools/jdk:srcs",
         "@bazel_skylib//:test_deps",
         "@com_google_protobuf//bazel/private:for_bazel_tests",

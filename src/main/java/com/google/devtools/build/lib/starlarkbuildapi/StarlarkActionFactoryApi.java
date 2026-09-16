@@ -634,6 +634,186 @@ This function must be top-level, i.e. lambdas and nested functions are not allow
       throws EvalException, InterruptedException;
 
   @StarlarkMethod(
+      name = "run_script",
+      doc =
+          "Creates an action that runs commands built with the <a"
+              + " href=\"../toplevel/cmd.html\">cmd</a> module. Unlike <a"
+              + " href=\"#run_shell\">run_shell</a>, no shell is involved: the commands are"
+              + " executed by a small runner provided by the <code>@bazel_tools//tools/cmd:toolchain_type</code>"
+              + " toolchain, which the rule must declare in its <code>toolchains</code>. The"
+              + " same script works on every platform, including Windows, and on execution"
+              + " platforms without a shell or coreutils."
+              + "<p>Files referenced by the script are inferred to be inputs of the action, and"
+              + " files it writes to via redirections or builtins such as <code>cmd.cp</code> are"
+              + " inferred to be outputs. Files written by external programs must be listed in"
+              + " <code>outputs</code>."
+              + "<p>Requires <code>--experimental_starlark_cmd</code>.",
+      parameters = {
+        @Param(
+            name = "script",
+            allowedTypes = {
+              @ParamType(type = CmdElementApi.class),
+              @ParamType(type = Sequence.class, generic1 = CmdElementApi.class),
+            },
+            doc =
+                "The <a href=\"../builtins/Command.html\">Command</a> or <a"
+                    + " href=\"../builtins/Pipeline.html\">Pipeline</a> to run, or a list of"
+                    + " those, which are run in order. The action fails as soon as one of them"
+                    + " fails."),
+        @Param(
+            name = "outputs",
+            allowedTypes = {@ParamType(type = Sequence.class, generic1 = FileApi.class)},
+            defaultValue = "[]",
+            named = true,
+            positional = false,
+            doc =
+                "Output files of the action in addition to those inferred from the script. Files"
+                    + " listed here are never treated as inputs, even if the script reads them."),
+        @Param(
+            name = "inputs",
+            allowedTypes = {
+              @ParamType(type = Sequence.class, generic1 = FileApi.class),
+              @ParamType(type = Depset.class),
+            },
+            defaultValue = "[]",
+            named = true,
+            positional = false,
+            doc = "Input files of the action in addition to those inferred from the script."),
+        @Param(
+            name = "tools",
+            allowedTypes = {
+              @ParamType(type = Sequence.class, generic1 = FileApi.class),
+              @ParamType(type = Depset.class),
+            },
+            defaultValue = "unbound",
+            named = true,
+            positional = false,
+            doc = TOOLS_ARG_DOC),
+        @Param(
+            name = "mnemonic",
+            allowedTypes = {
+              @ParamType(type = String.class),
+              @ParamType(type = NoneType.class),
+            },
+            defaultValue = "None",
+            named = true,
+            positional = false,
+            doc = "A one-word description of the action, for example, CppCompile or GoLink."),
+        @Param(
+            name = "progress_message",
+            allowedTypes = {
+              @ParamType(type = String.class),
+              @ParamType(type = NoneType.class),
+            },
+            defaultValue = "None",
+            named = true,
+            positional = false,
+            doc =
+                "Progress message to show to the user during the build, for example, \"Compiling"
+                    + " foo.cc to create foo.o\". The message may contain <code>%{label}</code>,"
+                    + " <code>%{input}</code>, or <code>%{output}</code> patterns, which are"
+                    + " substituted with label string, first input, or output's path,"
+                    + " respectively. Prefer to use patterns instead of static strings, because"
+                    + " the former are more efficient."),
+        @Param(
+            name = "use_default_shell_env",
+            defaultValue = "False",
+            named = true,
+            positional = false,
+            doc =
+                "Whether the action should use the default shell environment, which consists of a"
+                    + " few OS-dependent variables as well as variables set via <a"
+                    + " href=\"/reference/command-line-reference#flag--action_env\"><code>--action_env</code></a>."
+                    + " This is required for programs that are looked up in <code>PATH</code>.<p>If"
+                    + " both <code>use_default_shell_env</code> and <code>env</code> are set to"
+                    + " <code>True</code>, values set in <code>env</code> will overwrite the"
+                    + " default shell environment."),
+        @Param(
+            name = "env",
+            allowedTypes = {
+              @ParamType(type = Dict.class),
+              @ParamType(type = NoneType.class),
+            },
+            defaultValue = "None",
+            named = true,
+            positional = false,
+            doc =
+                "Sets the dictionary of environment variables.<p>If both"
+                    + " <code>use_default_shell_env</code> and <code>env</code> are set to"
+                    + " <code>True</code>, values set in <code>env</code> will overwrite the"
+                    + " default shell environment."),
+        @Param(
+            name = "execution_requirements",
+            allowedTypes = {
+              @ParamType(type = Dict.class),
+              @ParamType(type = NoneType.class),
+            },
+            defaultValue = "None",
+            named = true,
+            positional = false,
+            doc =
+                "Information for scheduling the action. See "
+                    + "<a href=\"${link common-definitions#common.tags}\">tags</a> "
+                    + "for useful keys."),
+        @Param(
+            name = "exec_group",
+            allowedTypes = {
+              @ParamType(type = String.class),
+              @ParamType(type = NoneType.class),
+            },
+            defaultValue = "None",
+            named = true,
+            positional = false,
+            doc =
+                "Runs the action on the given exec group's execution platform. If"
+                    + " none, uses the target's default execution platform."),
+        @Param(
+            name = "resource_set",
+            allowedTypes = {
+              @ParamType(type = StarlarkCallable.class),
+              @ParamType(type = Dict.class),
+              @ParamType(type = NoneType.class),
+            },
+            defaultValue = "None",
+            named = true,
+            positional = false,
+            doc =
+                "A callback function or dictionary for estimating resource usage if run locally."
+                    + " See <a href=\"#run.resource_set\"><code>ctx.actions.run()</code></a>."),
+        @Param(
+            name = "toolchain",
+            allowedTypes = {
+              @ParamType(type = Label.class),
+              @ParamType(type = String.class),
+              @ParamType(type = NoneType.class),
+            },
+            defaultValue = "unbound",
+            named = true,
+            positional = false,
+            doc =
+                "<p>Toolchain type of the executable or tools used in this action. Defaults to"
+                    + " the toolchain type of the script runner,"
+                    + " <code>@bazel_tools//tools/cmd:toolchain_type</code>.</p><p>When"
+                    + " `toolchain` and `exec_group` parameters are both set, `exec_group` will be"
+                    + " used. An error is raised in case the `exec_group` doesn't specify the same"
+                    + " toolchain.</p>"),
+      })
+  void runScript(
+      Object script,
+      Sequence<?> outputs,
+      Object inputs,
+      Object toolsUnchecked,
+      Object mnemonicUnchecked,
+      Object progressMessage,
+      Boolean useDefaultShellEnv,
+      Object envUnchecked,
+      Object executionRequirementsUnchecked,
+      Object execGroupUnchecked,
+      Object resourceSetUnchecked,
+      Object toolchainUnchecked)
+      throws EvalException, InterruptedException;
+
+  @StarlarkMethod(
       name = "run_shell",
       doc =
           "Creates an action that runs a shell command. "

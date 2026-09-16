@@ -1,0 +1,194 @@
+---
+title: 'Portable scripts with cmd'
+---
+
+
+
+Many build steps are small glue tasks: concatenate a few files, filter some
+lines, copy a tool's output into place, or run a generator with the right
+arguments. Traditionally these are written as `genrule`s or
+`ctx.actions.run_shell` calls, which means writing shell snippets that only
+work where a Bourne shell and coreutils happen to be installed, quoting paths
+by hand, and giving up on Windows.
+
+The `cmd` module and `ctx.actions.run_script` provide a portable alternative:
+commands are described as Starlark values, combined with operators such as `|`
+and `>`, and executed by a small runner shipped with Bazel that understands
+pipes, redirections and the most common tools as builtins. The same script runs
+on Linux, macOS and Windows, and on execution platforms (such as minimal remote
+execution images) that provide neither a shell nor coreutils.
+
+Note: This feature is experimental and requires `--experimental_starlark_cmd`.
+Its API may change without notice.
+
+## Writing commands {#writing-commands}
+
+`cmd(program, *args)` creates a [`Command`](/rules/lib/builtins/Command) that
+runs an external program. `program` is usually an executable
+[`File`](/rules/lib/builtins/File) such as `ctx.executable.tool`; its runfiles
+are added to the action automatically. Arguments may be strings, `File`s
+(passed as their path and inferred to be inputs), labels, other commands (see
+[command substitution](#substitution)) or lists of any of these.
+
+The methods of the [`cmd` module](/rules/lib/toplevel/cmd) create commands that
+run builtins implemented by the runner itself, so they work on every platform
+without depending on any installed tools:
+
+| Builtin | Purpose |
+| --- | --- |
+| `cmd.echo(*args)` | Print arguments. |
+| `cmd.cat(*files)` | Concatenate files. |
+| `cmd.grep(pattern, *files)` | Filter lines by a regular expression. |
+| `cmd.replace(old, new, *files)` | Replace text, optionally by regular expression (a portable `sed`). |
+| `cmd.head`, `cmd.tail`, `cmd.sort`, `cmd.uniq`, `cmd.wc` | Line-oriented text tools. |
+| `cmd.cp`, `cmd.mv`, `cmd.mkdir`, `cmd.rm`, `cmd.touch`, `cmd.chmod`, `cmd.ls` | File system operations. |
+| `cmd.tee(*files)` | Copy input to files and output. |
+| `cmd.fail(*message)` | Fail the action with a message. |
+
+Builtins that read files accept `File`s, string paths relative to the execution
+root or lists of those, and read standard input if no file is given.
+
+Commands are immutable values. They are combined with operators that mirror
+shell syntax:
+
+```python
+# Pipe: the output of one command becomes the input of the next.
+cmd.cat(ctx.files.srcs) | cmd.grep("TODO") | cmd.sort(unique = True)
+
+# Redirect standard output to a file (> truncates, >> appends).
+cmd.cat(ctx.files.srcs) > out
+cmd.echo("done") >> log
+
+# Read standard input from a file, or from a literal string.
+cmd(ctx.executable.tool) < ctx.file.spec
+ctx.file.spec | cmd(ctx.executable.tool)      # same as the line above
+cmd(ctx.executable.tool) << "literal input"
+```
+
+Starlark's operator precedence differs from the shell's in one respect worth
+remembering: `>` and `<` bind less tightly than `|`, so `a | b > f` redirects
+the output of the whole pipeline, whereas `>>` and `<<` bind more tightly and
+apply to the command they are written next to. Chaining comparison operators
+(`a > f > g`) is a syntax error in Starlark, and redirecting a stream twice is
+an error in `cmd`, so mistakes are reported at analysis time rather than
+silently doing the wrong thing.
+
+Methods provide the remaining knobs: `.env(FOO = "bar")` sets environment
+variables for a single command, `.cwd(dir)` runs it in a directory (file
+arguments are passed as absolute paths automatically), `.stderr(file)` and
+`.stderr_to_stdout()` redirect standard error, and `.stdin`/`.stdout` are the
+method forms of the redirection operators.
+
+### Command substitution {#substitution}
+
+A command used as an argument of another command is run first, and its standard
+output, with trailing newlines removed, is substituted as a single argument, like
+`$(...)` in a shell but without word splitting:
+
+```python
+cmd(ctx.executable.tool, "--tag", cmd(ctx.executable.git, "describe", "--always"))
+```
+
+## Running scripts {#running-scripts}
+
+[`ctx.actions.run_script`](/rules/lib/builtins/actions#run_script) turns a
+command, a pipeline, or a list of those into an action. Commands in a list run
+in order, and the action fails as soon as one of them fails (there is no need
+for `set -e`):
+
+```python
+def _impl(ctx):
+    out = ctx.actions.declare_file(ctx.label.name + ".txt")
+    gen_dir = ctx.actions.declare_directory(ctx.label.name + "_gen")
+    ctx.actions.run_script(
+        [
+            cmd.mkdir(gen_dir),
+            cmd(ctx.executable.generator, "--out", gen_dir, ctx.file.spec)
+                .env(LANG = "C"),
+            cmd.ls(gen_dir, recursive = True) | cmd.sort() > out,
+        ],
+        outputs = [gen_dir],
+        mnemonic = "Generate",
+        progress_message = "Generating %{label}",
+    )
+    return [DefaultInfo(files = depset([out, gen_dir]))]
+
+generate = rule(
+    implementation = _impl,
+    attrs = {
+        "spec": attr.label(allow_single_file = True),
+        "generator": attr.label(cfg = "exec", executable = True),
+    },
+    toolchains = [cmd.toolchain_type],
+)
+```
+
+Inputs and outputs are inferred from the script wherever possible:
+
+*   Every `File` mentioned in a command is an input of the action, and every
+    executable `File` is a tool (with its runfiles).
+*   Files written by redirections (`>`, `>>`, `.stdout`, `.stderr`) and by
+    builtins that modify files (`cp`, `mv`, `mkdir`, `touch`, `chmod`, `tee`)
+    are outputs.
+*   Files written by external programs cannot be inferred and must be listed in
+    the `outputs` parameter, as `gen_dir` is above.
+
+The rule must declare the `cmd.toolchain_type` toolchain
+(`@bazel_tools//tools/cmd:toolchain_type`), which provides the runner for the
+execution platform. Bazel registers a default toolchain that uses a prebuilt
+runner when the execution platform matches the host and builds the runner from
+source otherwise. To provide a prebuilt runner for another platform, register a
+toolchain created with `cmd_toolchain` from `@bazel_tools//tools/cmd:cmd_toolchain.bzl`.
+
+## The `script` rule {#script-rule}
+
+For BUILD files, `@bazel_tools//tools/cmd:defs.bzl` provides `script`, a
+replacement for `genrule` with the same `srcs`, `outs` and `tools` attributes.
+The command is built with the `cmd` module directly in the BUILD file; strings
+that match an entry of `srcs`, `outs` or `tools` (by label or, within the same
+package, by name) stand for the corresponding files:
+
+```python
+load("@bazel_tools//tools/cmd:defs.bzl", "script")
+
+script(
+    name = "todos",
+    srcs = ["main.cc"],
+    outs = ["todos.txt"],
+    cmd = cmd.grep("TODO", "main.cc") | cmd.sort() > "todos.txt",
+)
+
+script(
+    name = "headers",
+    srcs = ["spec.json"],
+    outs = ["gen/a.h", "gen/b.h"],
+    tools = [":generator"],
+    cmd = cmd(":generator", "--out-dir", cmd.dirname("gen/a.h"), "spec.json"),
+)
+```
+
+Compared to `genrule`, there is no `$(location)` markup, no `$@`, `$<` or
+`$(@D)`, and no quoting: files are referenced by name and paths are always
+passed correctly. `cmd.dirname` stands for the directory of a file, which
+replaces `$(@D)` for tools that write into an output directory.
+
+Under the hood, `script` is a macro that serializes the command with
+`json.encode` and a rule that reconstructs it with
+[`cmd.decode`](/rules/lib/toplevel/cmd#decode), resolving strings to files. The
+same technique can be used to accept commands in custom rules.
+
+## Migrating from genrule {#migrating}
+
+| genrule | script |
+| --- | --- |
+| `cat $(SRCS) > $@` | `cmd.cat(srcs...) > "out"` |
+| `sed 's/foo/bar/g' $< > $@` | `cmd.replace("foo", "bar", "in") > "out"` |
+| `grep -v '^#' $< > $@` | `cmd.grep("^#", "in", invert = True) > "out"` |
+| `mkdir -p $(@D)/gen && $(location :tool) -o $(@D)/gen` | `[cmd.mkdir(cmd.dirname("gen/x")), cmd(":tool", "-o", cmd.dirname("gen/x"))]` |
+| `cp $< $@ && chmod +x $@` | `[cmd.cp("in", "out"), cmd.chmod("+x", "out")]` |
+| `$(location :tool) --version > $@` | `cmd(":tool", "--version") > "out"` |
+| `echo "$$(cat $<)" \| tr a-z A-Z` | not portable; use `cmd.replace(..., regex = True)` or a tool |
+
+Scripts intentionally have no loops, conditionals or variables at execution
+time: those belong in Starlark, where a rule implementation can build a list of
+commands from its attributes, or in a proper tool.
