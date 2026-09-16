@@ -25,6 +25,7 @@ import com.google.common.base.Suppliers;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
+import com.google.common.testing.EqualsTester;
 import com.google.common.collect.Maps;
 import com.google.common.eventbus.Subscribe;
 import com.google.common.hash.Hashing;
@@ -1127,28 +1128,31 @@ public class IndexRegistryTest extends FoundationTestCase {
     ImmutableMap<String, Optional<Checksum>> hashes =
         ImmutableMap.of(
             "https://example.com/reg/modules/foo/1.0/MODULE.bazel", Optional.of(sha256("a")));
+    ImmutableMap<String, Optional<Checksum>> otherHashes =
+        ImmutableMap.of(
+            "https://example.com/reg/modules/foo/1.0/MODULE.bazel", Optional.of(sha256("b")));
     ImmutableMap<ModuleKey, String> yankedVersions =
         ImmutableMap.of(createModuleKey("foo", "1.0"), "reason");
-    Registry registry =
-        registryFactory.createRegistry(
-            "https://example.com/reg",
-            LockfileMode.UPDATE,
-            hashes,
-            yankedVersions,
-            Optional.empty(),
-            ImmutableSet.of());
-    Registry sameRegistry =
-        registryFactory.createRegistry(
-            "https://example.com/reg",
-            LockfileMode.UPDATE,
-            hashes,
-            yankedVersions,
-            Optional.empty(),
-            ImmutableSet.of());
-    assertThat(sameRegistry).isEqualTo(registry);
-    assertThat(sameRegistry.hashCode()).isEqualTo(registry.hashCode());
-    // OFF and UPDATE mode both result in the same handling of known file hashes.
-    assertThat(
+    // The client environment is not tracked by Skyframe, but captured by the registry.
+    RegistryFactoryImpl otherEnvRegistryFactory =
+        new RegistryFactoryImpl(Suppliers.ofInstance(ImmutableMap.of("SOME_VAR", "value")));
+    new EqualsTester()
+        .addEqualityGroup(
+            registryFactory.createRegistry(
+                "https://example.com/reg",
+                LockfileMode.UPDATE,
+                hashes,
+                yankedVersions,
+                Optional.empty(),
+                ImmutableSet.of()),
+            registryFactory.createRegistry(
+                "https://example.com/reg",
+                LockfileMode.UPDATE,
+                hashes,
+                yankedVersions,
+                Optional.empty(),
+                ImmutableSet.of()),
+            // OFF and UPDATE mode both result in the same handling of known file hashes.
             registryFactory.createRegistry(
                 "https://example.com/reg",
                 LockfileMode.OFF,
@@ -1156,10 +1160,8 @@ public class IndexRegistryTest extends FoundationTestCase {
                 yankedVersions,
                 Optional.empty(),
                 ImmutableSet.of()))
-        .isEqualTo(registry);
-
-    // Different URL.
-    assertThat(
+        // Different URL.
+        .addEqualityGroup(
             registryFactory.createRegistry(
                 "https://example.com/other",
                 LockfileMode.UPDATE,
@@ -1167,9 +1169,8 @@ public class IndexRegistryTest extends FoundationTestCase {
                 yankedVersions,
                 Optional.empty(),
                 ImmutableSet.of()))
-        .isNotEqualTo(registry);
-    // Different handling of known file hashes.
-    assertThat(
+        // Different handling of known file hashes.
+        .addEqualityGroup(
             registryFactory.createRegistry(
                 "https://example.com/reg",
                 LockfileMode.ERROR,
@@ -1177,21 +1178,25 @@ public class IndexRegistryTest extends FoundationTestCase {
                 yankedVersions,
                 Optional.empty(),
                 ImmutableSet.of()))
-        .isNotEqualTo(registry);
-    // Different known file hashes.
-    assertThat(
+        .addEqualityGroup(
             registryFactory.createRegistry(
                 "https://example.com/reg",
-                LockfileMode.UPDATE,
-                ImmutableMap.of(
-                    "https://example.com/reg/modules/foo/1.0/MODULE.bazel",
-                    Optional.of(sha256("b"))),
+                LockfileMode.REFRESH,
+                hashes,
                 yankedVersions,
                 Optional.empty(),
                 ImmutableSet.of()))
-        .isNotEqualTo(registry);
-    // Different previously selected yanked versions.
-    assertThat(
+        // Different known file hashes.
+        .addEqualityGroup(
+            registryFactory.createRegistry(
+                "https://example.com/reg",
+                LockfileMode.UPDATE,
+                otherHashes,
+                yankedVersions,
+                Optional.empty(),
+                ImmutableSet.of()))
+        // Different previously selected yanked versions.
+        .addEqualityGroup(
             registryFactory.createRegistry(
                 "https://example.com/reg",
                 LockfileMode.UPDATE,
@@ -1199,9 +1204,8 @@ public class IndexRegistryTest extends FoundationTestCase {
                 ImmutableMap.of(),
                 Optional.empty(),
                 ImmutableSet.of()))
-        .isNotEqualTo(registry);
-    // Different vendor directory.
-    assertThat(
+        // Different vendor directory.
+        .addEqualityGroup(
             registryFactory.createRegistry(
                 "https://example.com/reg",
                 LockfileMode.UPDATE,
@@ -1209,9 +1213,8 @@ public class IndexRegistryTest extends FoundationTestCase {
                 yankedVersions,
                 Optional.of(rootDirectory.getRelative("vendor")),
                 ImmutableSet.of()))
-        .isNotEqualTo(registry);
-    // Different module mirrors.
-    assertThat(
+        // Different module mirrors.
+        .addEqualityGroup(
             registryFactory.createRegistry(
                 "https://example.com/reg",
                 LockfileMode.UPDATE,
@@ -1219,11 +1222,8 @@ public class IndexRegistryTest extends FoundationTestCase {
                 yankedVersions,
                 Optional.empty(),
                 ImmutableSet.of("https://mirror.example.com/")))
-        .isNotEqualTo(registry);
-    // Different client environment (not tracked by Skyframe, but captured by the registry).
-    RegistryFactoryImpl otherEnvRegistryFactory =
-        new RegistryFactoryImpl(Suppliers.ofInstance(ImmutableMap.of("SOME_VAR", "value")));
-    assertThat(
+        // Different client environment.
+        .addEqualityGroup(
             otherEnvRegistryFactory.createRegistry(
                 "https://example.com/reg",
                 LockfileMode.UPDATE,
@@ -1231,6 +1231,6 @@ public class IndexRegistryTest extends FoundationTestCase {
                 yankedVersions,
                 Optional.empty(),
                 ImmutableSet.of()))
-        .isNotEqualTo(registry);
+        .testEquals();
   }
 }
