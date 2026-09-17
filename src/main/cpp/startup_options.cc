@@ -15,9 +15,15 @@
 
 #include <assert.h>
 
+#include <cctype>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <map>
+#include <string>
+#include <utility>
+#include <vector>
 
 #include "src/main/cpp/blaze_util.h"
 #include "src/main/cpp/blaze_util_platform.h"
@@ -30,6 +36,7 @@
 #include "src/main/cpp/util/numbers.h"
 #include "src/main/cpp/util/path_platform.h"
 #include "src/main/cpp/util/strings.h"
+#include "absl/time/time.h"
 
 namespace blaze {
 
@@ -70,7 +77,7 @@ StartupOptions::StartupOptions(const string& product_name,
     : product_name(product_name),
       lock_install_base(lock_install_base),
       ignore_all_rc_files(false),
-      block_for_lock(true),
+      block_for_lock_timeout(absl::InfiniteDuration()),
       host_jvm_debug(false),
       autodetect_server_javabase(true),
       batch(false),
@@ -103,7 +110,8 @@ StartupOptions::StartupOptions(const string& product_name,
 #endif
       windows_enable_symlinks(false),
       remote_repo_contents_cache(false),
-      use_compact_object_headers_(false) {
+      use_compact_object_headers_(false),
+      aot_cache_training_run(false) {
 #if defined(_WIN32) || defined(__CYGWIN__)
   string windows_unix_root = DetectBashAndExportBazelSh();
   if (!windows_unix_root.empty()) {
@@ -120,7 +128,11 @@ StartupOptions::StartupOptions(const string& product_name,
   // startup flags.
   RegisterNullaryStartupFlag("batch", &batch);
   RegisterNullaryStartupFlag("batch_cpu_scheduling", &batch_cpu_scheduling);
-  RegisterNullaryStartupFlag("block_for_lock", &block_for_lock);
+  RegisterSpecialNullaryStartupFlag("block_for_lock", [this](bool enabled) {
+    this->block_for_lock_timeout =
+        enabled ? absl::InfiniteDuration() : absl::ZeroDuration();
+  });
+  RegisterUnaryStartupFlag("block_for_lock");
   RegisterNullaryStartupFlag("quiet", &quiet);
   RegisterNullaryStartupFlag("client_debug", &client_debug);
   RegisterNullaryStartupFlag("preemptible", &preemptible);
@@ -141,6 +153,8 @@ StartupOptions::StartupOptions(const string& product_name,
                              &remote_repo_contents_cache);
   RegisterNullaryStartupFlag("experimental_use_compact_object_headers",
                              &use_compact_object_headers_);
+  RegisterNullaryStartupFlag("experimental_aot_cache_training_run",
+                             &aot_cache_training_run);
 #ifdef __linux__
   RegisterNullaryStartupFlag("experimental_run_in_user_cgroup",
                              &run_in_user_cgroup);
@@ -175,6 +189,9 @@ string StartupOptions::GetLowercaseProductName() const {
 bool StartupOptions::IsUnary(const string& arg) const {
   std::string::size_type i = arg.find_first_of('=');
   if (i == std::string::npos) {
+    if (arg == "--block_for_lock") {
+      return false;
+    }
     return valid_unary_startup_flags_.find(arg) !=
            valid_unary_startup_flags_.end();
   } else {
@@ -192,6 +209,10 @@ bool StartupOptions::MaybeCheckValidNullary(const string& arg, bool* result,
     return true;
   }
   std::string f = arg.substr(0, i);
+  if (f == "--block_for_lock") {
+    *result = false;
+    return true;
+  }
   if (all_nullary_startup_flags_.find(f) == all_nullary_startup_flags_.end()) {
     *result = false;
     return true;
@@ -201,6 +222,35 @@ bool StartupOptions::MaybeCheckValidNullary(const string& arg, bool* result,
       error, "In argument '%s': option '%s' does not take a value.",
       arg.c_str(), f.c_str());
   return false;
+}
+
+static bool ParseBlockForLock(const string& value,
+                              absl::Duration* block_for_lock_timeout,
+                              string* error) {
+  if (value == "true") {
+    *block_for_lock_timeout = absl::InfiniteDuration();
+    return true;
+  }
+  if (value == "false") {
+    *block_for_lock_timeout = absl::ZeroDuration();
+    return true;
+  }
+  absl::Duration duration;
+  if (value.empty() || isdigit(value.back()) ||
+      !absl::ParseDuration(value, &duration) ||
+      duration < absl::ZeroDuration() ||
+      (duration > absl::ZeroDuration() && duration < absl::Milliseconds(1)) ||
+      duration == absl::InfiniteDuration()) {
+    blaze_util::StringPrintf(
+        error,
+        "Invalid argument to --block_for_lock: '%s'. "
+        "Expected boolean or duration (e.g. 'true', 'false', '30s', '1m').",
+        value.c_str());
+    return false;
+  }
+  *block_for_lock_timeout =
+      absl::Milliseconds(absl::ToInt64Milliseconds(duration));
+  return true;
 }
 
 void StartupOptions::AddExtraOptions(vector<string>* result) const {}
@@ -257,7 +307,14 @@ blaze_exit_code::ExitCode StartupOptions::ProcessArg(const string& argstr,
     return blaze_exit_code::SUCCESS;
   }
 
-  if ((value = GetUnaryOption(arg, next_arg, "--output_base")) != nullptr) {
+  if ((value = blaze_util::var_strprefix(arg, "--block_for_lock=")) !=
+      nullptr) {
+    if (!ParseBlockForLock(value, &block_for_lock_timeout, error)) {
+      return blaze_exit_code::BAD_ARGV;
+    }
+    option_sources["block_for_lock"] = rcfile;
+  } else if ((value = GetUnaryOption(arg, next_arg, "--output_base")) !=
+             nullptr) {
     output_base = blaze_util::Path(blaze::AbsolutePathFromFlag(value));
     option_sources["output_base"] = rcfile;
   } else if ((value = GetUnaryOption(arg, next_arg, "--install_base")) !=
@@ -601,6 +658,121 @@ void StartupOptions::AddJVMArgumentSuffix(
   }
 }
 
+// Returns true if the file at the given path is a fully assembled AOT cache.
+//
+// The JVM writes the cache header, which starts with a non-zero magic number,
+// only after all other regions of the cache have been written. A dump that was
+// interrupted (e.g. because the machine was shut down while the JVM assembled
+// the cache at exit) or is still in progress thus leaves the leading bytes
+// zeroed. Such a file would be rejected by the JVM, so it is never used.
+static bool IsCompleteAotCache(const blaze_util::Path& path) {
+  char header[4] = {0};
+  if (!blaze_util::ReadFile(path, header, sizeof(header))) {
+    return false;
+  }
+  for (char c : header) {
+    if (c != 0) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// JDK 26 fails to start when loading a cache with AOT-linked classes if the
+// JDK is a jlinked image with certain sets of modules, which includes the
+// embedded JDK (JDK-8381222, closed as "Won't Fix" for JDK 26 and not present
+// in JDK 25 or 27): jdk.internal.loader.ClassLoaders$AppClassLoader isn't
+// AOT-initialized in this case and its static initializer then throws an
+// InternalError during VM initialization. The cache still contains the parsed
+// and verified classes as well as method profiles, which provides most of the
+// benefit.
+// TODO: Remove this once the embedded JDK is updated to JDK 27.
+static const char kDisableAotClassLinking[] = "-XX:-AOTClassLinking";
+
+blaze_util::Path StartupOptions::GetAotCachePath() const {
+  // The cache is a sibling of the install base directory, just like its lock
+  // file: it is specific to the exact server jar and JDK in the install base,
+  // but shared by all output bases using it.
+  return install_base.GetParent().GetRelative(install_base.GetBaseName() +
+                                              ".aot");
+}
+
+blaze_util::Path StartupOptions::GetAotCacheDisabledMarkerPath() const {
+  const blaze_util::Path aot_cache = GetAotCachePath();
+  return aot_cache.GetParent().GetRelative(aot_cache.GetBaseName() + ".disabled");
+}
+
+bool StartupOptions::IsRecordingAotCache() const {
+  // A debugging session isn't a representative training run and the JVM
+  // refuses to load an AOT cache with a JDWP agent attached anyway.
+  // Batch mode execs the JVM directly, so its AOT diagnostics would pollute
+  // command output and the client couldn't recover from cache loading errors.
+  return aot_cache_training_run && !host_jvm_debug && !batch;
+}
+
+bool StartupOptions::IsUsingAotCache() const {
+  // The JVM refuses to load an AOT cache with a JDWP agent attached
+  // (JDK-8349122).
+  return !batch && !host_jvm_debug && !aot_cache_training_run &&
+         !blaze_util::PathExists(GetAotCacheDisabledMarkerPath()) &&
+         IsCompleteAotCache(GetAotCachePath());
+}
+
+void StartupOptions::DisableAotCache() const {
+  blaze_util::UnlinkPath(GetAotCachePath());
+  blaze_util::WriteFile(
+      "The " + product_name +
+          " server crashed during startup while using the AOT cache, which "
+          "has been deleted. No cache will be used for this install base "
+          "until a new one is recorded with "
+          "--experimental_aot_cache_training_run.\n",
+      GetAotCacheDisabledMarkerPath());
+}
+
+void StartupOptions::AddAotCacheArguments(std::vector<string>* result) const {
+  const blaze_util::Path aot_cache = GetAotCachePath();
+  if (IsRecordingAotCache()) {
+    // A new cache is about to be recorded, so an existing one no longer needs
+    // to be ignored.
+    blaze_util::UnlinkPath(GetAotCacheDisabledMarkerPath());
+    result->push_back(kDisableAotClassLinking);
+    // The JVM records the classes it loads and links as well as method
+    // profiles and assembles the cache in a child process when the server
+    // exits (JEP 514), replacing an existing cache. This delays the exit of
+    // the server by a few seconds. If several training runs for the same
+    // install base end at the same time, the last one to finish wins. Since
+    // this option is volatile, later invocations without it keep using the
+    // recording server: the training run consists of all commands run until
+    // the server exits, e.g. due to an explicit shutdown, --max_idle_secs or
+    // a restart caused by different startup options or another training run.
+    result->push_back("-XX:AOTCacheOutput=" + aot_cache.AsJvmArgument());
+    // Otherwise the JVM derives a shared <cache>.config filename. Concurrent
+    // training runs could overwrite or delete each other's configuration.
+    // The JVM expands %p to the training server's PID, including when passing
+    // the filename to its assembly subprocess. Explicit configurations are
+    // removed by the client after shutdown, or by install base GC if the
+    // server exits without a client (e.g. due to --max_idle_secs).
+    result->push_back("-XX:AOTConfiguration=" + aot_cache.AsJvmArgument() +
+                      ".%p.config");
+    return;
+  }
+
+  if (!IsUsingAotCache()) {
+    if (blaze_util::PathExists(GetAotCacheDisabledMarkerPath())) {
+      BAZEL_LOG(INFO) << "Not using the AOT cache since "
+                      << GetAotCacheDisabledMarkerPath().AsPrintablePath()
+                      << " exists.";
+    }
+    return;
+  }
+  result->push_back(kDisableAotClassLinking);
+  // -XX:AOTMode defaults to "auto": if the cache turns out to be unusable
+  // (e.g. because --host_jvm_args changed the module graph since it was
+  // recorded), the JVM usually logs a warning to jvm.out and starts without
+  // it. See DisableAotCache() for the exception.
+  result->push_back("-XX:AOTCache=" + aot_cache.AsJvmArgument());
+}
+
 blaze_exit_code::ExitCode StartupOptions::AddJVMArguments(
     const blaze_util::Path& server_javabase, std::vector<string>* result,
     const vector<string>& user_options, string* error) const {
@@ -638,6 +810,8 @@ blaze_exit_code::ExitCode StartupOptions::AddJVMArguments(
     result->push_back("-XX:+UnlockExperimentalVMOptions");
     result->push_back("-XX:+UseCompactObjectHeaders");
   }
+
+  AddAotCacheArguments(result);
 
   return AddJVMMemoryArguments(server_javabase, result, user_options, error);
 }

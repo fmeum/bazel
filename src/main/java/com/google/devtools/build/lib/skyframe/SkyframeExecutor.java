@@ -2057,7 +2057,7 @@ public abstract class SkyframeExecutor implements WalkableGraphFactory {
               .setExecutionPhase()
               .build();
       return memoizingEvaluator.evaluate(
-          Iterables.concat(Artifact.keys(artifactsToBuild), targetKeys, aspectKeys, testKeys),
+          Iterables.concat(targetKeys, aspectKeys, testKeys, Artifact.keys(artifactsToBuild)),
           evaluationContext);
     } finally {
       // Also releases thread locks.
@@ -4101,7 +4101,7 @@ public abstract class SkyframeExecutor implements WalkableGraphFactory {
       try (SilentCloseable c = Profiler.instance().profile("fsvc.getDirtyKeys")) {
         batchDirtyResult =
             fsvc.getDirtyKeys(
-                memoizingEvaluator.getValues(),
+                memoizingEvaluator.getDoneValues(),
                 new UnionDirtinessChecker(ImmutableList.copyOf(dirtinessCheckers)));
       }
       if (externalDirtinessChecker != null) {

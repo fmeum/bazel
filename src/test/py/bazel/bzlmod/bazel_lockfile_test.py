@@ -20,6 +20,7 @@ import pathlib
 import tempfile
 
 from absl.testing import absltest
+
 from src.test.py.bazel import test_base
 from src.test.py.bazel.bzlmod.test_utils import BazelRegistry
 from src.test.py.bazel.bzlmod.test_utils import scratchFile
@@ -92,6 +93,40 @@ class BazelLockfileTest(test_base.TestBase):
             ' and parse the MODULE.bazel.lock file with error:'
             ' java.lang.IllegalStateException: Expected BEGIN_OBJECT but'
             ' was STRING'
+        ),
+        stderr,
+    )
+
+  def testInvalidChecksumInLockfile(self):
+    self.ScratchFile(
+        'MODULE.bazel',
+        [
+            'bazel_dep(name = "aaa", version = "1.0")',
+        ],
+    )
+    self.ScratchFile('BUILD', ['filegroup(name = "hello")'])
+    self.RunBazel(['build', '--nobuild', '//:all'])
+
+    with open(self.Path('MODULE.bazel.lock'), 'r') as f:
+      lockfile = json.loads(f.read().strip())
+    module_file_url = (
+        self.main_registry.getURL() + '/modules/aaa/1.0/MODULE.bazel'
+    )
+    self.assertIn(module_file_url, lockfile['registryFileHashes'])
+    lockfile['registryFileHashes'][module_file_url] = 'not a checksum'
+    with open(self.Path('MODULE.bazel.lock'), 'w') as f:
+      f.write(json.dumps(lockfile))
+
+    exit_code, _, stderr = self.RunBazel(
+        ['build', '--nobuild', '//:all'], allow_failure=True
+    )
+    stderr = '\n'.join(stderr)
+    self.AssertExitCode(exit_code, 48, stderr)
+    self.assertIn(
+        (
+            'ERROR: Error computing the main repository mapping: Failed to read'
+            ' and parse the MODULE.bazel.lock file with error:'
+            ' Invalid checksum: not a checksum.'
         ),
         stderr,
     )
@@ -996,6 +1031,89 @@ class BazelLockfileTest(test_base.TestBase):
     stderr = ''.join(stderr)
     self.assertIn('I am running the extension', stderr)
     self.assertIn('I have changed now!', stderr)
+
+  def testModuleExtensionModifyingWatchedFile(self):
+    # Regression test for https://github.com/bazelbuild/bazel/issues/29114: an
+    # extension that reads a file, modifies it and then reads it again must not
+    # crash Bazel. The recorded digest of the file is the one observed before
+    # the modification, so the extension is re-evaluated exactly once more.
+    self.ScratchFile(
+        'MODULE.bazel',
+        [
+            'ext = use_extension("extension.bzl", "ext")',
+            'use_repo(ext, "repo")',
+        ],
+    )
+    self.ScratchFile('BUILD.bazel')
+    if self.IsWindows():
+      write_cmd = '["cmd.exe", "/c", "echo modified> " + path]'
+    else:
+      write_cmd = '["/bin/sh", "-c", "echo modified > " + path]'
+    self.ScratchFile(
+        'extension.bzl',
+        [
+            'def impl(ctx):',
+            '    ctx.file("BUILD", "filegroup(name=\'repo\')")',
+            'repo_rule = repository_rule(implementation=impl)',
+            '',
+            'def _ext_impl(ctx):',
+            '    print("before: " + ctx.read(Label("//:data.txt")).strip())',
+            '    path = str(ctx.path(Label("//:data.txt")))',
+            '    result = ctx.execute(%s)' % write_cmd,
+            '    if result.return_code != 0:',
+            '        fail(result.stderr)',
+            '    print("after: " + ctx.read(Label("//:data.txt")).strip())',
+            '    repo_rule(name="repo")',
+            'ext = module_extension(implementation=_ext_impl)',
+        ],
+    )
+
+    self.ScratchFile('data.txt', ['original'])
+    _, _, stderr = self.RunBazel(['build', '@repo'])
+    stderr = '\n'.join(stderr)
+    self.assertIn('before: original', stderr)
+    self.assertIn('after: modified', stderr)
+    self.assertIn(
+        'WARNING: file info or contents of @@//data.txt changed during the'
+        ' evaluation of module extension @@//:extension.bzl%ext, which will'
+        ' cause it to be re-evaluated the next time Bazel is run. Report this'
+        ' issue to its maintainers.',
+        stderr,
+    )
+
+    # The recorded digest no longer matches the file on disk, so the lockfile
+    # is out of date and --lockfile_mode=error rejects it instead of
+    # re-evaluating the extension.
+    exit_code, _, stderr = self.RunBazel(
+        ['build', '--lockfile_mode=error', '@repo'], allow_failure=True
+    )
+    self.AssertExitCode(exit_code, 48, stderr)
+    stderr = '\n'.join(stderr)
+    self.assertIn(
+        'ERROR: MODULE.bazel.lock is no longer up-to-date because an input to'
+        " the extension '@@//:extension.bzl%ext' changed: file info or contents"
+        ' of @@//data.txt changed. Please run `bazel mod deps'
+        ' --lockfile_mode=update` to update your lockfile.',
+        stderr,
+    )
+    self.assertNotIn('before:', stderr)
+
+    # The file was modified by the extension itself, which invalidates the
+    # recorded digest and thus results in a re-evaluation. This time, the
+    # extension doesn't change the file's contents, so there is no warning.
+    _, _, stderr = self.RunBazel(['build', '@repo'])
+    stderr = '\n'.join(stderr)
+    self.assertIn('before: modified', stderr)
+    self.assertIn('after: modified', stderr)
+    self.assertNotIn('WARNING: file info or contents', stderr)
+
+    # The re-evaluation left the file unchanged, so the extension is now stable
+    # and the lockfile is up to date.
+    _, _, stderr = self.RunBazel(['build', '--lockfile_mode=error', '@repo'])
+    stderr = '\n'.join(stderr)
+    self.assertNotIn('before:', stderr)
+    self.assertNotIn('after:', stderr)
+    self.assertNotIn('WARNING: file info or contents', stderr)
 
   def testOldVersion(self):
     self.ScratchFile('MODULE.bazel')

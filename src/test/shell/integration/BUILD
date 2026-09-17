@@ -120,7 +120,10 @@ sh_test(
         "//src/test/java/com/google/devtools/build/lib/worker:ExampleWorker_deploy.jar",
     ],
     exec_group_compatible_with = {
-        "test": ["//:highcpu_machine"],
+        "test": [
+            "//:highcpu_machine",
+            "//:mount_capable",
+        ],
     },
     shard_count = 10,
     tags = [
@@ -566,6 +569,9 @@ sh_test(
         "//src/main/tools:linux-sandbox",
         "//src/test/shell:sandboxing_test_utils",
     ],
+    exec_group_compatible_with = {
+        "test": ["//:mount_capable"],
+    },
     shard_count = 2,
     tags = [
         "no_macos",
@@ -692,6 +698,16 @@ sh_test(
 )
 
 sh_test(
+    name = "build_query_test",
+    size = "medium",
+    srcs = ["build_query_test.sh"],
+    data = [
+        ":test-deps",
+        "@bazel_tools//tools/bash/runfiles",
+    ],
+)
+
+sh_test(
     name = "process_wrapper_test",
     size = "medium",
     srcs = ["process-wrapper_test.sh"],
@@ -801,7 +817,10 @@ sh_test(
         "//src/test/shell:sandboxing_test_utils",
     ],
     exec_group_compatible_with = {
-        "test": ["//:highcpu_machine"],
+        "test": [
+            "//:highcpu_machine",
+            "//:mount_capable",
+        ],
     },
     shard_count = 4,
     tags = ["no_windows"],

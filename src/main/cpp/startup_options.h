@@ -26,8 +26,10 @@
 #include <utility>
 #include <vector>
 
+#include "src/main/cpp/blaze_util.h"
 #include "src/main/cpp/util/exit_code.h"
 #include "src/main/cpp/util/path_platform.h"
+#include "absl/time/time.h"
 
 namespace blaze {
 
@@ -160,10 +162,10 @@ class StartupOptions {
   // Override more finegrained rc file flags and ignore them all.
   bool ignore_all_rc_files;
 
-  // Block for the Blaze server lock. Otherwise,
-  // quit with non-0 exit code if lock can't
-  // be acquired immediately.
-  bool block_for_lock;
+  // Maximum duration to wait for the Blaze server lock or output base lock.
+  // InfiniteDuration() waits indefinitely (default), ZeroDuration() does not
+  // block (--noblock_for_lock).
+  absl::Duration block_for_lock_timeout;
 
   bool host_jvm_debug;
 
@@ -299,6 +301,36 @@ class StartupOptions {
 
   bool use_compact_object_headers_;
 
+  // Whether this invocation starts a new server that records an ahead-of-time
+  // cache of loaded and linked classes and method profiles (JEP 483) that is
+  // used by servers started later for the same install base. The cache is
+  // written when the server exits; later invocations without this option keep
+  // using the recording server. Has no effect in batch mode or with
+  // --host_jvm_debug. Requires a server JDK that supports
+  // -XX:AOTCache, i.e. JDK 25 or later.
+  bool aot_cache_training_run;
+
+  // Returns the path of the AOT cache for the current install base.
+  blaze_util::Path GetAotCachePath() const;
+
+  // Returns the path of the file whose existence disables the AOT cache for
+  // the current install base, see DisableAotCache().
+  blaze_util::Path GetAotCacheDisabledMarkerPath() const;
+
+  // Returns true if the server started with the current options records
+  // (rather than uses) the AOT cache.
+  bool IsRecordingAotCache() const;
+
+  // Returns true if the server started with the current options uses (rather
+  // than records) the AOT cache.
+  bool IsUsingAotCache() const;
+
+  // Deletes the AOT cache and prevents it from being used for the current
+  // install base until a new one is recorded. Called when a server crashed
+  // during startup while using the cache, since the JVM treats some kinds of
+  // unusable caches as fatal errors.
+  void DisableAotCache() const;
+
  protected:
   // Constructor for subclasses only so that site-specific extensions of this
   // class can override the product name. The product_name must be capitalized,
@@ -338,6 +370,9 @@ class StartupOptions {
   // This is called by StartupOptions::AddJVMArguments and is a separate method
   // so that subclasses of StartupOptions can override it.
   virtual void AddJVMLoggingArguments(std::vector<std::string> *result) const;
+
+  // Adds the JVM arguments that use or record the AOT cache, if enabled.
+  void AddAotCacheArguments(std::vector<std::string> *result) const;
 
   // Adds JVM memory tuning flags for Bazel.
   //

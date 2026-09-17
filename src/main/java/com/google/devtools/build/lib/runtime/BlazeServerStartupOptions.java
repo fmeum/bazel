@@ -260,7 +260,9 @@ public abstract class BlazeServerStartupOptions extends OptionsBase {
       effectTags = {OptionEffectTag.EAGERNESS_TO_EXIT},
       help =
           "When --noblock_for_lock is passed, Bazel does not wait for a running command to "
-              + "complete, but instead exits immediately.")
+              + "complete, but instead exits immediately. If a duration is specified (e.g."
+              + " --block_for_lock=30s), Bazel will wait up to that duration for the lock before"
+              + " exiting.")
   public abstract boolean getBlockForLock();
 
   @Option(
@@ -576,4 +578,26 @@ public abstract class BlazeServerStartupOptions extends OptionsBase {
           "Use compact object headers in the JVM. Enabled by default for Bazel when "
               + "using the embedded JDK. This can reduce memory usage by 5-7%.")
   public abstract boolean getUseCompactObjectHeaders();
+
+  @Option(
+      name = "experimental_aot_cache_training_run",
+      defaultValue = "false", // NOTE: only for documentation, value is always passed by the client.
+      documentationCategory = OptionDocumentationCategory.BAZEL_CLIENT_OPTIONS,
+      effectTags = {
+        OptionEffectTag.BAZEL_INTERNAL_CONFIGURATION,
+        OptionEffectTag.HOST_MACHINE_RESOURCE_OPTIMIZATIONS,
+      },
+      help =
+          "If set, this invocation starts a new server that records an ahead-of-time cache of"
+              + " the classes it loads and links as well as method profiles (JEP 483). The"
+              + " training run consists of all commands run against this server: later"
+              + " invocations without this option keep using it and the cache is assembled when"
+              + " the server exits, e.g. due to 'shutdown', which delays its exit by a few"
+              + " seconds. The cache is then used by all servers started for the same"
+              + " installation of Bazel to start up faster. The training run should thus"
+              + " consist of a representative workload, such as building and testing the main"
+              + " targets of a project. The cache is stored next to the install base and shared"
+              + " by all output bases. Requires a server JDK that supports -XX:AOTCache, such as"
+              + " the embedded JDK. Has no effect in batch mode or together with --host_jvm_debug.")
+  public abstract boolean getAotCacheTrainingRun();
 }

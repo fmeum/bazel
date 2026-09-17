@@ -81,6 +81,7 @@
 #include "src/main/cpp/util/strings.h"
 #include "src/main/cpp/workspace_layout.h"
 #include "src/main/protobuf/command_server.grpc.pb.h"
+#include "absl/time/time.h"
 
 using blaze_util::GetLastErrorString;
 
@@ -249,8 +250,12 @@ class BlazeServer final {
   const ServerProcessInfo &ProcessInfo() const { return process_info_; }
 
  private:
+  // Called only after the server has exited and its AOT assembly has finished.
+  void DeleteAotCacheConfiguration() const;
+
   std::optional<LockHandle> install_base_lock_;
   std::optional<LockHandle> output_base_lock_;
+  const blaze_util::Path aot_cache_;
 
   enum CancelThreadAction {
     NOTHING,
@@ -284,7 +289,7 @@ class BlazeServer final {
   ServerProcessInfo process_info_;
   const int connect_timeout_secs_;
   const bool batch_;
-  const bool block_for_lock_;
+  const absl::Duration block_for_lock_timeout_;
   const bool quiet_;
   const bool preemptible_;
   const bool lock_install_base_;
@@ -322,7 +327,7 @@ DurationMillis BlazeServer::AcquireLocks() {
     auto install_base_result = blaze::AcquireLock(
         "install base",
         install_base_parent.GetRelative(install_base_.GetBaseName() + ".lock"),
-        LockMode::kShared, batch_, /* block= */ true);
+        LockMode::kShared, batch_, /* timeout= */ absl::InfiniteDuration());
     install_base_lock_ = install_base_result.first;
     wait_time += install_base_result.second;
   }
@@ -335,7 +340,7 @@ DurationMillis BlazeServer::AcquireLocks() {
   }
   auto output_base_result =
       blaze::AcquireLock("output base", output_base_.GetRelative("lock"),
-                         LockMode::kExclusive, batch_, block_for_lock_);
+                         LockMode::kExclusive, batch_, block_for_lock_timeout_);
   output_base_lock_ = output_base_result.first;
   wait_time += output_base_result.second;
 
@@ -917,6 +922,19 @@ static void ConnectOrDie(const OptionProcessor &option_processor,
             << server->ProcessInfo().jvm_log_file_.AsPrintablePath();
         WriteFileToStderrOrDie(server->ProcessInfo().jvm_log_file_);
       }
+      if (startup_options.IsUsingAotCache()) {
+        // The JVM exits during initialization if the cache can't be loaded
+        // for certain reasons instead of falling back to not using it, which
+        // would otherwise make every subsequent server start fail as well.
+        startup_options.DisableAotCache();
+        BAZEL_LOG(USER)
+            << "The server was started with the AOT cache at "
+            << startup_options.GetAotCachePath().AsPrintablePath()
+            << ", which may have caused the crash. The cache has been deleted "
+               "and no cache will be used for this install base until a new "
+               "one is recorded with --experimental_aot_cache_training_run. "
+               "Please retry the command.";
+      }
       exit(blaze_exit_code::INTERNAL_ERROR);
     }
   }
@@ -1019,7 +1037,16 @@ static bool IsVolatileArg(const string &arg) {
       // environment variable. Since that can change based on the shell, we
       // tolerate changes to it. Note that an explicit setting of
       // -XX:HeapDumpPath via --host_jvm_args *will* trigger a restart.
-      "-XX:HeapDumpPath="};
+      "-XX:HeapDumpPath=",
+      // The AOT cache may appear while a server is running (a training run
+      // for the same install base ended), which must not restart that server.
+      // Conversely, invocations without --experimental_aot_cache_training_run
+      // must keep using a server that is recording the cache so that the
+      // training run consists of all commands run until the server is shut
+      // down. An invocation with the option always restarts the server
+      // instead, see KillRunningServerIfDifferentStartupOptions().
+      "-XX:AOTCache=", "-XX:AOTCacheOutput=", "-XX:AOTConfiguration=",
+      "-XX:-AOTClassLinking"};
 
   // Split arg based on the first "=" if one exists in arg.
   const string::size_type eq_pos = arg.find_first_of('=');
@@ -1042,12 +1069,6 @@ static bool AreStartupOptionsDifferent(
   // this version of Bazel: either the default value is listed explicitly or it
   // is not, but this has nothing to do with the user's command line: it is
   // defined by GetServerExeArgs(). Same applies for argument ordering.
-  bool options_different = false;
-  if (running_server_args.size() != requested_args.size()) {
-    BAZEL_LOG(INFO) << "The new command line has a different length from the "
-                       "running server's.";
-    options_different = true;
-  }
 
   // Facts and implications:
   // (a) We already verified (with EnsureCorrectRunningVersion) that the old and
@@ -1062,6 +1083,9 @@ static bool AreStartupOptionsDifferent(
   // (d) Because of (b), some flags may have repeated values (e.g
   //     --host_jvm_args="foo" twice) so we cannot simply use two sets and take
   //     the set difference, but must consider the occurrences of each flag.
+  // Volatile args may be present on one side only, so the argument lists are
+  // compared only after filtering them out. Any difference in length shows up
+  // as a leftover in one of the multisets.
   std::unordered_multiset<string> old_args, new_args;
   for (const string &a : running_server_args) {
     if (!IsVolatileArg(a)) {
@@ -1096,10 +1120,11 @@ static bool AreStartupOptionsDifferent(
     }
   }
 
-  return options_different || !old_args.empty() || !new_args.empty();
+  return !old_args.empty() || !new_args.empty();
 }
 
-// Kills the running Blaze server, if any, if the startup options do not match.
+// Kills the running Blaze server, if any, if the startup options do not match
+// or the current invocation starts an AOT cache training run.
 // Returns true if the server has been killed.
 static bool KillRunningServerIfDifferentStartupOptions(
     const StartupOptions &startup_options,
@@ -1107,6 +1132,21 @@ static bool KillRunningServerIfDifferentStartupOptions(
     BlazeServer *server) {
   if (!server->Connected()) {
     return false;
+  }
+
+  if (startup_options.IsRecordingAotCache()) {
+    // The JVM only records what the server loads and runs from the moment it
+    // starts and the JVM arguments that control recording are volatile, so a
+    // training run has to start a new server even if the running one has the
+    // same startup options or is already recording. In the latter case, the
+    // cache recorded by the running server is replaced when the new one exits.
+    logging_info->restart_reason = NEW_OPTIONS;
+    BAZEL_LOG(WARNING) << "Running " << startup_options.product_name
+                       << " server needs to be killed, because "
+                          "--experimental_aot_cache_training_run starts a new "
+                          "server to record the AOT cache.";
+    server->KillRunningServer();
+    return true;
   }
 
   blaze_util::Path cmdline_path =
@@ -1728,13 +1768,14 @@ int Main(int argc, const char *const *argv, WorkspaceLayout *workspace_layout,
   return 0;
 }
 
-BlazeServer::BlazeServer(const StartupOptions &startup_options,
-                         CommandExtensionAdder *command_extension_adder)
-    : process_info_(startup_options.output_base,
+BlazeServer::BlazeServer(const StartupOptions& startup_options,
+                         CommandExtensionAdder* command_extension_adder)
+    : aot_cache_(startup_options.GetAotCachePath()),
+      process_info_(startup_options.output_base,
                     startup_options.server_jvm_out),
       connect_timeout_secs_(startup_options.connect_timeout_secs),
       batch_(startup_options.batch),
-      block_for_lock_(startup_options.block_for_lock),
+      block_for_lock_timeout_(startup_options.block_for_lock_timeout),
       quiet_(startup_options.quiet),
       preemptible_(startup_options.preemptible),
       lock_install_base_(startup_options.lock_install_base),
@@ -1965,6 +2006,13 @@ void BlazeServer::SendTerminalSizeMessage(int columns) {
   }
 }
 
+void BlazeServer::DeleteAotCacheConfiguration() const {
+  // The JVM expands %p in -XX:AOTConfiguration to "pid<PID>".
+  blaze_util::UnlinkPath(aot_cache_.GetParent().GetRelative(
+      aot_cache_.GetBaseName() + ".pid" +
+      blaze_util::ToString(process_info_.server_pid_) + ".config"));
+}
+
 // This will wait indefinitely until the server shuts down
 void BlazeServer::KillRunningServer() {
   assert(Connected());
@@ -1973,7 +2021,11 @@ void BlazeServer::KillRunningServer() {
   command_server::RunRequest request;
   command_server::RunResponse response;
   request.set_cookie(request_cookie_);
-  request.set_block_for_lock(block_for_lock_);
+  request.set_block_for_lock(block_for_lock_timeout_ > absl::ZeroDuration());
+  if (block_for_lock_timeout_ != absl::InfiniteDuration()) {
+    request.set_block_for_lock_timeout_ms(
+        absl::ToInt64Milliseconds(block_for_lock_timeout_));
+  }
   request.set_client_description("pid=" + blaze::GetProcessIdAsString() +
                                  " (for shutdown)");
   request.add_arg("shutdown");
@@ -2003,10 +2055,17 @@ void BlazeServer::KillRunningServer() {
     // another command holds the client lock.
     if (response.finished()) {
       if (response.exit_code() == blaze_exit_code::LOCK_HELD_NOBLOCK_FOR_LOCK) {
-        assert(!block_for_lock_);
-        BAZEL_DIE(blaze_exit_code::LOCK_HELD_NOBLOCK_FOR_LOCK)
-            << "Exiting because the lock is held and --noblock_for_lock was "
-               "given.";
+        assert(block_for_lock_timeout_ != absl::InfiniteDuration());
+        if (block_for_lock_timeout_ <= absl::ZeroDuration()) {
+          BAZEL_DIE(blaze_exit_code::LOCK_HELD_NOBLOCK_FOR_LOCK)
+              << "Exiting because the lock is held and --noblock_for_lock was "
+                 "given.";
+        } else {
+          BAZEL_DIE(blaze_exit_code::LOCK_HELD_NOBLOCK_FOR_LOCK)
+              << "Exiting because the lock is held and --block_for_lock="
+              << absl::ToInt64Milliseconds(block_for_lock_timeout_)
+              << "ms timeout expired.";
+        }
       }
     }
 
@@ -2035,6 +2094,8 @@ void BlazeServer::KillRunningServer() {
           << process_info_.jvm_log_file_.AsPrintablePath() << "')";
     }
     KillServerProcess(process_info_.server_pid_, output_base_);
+  } else if (process_info_.server_pid_ > 0) {
+    DeleteAotCacheConfiguration();
   }
 }
 
@@ -2060,7 +2121,11 @@ unsigned int BlazeServer::Communicate(
 
   command_server::RunRequest request;
   request.set_cookie(request_cookie_);
-  request.set_block_for_lock(block_for_lock_);
+  request.set_block_for_lock(block_for_lock_timeout_ > absl::ZeroDuration());
+  if (block_for_lock_timeout_ != absl::InfiniteDuration()) {
+    request.set_block_for_lock_timeout_ms(
+        absl::ToInt64Milliseconds(block_for_lock_timeout_));
+  }
   request.set_quiet(quiet_);
   request.set_preemptible(preemptible_);
   request.set_client_description("pid=" + blaze::GetProcessIdAsString());
@@ -2170,6 +2235,8 @@ unsigned int BlazeServer::Communicate(
                                        kPostShutdownGracePeriodSeconds,
                                        TerminationReason::kShutdownRequest)) {
       KillServerProcess(process_info_.server_pid_, output_base_);
+    } else {
+      DeleteAotCacheConfiguration();
     }
   }
 
