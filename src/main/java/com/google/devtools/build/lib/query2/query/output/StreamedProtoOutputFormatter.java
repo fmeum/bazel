@@ -16,6 +16,7 @@ package com.google.devtools.build.lib.query2.query.output;
 import com.google.devtools.build.lib.packages.LabelPrinter;
 import com.google.devtools.build.lib.packages.Target;
 import com.google.devtools.build.lib.query2.engine.OutputFormatterCallback;
+import com.google.devtools.build.lib.query2.proto.proto2api.Build;
 import java.io.IOException;
 import java.io.OutputStream;
 
@@ -33,16 +34,10 @@ public class StreamedProtoOutputFormatter extends ProtoOutputFormatter {
   @Override
   public OutputFormatterCallback<Target> createPostFactoStreamCallback(
       final OutputStream out, final QueryOptions options, LabelPrinter labelPrinter) {
-    return new OutputFormatterCallback<Target>() {
+    return new TargetProtoStreamCallback(labelPrinter) {
       @Override
-      public void processOutput(Iterable<Target> partialResult)
-          throws IOException, InterruptedException {
-        for (Target target : partialResult) {
-          if (Thread.interrupted()) {
-            throw new InterruptedException();
-          }
-          toTargetProtoBuffer(target, labelPrinter).writeDelimitedTo(out);
-        }
+      protected void writeTargetProto(Build.Target targetProto) throws IOException {
+        targetProto.writeDelimitedTo(out);
       }
     };
   }

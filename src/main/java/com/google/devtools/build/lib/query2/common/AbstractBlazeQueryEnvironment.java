@@ -24,6 +24,7 @@ import com.google.common.base.Preconditions;
 import com.google.common.base.Predicates;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
+import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Iterables;
 import com.google.common.collect.Sets;
 import com.google.common.flogger.GoogleLogger;
@@ -34,11 +35,13 @@ import com.google.devtools.build.lib.cmdline.BazelModuleContext.LoadGraphVisitor
 import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.cmdline.PackageIdentifier;
 import com.google.devtools.build.lib.cmdline.TargetParsingException;
+import com.google.devtools.build.lib.events.DelegatingEventHandler;
 import com.google.devtools.build.lib.events.ErrorSensingEventHandler;
 import com.google.devtools.build.lib.events.Event;
 import com.google.devtools.build.lib.events.ExtendedEventHandler;
 import com.google.devtools.build.lib.packages.DependencyFilter;
 import com.google.devtools.build.lib.packages.LabelPrinter;
+import com.google.devtools.build.lib.packages.Package;
 import com.google.devtools.build.lib.packages.Target;
 import com.google.devtools.build.lib.profiler.Profiler;
 import com.google.devtools.build.lib.profiler.SilentCloseable;
@@ -66,6 +69,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CancellationException;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executor;
 import java.util.concurrent.TimeUnit;
@@ -83,6 +87,7 @@ public abstract class AbstractBlazeQueryEnvironment<T>
   private static final GoogleLogger logger = GoogleLogger.forEnclosingClass();
 
   protected ErrorSensingEventHandler<DetailedExitCode> eventHandler;
+  private final PackagesInErrorRecordingEventHandler packagesInErrorRecorder;
   protected final boolean keepGoing;
   protected final boolean strictScope;
 
@@ -101,7 +106,9 @@ public abstract class AbstractBlazeQueryEnvironment<T>
       Set<Setting> settings,
       Iterable<QueryFunction> extraFunctions,
       LabelPrinter labelPrinter) {
-    this.eventHandler = new ErrorSensingEventHandler<>(eventHandler, DetailedExitCode.class);
+    this.packagesInErrorRecorder = new PackagesInErrorRecordingEventHandler(eventHandler);
+    this.eventHandler =
+        new ErrorSensingEventHandler<>(packagesInErrorRecorder, DetailedExitCode.class);
     this.keepGoing = keepGoing;
     this.strictScope = strictScope;
     this.dependencyFilter = constructDependencyFilter(settings);
@@ -117,6 +124,38 @@ public abstract class AbstractBlazeQueryEnvironment<T>
   @Override
   public LabelPrinter getLabelPrinter() {
     return labelPrinter;
+  }
+
+  @Override
+  public ImmutableSet<Label> getBuildFileLabelsOfPackagesInError() {
+    return packagesInErrorRecorder.getBuildFileLabels();
+  }
+
+  /**
+   * Records the BUILD file labels of all packages for which a "package contains errors" event (see
+   * {@link Package#maybeAddPackageContainsErrorsEventToHandler}) passed through this environment's
+   * event handler.
+   */
+  private static final class PackagesInErrorRecordingEventHandler extends DelegatingEventHandler {
+    private final Set<Label> buildFileLabels = ConcurrentHashMap.newKeySet();
+
+    PackagesInErrorRecordingEventHandler(ExtendedEventHandler delegate) {
+      super(delegate);
+    }
+
+    @Override
+    public void handle(Event e) {
+      Package.ContainsErrorsEventProperty property =
+          e.getProperty(Package.ContainsErrorsEventProperty.class);
+      if (property != null) {
+        buildFileLabels.add(property.buildFileLabel());
+      }
+      super.handle(e);
+    }
+
+    ImmutableSet<Label> getBuildFileLabels() {
+      return ImmutableSet.copyOf(buildFileLabels);
+    }
   }
 
   private static DependencyFilter constructDependencyFilter(Set<Setting> settings) {

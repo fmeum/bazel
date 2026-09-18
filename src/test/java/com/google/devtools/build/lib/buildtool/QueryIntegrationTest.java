@@ -344,6 +344,91 @@ public class QueryIntegrationTest extends BuildIntegrationTestCase {
         .isNotNull();
   }
 
+  private void writePackagesWithAndWithoutErrors() throws Exception {
+    write("good/BUILD", "filegroup(name = 'good')");
+    write(
+        "bad/BUILD.bazel",
+        """
+        filegroup(name = "ok")
+        filegroup(name = "broken", srcs = [undefined_symbol])
+        """);
+  }
+
+  private static List<String> protoTargetNames(ProtoQueryOutput result) {
+    List<String> names = new ArrayList<>();
+    for (Build.Target target : result.getQueryResult().getTargetList()) {
+      names.add(getProtoTargetName(target));
+    }
+    return names;
+  }
+
+  @Test
+  public void testProtoOutputIncludesPackagesInError() throws Exception {
+    writePackagesWithAndWithoutErrors();
+
+    ProtoQueryOutput result =
+        getProtoQueryResult("//good/... + //bad/...", "--keep_going");
+
+    assertExitCode(result.getQueryOutput(), ExitCode.PARTIAL_ANALYSIS_FAILURE);
+    assertThat(protoTargetNames(result)).containsExactly("//good:good", "//bad:BUILD.bazel");
+    Build.Target buildFile = getProtoTarget(result, "//bad:BUILD.bazel");
+    assertThat(buildFile.getType()).isEqualTo(Build.Target.Discriminator.SOURCE_FILE);
+    assertThat(buildFile.getSourceFile().getPackageContainsErrors()).isTrue();
+  }
+
+  @Test
+  public void testProtoOutputDoesNotDuplicateBuildFileOfPackageInError() throws Exception {
+    write("worse/BUILD", "filegroup(name = \"broken\", srcs = [undefined_symbol])");
+
+    // //worse:* matches the BUILD file itself, which is the only target left in a package in error.
+    ProtoQueryOutput result = getProtoQueryResult("//worse:*", "--keep_going");
+
+    assertExitCode(result.getQueryOutput(), ExitCode.PARTIAL_ANALYSIS_FAILURE);
+    assertThat(protoTargetNames(result)).containsExactly("//worse:BUILD");
+    assertThat(getProtoTarget(result, "//worse:BUILD").getSourceFile().getPackageContainsErrors())
+        .isTrue();
+  }
+
+  @Test
+  public void testStreamedProtoOutputIncludesPackagesInError() throws Exception {
+    writePackagesWithAndWithoutErrors();
+
+    QueryOutput result =
+        getQueryResult(
+            "//good/... + //bad/...",
+            "--output=streamed_proto",
+            "--keep_going");
+
+    assertExitCode(result, ExitCode.PARTIAL_ANALYSIS_FAILURE);
+    List<Build.Target> targets = new ArrayList<>();
+    ByteArrayInputStream in = new ByteArrayInputStream(result.getStdout());
+    for (Build.Target target = Build.Target.parseDelimitedFrom(in);
+        target != null;
+        target = Build.Target.parseDelimitedFrom(in)) {
+      targets.add(target);
+    }
+    assertThat(targets.stream().map(QueryIntegrationTest::getProtoTargetName).toList())
+        .containsExactly("//good:good", "//bad:BUILD.bazel");
+    Build.Target buildFile = targets.get(1);
+    assertThat(buildFile.getType()).isEqualTo(Build.Target.Discriminator.SOURCE_FILE);
+    assertThat(buildFile.getSourceFile().getPackageContainsErrors()).isTrue();
+  }
+
+  @Test
+  public void testStreamedJsonProtoOutputIncludesPackagesInError() throws Exception {
+    writePackagesWithAndWithoutErrors();
+
+    QueryOutput result =
+        getQueryResult(
+            "//good/... + //bad/...",
+            "--output=streamed_jsonproto",
+            "--keep_going");
+
+    assertExitCode(result, ExitCode.PARTIAL_ANALYSIS_FAILURE);
+    assertQueryOutputContains(
+        result, "{\"type\":\"SOURCE_FILE\",\"sourceFile\":{\"name\":\"//bad:BUILD.bazel\",\"packageContainsErrors\":true}}");
+  }
+
   @Test
   public void testNonStrictTests() throws Exception {
     write(
@@ -1208,6 +1293,25 @@ public class QueryIntegrationTest extends BuildIntegrationTestCase {
     QueryResult queryResult = QueryResult.parseFrom(stdout, ExtensionRegistry.getEmptyRegistry());
 
     return new ProtoQueryOutput(result, queryResult);
+  }
+
+  private static String getProtoTargetName(Build.Target target) {
+    return switch (target.getType()) {
+      case RULE -> target.getRule().getName();
+      case SOURCE_FILE -> target.getSourceFile().getName();
+      case GENERATED_FILE -> target.getGeneratedFile().getName();
+      case PACKAGE_GROUP -> target.getPackageGroup().getName();
+      case ENVIRONMENT_GROUP -> target.getEnvironmentGroup().getName();
+    };
+  }
+
+  private static Build.Target getProtoTarget(ProtoQueryOutput result, String name) {
+    for (Build.Target target : result.getQueryResult().getTargetList()) {
+      if (getProtoTargetName(target).equals(name)) {
+        return target;
+      }
+    }
+    throw new AssertionError("No target named " + name + " in " + result.getQueryResult());
   }
 
   Element getResultNode(Document xml, String ruleName) throws Exception {

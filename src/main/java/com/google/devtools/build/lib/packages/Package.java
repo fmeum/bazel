@@ -537,20 +537,31 @@ public class Package extends Packageoid {
   /**
    * If {@code pkg.containsErrors()}, sends an errorful "package contains errors" {@link Event}
    * (augmented with {@code pkg.getFailureDetail()}, if present) to the given {@link EventHandler}.
+   *
+   * <p>The event carries a {@link ContainsErrorsEventProperty} identifying the package.
    */
   public static void maybeAddPackageContainsErrorsEventToHandler(
       Package pkg, EventHandler eventHandler) {
     if (pkg.containsErrors()) {
       eventHandler.handle(
           Event.error(
-              String.format(
-                  "package contains errors: %s%s",
-                  pkg.getNameFragment(),
-                  pkg.getFailureDetail() != null
-                      ? ": " + pkg.getFailureDetail().getMessage()
-                      : "")));
+                  String.format(
+                      "package contains errors: %s%s",
+                      pkg.getNameFragment(),
+                      pkg.getFailureDetail() != null
+                          ? ": " + pkg.getFailureDetail().getMessage()
+                          : ""))
+              .withProperty(
+                  ContainsErrorsEventProperty.class,
+                  new ContainsErrorsEventProperty(pkg.getBuildFileLabel())));
     }
   }
+
+  /**
+   * Property attached to the "package contains errors" {@link Event} emitted by {@link
+   * #maybeAddPackageContainsErrorsEventToHandler}, identifying the package by its BUILD file label.
+   */
+  public record ContainsErrorsEventProperty(Label buildFileLabel) {}
 
   /**
    * Given a {@link FailureDetail} and target, returns a modified {@code FailureDetail} that

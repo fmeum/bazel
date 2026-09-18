@@ -13,7 +13,9 @@
 // limitations under the License.
 package com.google.devtools.build.lib.query2.query.output;
 
+import com.google.common.collect.ImmutableSet;
 import com.google.common.hash.HashFunction;
+import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.events.EventHandler;
 import com.google.devtools.build.lib.graph.Digraph;
 import com.google.devtools.build.lib.packages.LabelPrinter;
@@ -61,7 +63,8 @@ public class QueryOutputUtils {
       AspectResolver aspectResolver,
       @Nullable EventHandler eventHandler,
       HashFunction hashFunction,
-      LabelPrinter labelPrinter)
+      LabelPrinter labelPrinter,
+      ImmutableSet<Label> buildFileLabelsOfPackagesInError)
       throws IOException, InterruptedException {
     /*
      * This is not really streaming, but we are using the streaming interface for writing into the
@@ -73,7 +76,8 @@ public class QueryOutputUtils {
       streamedFormatter.setOptions(queryOptions, aspectResolver, hashFunction);
       streamedFormatter.setEventHandler(eventHandler);
       OutputFormatterCallback.processAllTargets(
-          streamedFormatter.createPostFactoStreamCallback(outputStream, queryOptions, labelPrinter),
+          streamedFormatter.createPostFactoStreamCallback(
+              outputStream, queryOptions, labelPrinter, buildFileLabelsOfPackagesInError),
           targetsResult);
     } else {
       @SuppressWarnings("unchecked")

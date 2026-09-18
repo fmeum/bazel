@@ -17,6 +17,7 @@ package com.google.devtools.build.lib.rules.genquery;
 import com.google.common.base.Preconditions;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
+import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Iterables;
 import com.google.common.collect.Maps;
 import com.google.common.flogger.GoogleLogger;
@@ -353,7 +354,8 @@ public class GenQuery implements RuleConfiguredTargetFactory {
               .createResolver(packageProvider, getEventHandler(ruleContext)),
           getEventHandler(ruleContext),
           hashFunction,
-          queryEnvironment.getLabelPrinter());
+          queryEnvironment.getLabelPrinter(),
+          /* buildFileLabelsOfPackagesInError= */ ImmutableSet.of());
       outputStream.close();
       return outputStream.getResult();
     } catch (ClosedByInterruptException e) {

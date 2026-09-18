@@ -192,7 +192,8 @@ public final class QueryCommand extends QueryEnvironmentBasedCommand {
                   .createResolver(env.getPackageManager(), env.getReporter()),
               env.getReporter(),
               hashFunction,
-              queryEnv.getLabelPrinter());
+              queryEnv.getLabelPrinter(),
+              queryEnv.getBuildFileLabelsOfPackagesInError());
         } catch (ClosedByInterruptException | InterruptedException e) {
           return reportAndCreateInterruptedResult(env);
         } catch (IOException e) {

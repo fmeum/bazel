@@ -16,6 +16,7 @@ package com.google.devtools.build.lib.query2.query.output;
 import com.google.devtools.build.lib.packages.LabelPrinter;
 import com.google.devtools.build.lib.packages.Target;
 import com.google.devtools.build.lib.query2.engine.OutputFormatterCallback;
+import com.google.devtools.build.lib.query2.proto.proto2api.Build;
 import com.google.protobuf.util.JsonFormat;
 import java.io.IOException;
 import java.io.OutputStream;
@@ -36,21 +37,15 @@ public class StreamedJSONProtoOutputFormatter extends ProtoOutputFormatter {
   @Override
   public OutputFormatterCallback<Target> createPostFactoStreamCallback(
       final OutputStream out, final QueryOptions options, LabelPrinter labelPrinter) {
-    return new OutputFormatterCallback<Target>() {
+    return new TargetProtoStreamCallback(labelPrinter) {
       @Override
-      public void processOutput(Iterable<Target> partialResult)
-          throws IOException, InterruptedException {
-        for (Target target : partialResult) {
-          if (Thread.interrupted()) {
-            throw new InterruptedException();
-          }
-          out.write(
-              jsonPrinter
-                  .omittingInsignificantWhitespace()
-                  .print(toTargetProtoBuffer(target, labelPrinter))
-                  .getBytes(StandardCharsets.UTF_8));
-          out.write('\n');
-        }
+      protected void writeTargetProto(Build.Target targetProto) throws IOException {
+        out.write(
+            jsonPrinter
+                .omittingInsignificantWhitespace()
+                .print(targetProto)
+                .getBytes(StandardCharsets.UTF_8));
+        out.write('\n');
       }
     };
   }

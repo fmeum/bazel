@@ -629,6 +629,15 @@ public interface QueryEnvironment<T> {
   LabelPrinter getLabelPrinter();
 
   /**
+   * Returns the BUILD file labels of all packages that were found to contain errors while
+   * evaluating the query, e.g. because a target pattern matched them under {@code --keep_going}.
+   * Targets of such packages are never part of the query result.
+   */
+  default ImmutableSet<Label> getBuildFileLabelsOfPackagesInError() {
+    return ImmutableSet.of();
+  }
+
+  /**
    * Whether the given setting is enabled. The code should default to return {@code false} for all
    * unknown settings. The enum is used rather than a method for each setting so that adding more
    * settings is backwards-compatible.

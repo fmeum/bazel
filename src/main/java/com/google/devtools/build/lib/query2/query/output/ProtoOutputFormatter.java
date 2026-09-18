@@ -27,6 +27,7 @@ import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableMultimap;
 import com.google.common.collect.ImmutableSet;
+import com.google.common.collect.ImmutableSortedSet;
 import com.google.common.collect.Iterables;
 import com.google.common.hash.HashFunction;
 import com.google.common.io.BaseEncoding;
@@ -73,6 +74,9 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.Supplier;
 import java.util.stream.Collectors;
 import javax.annotation.Nullable;
 import net.starlark.java.eval.StarlarkThread;
@@ -169,7 +173,120 @@ public class ProtoOutputFormatter extends AbstractUnorderedFormatter {
   public ThreadSafeOutputFormatterCallback<Target> createStreamCallback(
       OutputStream out, QueryOptions options, QueryEnvironment<?> env) {
     return new SynchronizedDelegatingOutputFormatterCallback<>(
-        createPostFactoStreamCallback(out, options, env.getLabelPrinter()));
+        withPackagesInErrorEntries(
+            createPostFactoStreamCallback(out, options, env.getLabelPrinter()),
+            env::getBuildFileLabelsOfPackagesInError));
+  }
+
+  @Override
+  public OutputFormatterCallback<Target> createPostFactoStreamCallback(
+      OutputStream out,
+      QueryOptions options,
+      LabelPrinter labelPrinter,
+      ImmutableSet<Label> buildFileLabelsOfPackagesInError) {
+    return withPackagesInErrorEntries(
+        createPostFactoStreamCallback(out, options, labelPrinter),
+        () -> buildFileLabelsOfPackagesInError);
+  }
+
+  private OutputFormatterCallback<Target> withPackagesInErrorEntries(
+      OutputFormatterCallback<Target> callback,
+      Supplier<ImmutableSet<Label>> buildFileLabelsOfPackagesInError) {
+    if (callback instanceof TargetProtoStreamCallback protoCallback) {
+      return new PackagesInErrorEmittingCallback(protoCallback, buildFileLabelsOfPackagesInError);
+    }
+    return callback;
+  }
+
+  /**
+   * Base class for stream callbacks that write one {@link Build.Target} proto per target.
+   *
+   * <p>Keeps track of the BUILD file targets that have been written so that {@link
+   * #writePackagesInError} does not duplicate them.
+   */
+  protected abstract class TargetProtoStreamCallback extends OutputFormatterCallback<Target> {
+    private final LabelPrinter labelPrinter;
+    private final Set<Label> writtenBuildFiles = ConcurrentHashMap.newKeySet();
+
+    protected TargetProtoStreamCallback(LabelPrinter labelPrinter) {
+      this.labelPrinter = labelPrinter;
+    }
+
+    /** Writes a single target proto to the output. */
+    protected abstract void writeTargetProto(Build.Target targetProto) throws IOException;
+
+    @Override
+    public void processOutput(Iterable<Target> partialResult)
+        throws IOException, InterruptedException {
+      for (Target target : partialResult) {
+        if (Thread.interrupted()) {
+          throw new InterruptedException();
+        }
+        if (target instanceof InputFile inputFile
+            && inputFile.getLabel().equals(inputFile.getPackageoid().getBuildFileLabel())) {
+          writtenBuildFiles.add(target.getLabel());
+        }
+        writeTargetProto(toTargetProtoBuffer(target, labelPrinter));
+      }
+    }
+
+    /**
+     * Writes a {@code SOURCE_FILE} entry with {@code package_contains_errors} set for each of the
+     * given BUILD file labels that has not already been written as part of the query result.
+     */
+    private void writePackagesInError(Iterable<Label> buildFileLabels) throws IOException {
+      for (Label buildFileLabel : buildFileLabels) {
+        if (writtenBuildFiles.contains(buildFileLabel)) {
+          continue;
+        }
+        writeTargetProto(
+            Build.Target.newBuilder()
+                .setType(SOURCE_FILE)
+                .setSourceFile(
+                    SourceFile.newBuilder()
+                        .setName(internalToUnicode(labelPrinter.toString(buildFileLabel)))
+                        .setPackageContainsErrors(true))
+                .build());
+      }
+    }
+  }
+
+  /**
+   * Wraps a {@link TargetProtoStreamCallback} so that entries for all packages in error are written
+   * when the query result is complete. The BUILD file labels are only requested at that point, as
+   * they are generally not known before the query has been evaluated.
+   */
+  private static final class PackagesInErrorEmittingCallback
+      extends OutputFormatterCallback<Target> {
+    private final TargetProtoStreamCallback delegate;
+    private final Supplier<ImmutableSet<Label>> buildFileLabelsOfPackagesInError;
+
+    private PackagesInErrorEmittingCallback(
+        TargetProtoStreamCallback delegate,
+        Supplier<ImmutableSet<Label>> buildFileLabelsOfPackagesInError) {
+      this.delegate = delegate;
+      this.buildFileLabelsOfPackagesInError = buildFileLabelsOfPackagesInError;
+    }
+
+    @Override
+    public void start() throws IOException {
+      delegate.start();
+    }
+
+    @Override
+    public void processOutput(Iterable<Target> partialResult)
+        throws IOException, InterruptedException {
+      delegate.processOutput(partialResult);
+    }
+
+    @Override
+    public void close(boolean failFast) throws InterruptedException, IOException {
+      if (!failFast) {
+        delegate.writePackagesInError(
+            ImmutableSortedSet.copyOf(buildFileLabelsOfPackagesInError.get()));
+      }
+      delegate.close(failFast);
+    }
   }
 
   /** Converts a logical {@link Target} object into a {@link Build.Target} protobuffer. */
@@ -594,7 +711,7 @@ public class ProtoOutputFormatter extends AbstractUnorderedFormatter {
    * assumptions about the format of serialized protos in order to improve memory overhead and
    * performance.
    */
-  private class StreamedQueryResultFormatter extends OutputFormatterCallback<Target> {
+  private class StreamedQueryResultFormatter extends TargetProtoStreamCallback {
 
     /**
      * Pseudo-arbitrarily chosen buffer size for output. Chosen to be large enough to fit a handful
@@ -603,27 +720,19 @@ public class ProtoOutputFormatter extends AbstractUnorderedFormatter {
     private static final int OUTPUT_BUFFER_SIZE = 16384;
 
     private final CodedOutputStream codedOut;
-    private final LabelPrinter labelPrinter;
 
     private StreamedQueryResultFormatter(OutputStream out, LabelPrinter labelPrinter) {
+      super(labelPrinter);
       this.codedOut = CodedOutputStream.newInstance(out, OUTPUT_BUFFER_SIZE);
-      this.labelPrinter = labelPrinter;
     }
 
     @Override
-    public void processOutput(Iterable<Target> partialResult)
-        throws IOException, InterruptedException {
+    protected void writeTargetProto(Build.Target targetProto) throws IOException {
       // Write out targets with their tag (field number) as if they were serialized as part of a
       // QueryResult proto. The assumptions we make about this being compatible with actually
       // constructing and serializing a QueryResult proto are protected by test coverage and proto
       // best practices.
-      for (Target target : partialResult) {
-        if (Thread.interrupted()) {
-          throw new InterruptedException();
-        }
-        codedOut.writeMessage(
-            QueryResult.TARGET_FIELD_NUMBER, toTargetProtoBuffer(target, labelPrinter));
-      }
+      codedOut.writeMessage(QueryResult.TARGET_FIELD_NUMBER, targetProto);
     }
 
     @Override

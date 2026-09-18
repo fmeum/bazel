@@ -14,7 +14,9 @@
 
 package com.google.devtools.build.lib.query2.query.output;
 
+import com.google.common.collect.ImmutableSet;
 import com.google.common.hash.HashFunction;
+import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.events.EventHandler;
 import com.google.devtools.build.lib.packages.LabelPrinter;
 import com.google.devtools.build.lib.packages.Target;
@@ -64,4 +66,17 @@ public interface StreamedFormatter {
    */
   OutputFormatterCallback<Target> createPostFactoStreamCallback(
       OutputStream out, QueryOptions options, LabelPrinter labelPrinter);
+
+  /**
+   * Same as {@link #createPostFactoStreamCallback(OutputStream, QueryOptions, LabelPrinter)}, but
+   * the returned callback additionally emits entries for the packages in error identified by the
+   * given BUILD file labels, if the output format supports such entries.
+   */
+  default OutputFormatterCallback<Target> createPostFactoStreamCallback(
+      OutputStream out,
+      QueryOptions options,
+      LabelPrinter labelPrinter,
+      ImmutableSet<Label> buildFileLabelsOfPackagesInError) {
+    return createPostFactoStreamCallback(out, options, labelPrinter);
+  }
 }
