@@ -95,6 +95,7 @@ public class IndexRegistry implements Registry {
   private final Gson gson;
   private final ImmutableMap<String, Optional<Checksum>> knownFileHashes;
   private final ImmutableMap<ModuleKey, String> previouslySelectedYankedVersions;
+  private final Optional<Path> vendorDir;
   @Nullable private final VendorManager vendorManager;
   private final KnownFileHashesMode knownFileHashesMode;
   private final ImmutableSet<URI> moduleMirrors;
@@ -123,6 +124,7 @@ public class IndexRegistry implements Registry {
     this.knownFileHashes = knownFileHashes;
     this.knownFileHashesMode = knownFileHashesMode;
     this.previouslySelectedYankedVersions = previouslySelectedYankedVersions;
+    this.vendorDir = vendorDir;
     this.vendorManager = vendorDir.map(VendorManager::new).orElse(null);
     this.moduleMirrors = moduleMirrors;
   }
@@ -130,6 +132,45 @@ public class IndexRegistry implements Registry {
   @Override
   public String getUrl() {
     return uri.toString();
+  }
+
+  /**
+   * Two registries are equal if they were created from the same inputs. This is required for
+   * Skyframe change pruning: {@link RegistryFunction} depends on the lockfile as a whole, so it is
+   * re-run whenever the lockfile changes. Without value equality, every such re-run would produce
+   * a "changed" value and unnecessarily invalidate all module files, repo specs and yanked
+   * versions obtained from this registry (and, transitively, module resolution).
+   *
+   * <p>The in-memory caches ({@link #bazelRegistryJson} and {@link #bazelRegistryJsonEvents}) are
+   * intentionally not part of the comparison as they are derived from the fields that are.
+   */
+  @Override
+  public boolean equals(Object o) {
+    if (this == o) {
+      return true;
+    }
+    if (!(o instanceof IndexRegistry other)) {
+      return false;
+    }
+    return uri.equals(other.uri)
+        && clientEnv.equals(other.clientEnv)
+        && knownFileHashes.equals(other.knownFileHashes)
+        && knownFileHashesMode == other.knownFileHashesMode
+        && previouslySelectedYankedVersions.equals(other.previouslySelectedYankedVersions)
+        && vendorDir.equals(other.vendorDir)
+        && moduleMirrors.equals(other.moduleMirrors);
+  }
+
+  @Override
+  public int hashCode() {
+    return Objects.hash(
+        uri,
+        clientEnv,
+        knownFileHashes,
+        knownFileHashesMode,
+        previouslySelectedYankedVersions,
+        vendorDir,
+        moduleMirrors);
   }
 
   private String constructUrl(String base, String... segments) {

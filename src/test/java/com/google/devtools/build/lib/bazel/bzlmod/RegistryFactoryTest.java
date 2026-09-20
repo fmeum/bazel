@@ -21,7 +21,9 @@ import static org.junit.Assert.assertThrows;
 import com.google.common.base.Suppliers;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
+import com.google.common.testing.EqualsTester;
 import com.google.devtools.build.lib.bazel.repository.RepositoryOptions.LockfileMode;
+import com.google.devtools.build.lib.bazel.repository.downloader.Checksum;
 import java.net.URISyntaxException;
 import java.util.Optional;
 import org.junit.Test;
@@ -78,5 +80,89 @@ public class RegistryFactoryTest {
                     Optional.empty(),
                     ImmutableSet.of()));
     assertThat(exception).hasMessageThat().contains("Registry URL path is not valid");
+  }
+
+  @Test
+  public void registryEquality() throws Exception {
+    RegistryFactory registryFactory =
+        new RegistryFactoryImpl(Suppliers.ofInstance(ImmutableMap.of()));
+    RegistryFactory registryFactoryWithEnv =
+        new RegistryFactoryImpl(Suppliers.ofInstance(ImmutableMap.of("KEY", "value")));
+    ImmutableMap<String, Optional<Checksum>> hashes =
+        ImmutableMap.of(
+            "https://example.com/modules/foo/1.0/MODULE.bazel",
+            Optional.of(
+                Checksum.fromSubresourceIntegrity(
+                    "sha256-47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU=")),
+            "https://example.com/modules/foo/1.1/MODULE.bazel",
+            Optional.empty());
+    ImmutableMap<ModuleKey, String> yankedVersions =
+        ImmutableMap.of(new ModuleKey("foo", Version.parse("1.0")), "yanked");
+
+    new EqualsTester()
+        .addEqualityGroup(
+            registryFactory.createRegistry(
+                "https://example.com",
+                LockfileMode.UPDATE,
+                hashes,
+                yankedVersions,
+                Optional.empty(),
+                ImmutableSet.of()),
+            registryFactory.createRegistry(
+                "https://example.com",
+                LockfileMode.UPDATE,
+                hashes,
+                yankedVersions,
+                Optional.empty(),
+                ImmutableSet.of()))
+        .addEqualityGroup(
+            registryFactory.createRegistry(
+                "https://example.org",
+                LockfileMode.UPDATE,
+                hashes,
+                yankedVersions,
+                Optional.empty(),
+                ImmutableSet.of()))
+        .addEqualityGroup(
+            registryFactory.createRegistry(
+                "https://example.com",
+                LockfileMode.ERROR,
+                hashes,
+                yankedVersions,
+                Optional.empty(),
+                ImmutableSet.of()))
+        .addEqualityGroup(
+            registryFactory.createRegistry(
+                "https://example.com",
+                LockfileMode.UPDATE,
+                ImmutableMap.of(),
+                yankedVersions,
+                Optional.empty(),
+                ImmutableSet.of()))
+        .addEqualityGroup(
+            registryFactory.createRegistry(
+                "https://example.com",
+                LockfileMode.UPDATE,
+                hashes,
+                ImmutableMap.of(),
+                Optional.empty(),
+                ImmutableSet.of()))
+        .addEqualityGroup(
+            registryFactory.createRegistry(
+                "https://example.com",
+                LockfileMode.UPDATE,
+                hashes,
+                yankedVersions,
+                Optional.empty(),
+                ImmutableSet.of("https://mirror.example.com")))
+        .addEqualityGroup(
+            registryFactoryWithEnv.createRegistry(
+                "https://example.com",
+                LockfileMode.UPDATE,
+                hashes,
+                yankedVersions,
+                Optional.empty(),
+                ImmutableSet.of()))
+        .testEquals();
   }
 }

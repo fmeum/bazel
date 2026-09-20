@@ -69,11 +69,15 @@ public abstract class InterimModule extends ModuleBase {
   public abstract ImmutableList<ModuleKey> getNodepDeps();
 
   /**
-   * The registry where this module came from. Must be null iff the module has a {@link
+   * The URL of the registry where this module came from. Must be null iff the module has a {@link
    * NonRegistryOverride}.
+   *
+   * <p>This is deliberately not the {@link Registry} itself: registries are Skyframe values that
+   * change whenever the lockfile changes, whereas module files should compare equal in that case
+   * so that Skyframe can avoid rerunning module resolution.
    */
   @Nullable
-  public abstract Registry getRegistry();
+  public abstract String getRegistryUrl();
 
   /** Returns a {@link Builder} that starts out with the same fields as this object. */
   abstract Builder toBuilder();
@@ -160,7 +164,7 @@ public abstract class InterimModule extends ModuleBase {
 
     public abstract Builder setNodepDeps(ImmutableList<ModuleKey> value);
 
-    public abstract Builder setRegistry(Registry value);
+    public abstract Builder setRegistryUrl(@Nullable String value);
 
     public abstract Builder setExtensionUsages(ImmutableList<ModuleExtensionUsage> value);
 
