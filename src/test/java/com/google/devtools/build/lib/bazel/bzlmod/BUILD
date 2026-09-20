@@ -83,6 +83,7 @@ java_library(
         "//src/test/java/com/google/devtools/build/lib/skyframe/util:SkyframeExecutorTestUtils",
         "//src/test/java/com/google/devtools/build/lib/testutil",
         "//src/test/java/com/google/devtools/build/lib/testutil:JunitUtils",
+        "//third_party:guava-testlib",
         "//third_party/java/auto_value_gson",
         "//third_party/java/gson",
         "//third_party/java/guava:base",

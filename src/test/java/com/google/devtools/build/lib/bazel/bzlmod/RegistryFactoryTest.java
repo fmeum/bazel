@@ -21,6 +21,7 @@ import static org.junit.Assert.assertThrows;
 import com.google.common.base.Suppliers;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
+import com.google.common.testing.EqualsTester;
 import com.google.devtools.build.lib.bazel.repository.RepositoryOptions.LockfileMode;
 import com.google.devtools.build.lib.bazel.repository.downloader.Checksum;
 import java.net.URISyntaxException;
@@ -85,6 +86,8 @@ public class RegistryFactoryTest {
   public void registryEquality() throws Exception {
     RegistryFactory registryFactory =
         new RegistryFactoryImpl(Suppliers.ofInstance(ImmutableMap.of()));
+    RegistryFactory registryFactoryWithEnv =
+        new RegistryFactoryImpl(Suppliers.ofInstance(ImmutableMap.of("KEY", "value")));
     ImmutableMap<String, Optional<Checksum>> hashes =
         ImmutableMap.of(
             "https://example.com/modules/foo/1.0/MODULE.bazel",
@@ -96,90 +99,70 @@ public class RegistryFactoryTest {
     ImmutableMap<ModuleKey, String> yankedVersions =
         ImmutableMap.of(new ModuleKey("foo", Version.parse("1.0")), "yanked");
 
-    Registry registry =
-        registryFactory.createRegistry(
-            "https://example.com",
-            LockfileMode.UPDATE,
-            hashes,
-            yankedVersions,
-            Optional.empty(),
-            ImmutableSet.of());
-    // Skyframe change pruning relies on Registry values created from the same inputs being equal.
-    assertThat(registry)
-        .isEqualTo(
+    new EqualsTester()
+        .addEqualityGroup(
             registryFactory.createRegistry(
                 "https://example.com",
                 LockfileMode.UPDATE,
                 hashes,
                 yankedVersions,
                 Optional.empty(),
-                ImmutableSet.of()));
-    assertThat(registry.hashCode())
-        .isEqualTo(
-            registryFactory
-                .createRegistry(
-                    "https://example.com",
-                    LockfileMode.UPDATE,
-                    hashes,
-                    yankedVersions,
-                    Optional.empty(),
-                    ImmutableSet.of())
-                .hashCode());
-
-    assertThat(registry)
-        .isNotEqualTo(
+                ImmutableSet.of()),
+            registryFactory.createRegistry(
+                "https://example.com",
+                LockfileMode.UPDATE,
+                hashes,
+                yankedVersions,
+                Optional.empty(),
+                ImmutableSet.of()))
+        .addEqualityGroup(
             registryFactory.createRegistry(
                 "https://example.org",
                 LockfileMode.UPDATE,
                 hashes,
                 yankedVersions,
                 Optional.empty(),
-                ImmutableSet.of()));
-    assertThat(registry)
-        .isNotEqualTo(
+                ImmutableSet.of()))
+        .addEqualityGroup(
             registryFactory.createRegistry(
                 "https://example.com",
                 LockfileMode.ERROR,
                 hashes,
                 yankedVersions,
                 Optional.empty(),
-                ImmutableSet.of()));
-    assertThat(registry)
-        .isNotEqualTo(
+                ImmutableSet.of()))
+        .addEqualityGroup(
             registryFactory.createRegistry(
                 "https://example.com",
                 LockfileMode.UPDATE,
                 ImmutableMap.of(),
                 yankedVersions,
                 Optional.empty(),
-                ImmutableSet.of()));
-    assertThat(registry)
-        .isNotEqualTo(
+                ImmutableSet.of()))
+        .addEqualityGroup(
             registryFactory.createRegistry(
                 "https://example.com",
                 LockfileMode.UPDATE,
                 hashes,
                 ImmutableMap.of(),
                 Optional.empty(),
-                ImmutableSet.of()));
-    assertThat(registry)
-        .isNotEqualTo(
+                ImmutableSet.of()))
+        .addEqualityGroup(
             registryFactory.createRegistry(
                 "https://example.com",
                 LockfileMode.UPDATE,
                 hashes,
                 yankedVersions,
                 Optional.empty(),
-                ImmutableSet.of("https://mirror.example.com")));
-    assertThat(registry)
-        .isNotEqualTo(
-            new RegistryFactoryImpl(Suppliers.ofInstance(ImmutableMap.of("KEY", "value")))
-                .createRegistry(
-                    "https://example.com",
-                    LockfileMode.UPDATE,
-                    hashes,
-                    yankedVersions,
-                    Optional.empty(),
-                    ImmutableSet.of()));
+                ImmutableSet.of("https://mirror.example.com")))
+        .addEqualityGroup(
+            registryFactoryWithEnv.createRegistry(
+                "https://example.com",
+                LockfileMode.UPDATE,
+                hashes,
+                yankedVersions,
+                Optional.empty(),
+                ImmutableSet.of()))
+        .testEquals();
   }
 }
