@@ -15,12 +15,9 @@
 
 package com.google.devtools.build.lib.bazel.bzlmod;
 
-import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
-import com.google.common.collect.Maps;
 import com.google.devtools.build.lib.bazel.repository.RepositoryOptions.LockfileMode;
-import com.google.devtools.build.lib.bazel.repository.downloader.Checksum;
 import com.google.devtools.build.lib.rules.repository.RepositoryDirectoryValue;
 import com.google.devtools.build.lib.server.FailureDetails;
 import com.google.devtools.build.lib.skyframe.PrecomputedValue.Precomputed;
@@ -78,12 +75,11 @@ public class RegistryFunction implements SkyFunction {
     }
 
     RegistryKey key = (RegistryKey) skyKey.argument();
-    String url = key.url().replace("%workspace%", workspaceRoot.getPathString());
     try {
       return registryFactory.createRegistry(
-          url,
+          key.url().replace("%workspace%", workspaceRoot.getPathString()),
           lockfileMode,
-          filterFileHashesForRegistry(lockfile.getRegistryFileHashes(), url),
+          lockfile.getRegistryFileHashes(),
           lockfile.getSelectedYankedVersions(),
           vendorDir,
           MODULE_MIRRORS.get(env).getOrDefault(key.url(), ImmutableSet.of()));
@@ -95,25 +91,6 @@ public class RegistryFunction implements SkyFunction {
               "Invalid registry URL: %s",
               key.url()));
     }
-  }
-
-  /**
-   * Restricts the file hashes recorded in the lockfile to those of files served by the registry
-   * with the given URL.
-   *
-   * <p>A registry only ever looks up hashes of files under its own URL, so this doesn't change
-   * behavior. It does, however, make the resulting {@link Registry} value independent of changes
-   * to the lockfile that only concern other registries, which allows Skyframe to prune the
-   * invalidation of everything depending on this registry in that case.
-   */
-  @VisibleForTesting
-  static ImmutableMap<String, Optional<Checksum>> filterFileHashesForRegistry(
-      ImmutableMap<String, Optional<Checksum>> registryFileHashes, String registryUrl) {
-    // Registry file URLs are always formed by appending path segments separated by a slash to the
-    // registry URL (see IndexRegistry#constructUrl).
-    String prefix = registryUrl.endsWith("/") ? registryUrl : registryUrl + "/";
-    return ImmutableMap.copyOf(
-        Maps.filterKeys(registryFileHashes, fileUrl -> fileUrl.startsWith(prefix)));
   }
 
   static final class RegistryException extends SkyFunctionException {
