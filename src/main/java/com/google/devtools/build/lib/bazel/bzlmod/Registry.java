@@ -19,12 +19,18 @@ import com.google.common.collect.ImmutableMap;
 import com.google.devtools.build.lib.bazel.repository.downloader.Checksum;
 import com.google.devtools.build.lib.bazel.repository.downloader.DownloadManager;
 import com.google.devtools.build.lib.events.ExtendedEventHandler;
-import com.google.devtools.build.skyframe.NotComparableSkyValue;
+import com.google.devtools.build.skyframe.SkyValue;
 import java.io.IOException;
 import java.util.Optional;
 
-/** A database where module metadata is stored. */
-public interface Registry extends NotComparableSkyValue {
+/**
+ * A database where module metadata is stored.
+ *
+ * <p>Registries are Skyframe values that are recomputed whenever the lockfile changes, so
+ * implementations must have value equality to allow Skyframe to prune the invalidation of
+ * everything depending on them.
+ */
+public interface Registry extends SkyValue {
 
   /** The URL that uniquely identifies the registry. */
   String getUrl();

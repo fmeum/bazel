@@ -116,7 +116,7 @@ public final class BzlmodTestUtil {
 
     @CanIgnoreReturnValue
     public InterimModuleBuilder setRegistry(FakeRegistry value) {
-      this.builder.setRegistry(value);
+      this.builder.setRegistryUrl(value.getUrl());
       return this;
     }
 

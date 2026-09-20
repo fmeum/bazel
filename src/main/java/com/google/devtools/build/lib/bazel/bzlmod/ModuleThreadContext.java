@@ -426,7 +426,7 @@ public class ModuleThreadContext extends StarlarkThreadContext {
     }
 
     return module
-        .setRegistry(registry)
+        .setRegistryUrl(registry == null ? null : registry.getUrl())
         .setDeps(ImmutableMap.copyOf(deps))
         .setOriginalDeps(ImmutableMap.copyOf(deps))
         .setExtensionUsages(extensionUsages.build())
