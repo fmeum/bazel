@@ -70,7 +70,10 @@ public abstract class ActionEnvironment {
    */
   public static ActionEnvironment create(
       ImmutableMap<String, String> fixedEnv, ImmutableSet<String> inheritedEnv) {
-    return create(fixedEnv, inheritedEnv, /* unsetEnv= */ ImmutableSet.of());
+    if (fixedEnv.isEmpty() && inheritedEnv.isEmpty()) {
+      return EMPTY;
+    }
+    return actionEnvironmentInterner.intern(new SimpleActionEnvironment(fixedEnv, inheritedEnv));
   }
 
   /**
@@ -89,11 +92,13 @@ public abstract class ActionEnvironment {
       ImmutableMap<String, String> fixedEnv,
       ImmutableSet<String> inheritedEnv,
       ImmutableSet<String> unsetEnv) {
-    if (fixedEnv.isEmpty() && inheritedEnv.isEmpty() && unsetEnv.isEmpty()) {
-      return EMPTY;
+    ActionEnvironment env = create(fixedEnv, inheritedEnv);
+    if (unsetEnv.isEmpty()) {
+      return env;
     }
-    return actionEnvironmentInterner.intern(
-        new SimpleActionEnvironment(fixedEnv, inheritedEnv, unsetEnv));
+    // Unset variables are rare, so they are kept in a separate wrapper rather than as a field of
+    // every environment to avoid increasing the memory footprint of the common case.
+    return actionEnvironmentInterner.intern(new UnsettingActionEnvironment(env, unsetEnv));
   }
 
   /**
@@ -150,7 +155,9 @@ public abstract class ActionEnvironment {
    * testing and to compute the cache keys of actions. Use {@link #resolve} instead to get the
    * complete environment.
    */
-  public abstract ImmutableSet<String> getUnsetEnv();
+  public ImmutableSet<String> getUnsetEnv() {
+    return ImmutableSet.of();
+  }
 
   /**
    * Returns an upper bound on the combined size of the fixed and inherited environments. A call to
@@ -202,8 +209,7 @@ public abstract class ActionEnvironment {
     }
     if (this == EMPTY) {
       return actionEnvironmentInterner.intern(
-          new SimpleActionEnvironment(
-              ImmutableMap.copyOf(fixedVars), ImmutableSet.of(), ImmutableSet.of()));
+          new SimpleActionEnvironment(ImmutableMap.copyOf(fixedVars), ImmutableSet.of()));
     }
     return actionEnvironmentInterner.intern(
         new CompoundActionEnvironment(this, ImmutableMap.copyOf(fixedVars)));
@@ -222,11 +228,6 @@ public abstract class ActionEnvironment {
     }
 
     @Override
-    public ImmutableSet<String> getUnsetEnv() {
-      return ImmutableSet.of();
-    }
-
-    @Override
     public int estimatedSize() {
       return 0;
     }
@@ -235,15 +236,11 @@ public abstract class ActionEnvironment {
   private static final class SimpleActionEnvironment extends ActionEnvironment {
     private final ImmutableMap<String, String> fixedEnv;
     private final ImmutableSet<String> inheritedEnv;
-    private final ImmutableSet<String> unsetEnv;
 
     SimpleActionEnvironment(
-        ImmutableMap<String, String> fixedEnv,
-        ImmutableSet<String> inheritedEnv,
-        ImmutableSet<String> unsetEnv) {
+        ImmutableMap<String, String> fixedEnv, ImmutableSet<String> inheritedEnv) {
       this.fixedEnv = fixedEnv;
       this.inheritedEnv = inheritedEnv;
-      this.unsetEnv = unsetEnv;
     }
 
     @Override
@@ -254,11 +251,6 @@ public abstract class ActionEnvironment {
     @Override
     public ImmutableSet<String> getInheritedEnv() {
       return inheritedEnv;
-    }
-
-    @Override
-    public ImmutableSet<String> getUnsetEnv() {
-      return unsetEnv;
     }
 
     @Override
@@ -274,14 +266,63 @@ public abstract class ActionEnvironment {
       if (!(o instanceof SimpleActionEnvironment that)) {
         return false;
       }
-      return fixedEnv.equals(that.fixedEnv)
-          && inheritedEnv.equals(that.inheritedEnv)
-          && unsetEnv.equals(that.unsetEnv);
+      return fixedEnv.equals(that.fixedEnv) && inheritedEnv.equals(that.inheritedEnv);
     }
 
     @Override
     public int hashCode() {
-      return Objects.hash(fixedEnv, inheritedEnv, unsetEnv);
+      return Objects.hash(fixedEnv, inheritedEnv);
+    }
+  }
+
+  /**
+   * An environment that additionally unsets a non-empty set of variables. Kept separate from
+   * {@link SimpleActionEnvironment} so that the common case of no unset variables does not pay for
+   * an extra field.
+   */
+  private static final class UnsettingActionEnvironment extends ActionEnvironment {
+    private final ActionEnvironment base;
+    private final ImmutableSet<String> unsetEnv;
+
+    private UnsettingActionEnvironment(ActionEnvironment base, ImmutableSet<String> unsetEnv) {
+      this.base = base;
+      this.unsetEnv = unsetEnv;
+    }
+
+    @Override
+    public ImmutableMap<String, String> getFixedEnv() {
+      return base.getFixedEnv();
+    }
+
+    @Override
+    public ImmutableSet<String> getInheritedEnv() {
+      return base.getInheritedEnv();
+    }
+
+    @Override
+    public ImmutableSet<String> getUnsetEnv() {
+      return unsetEnv;
+    }
+
+    @Override
+    public int estimatedSize() {
+      return base.estimatedSize();
+    }
+
+    @Override
+    public boolean equals(Object o) {
+      if (this == o) {
+        return true;
+      }
+      if (!(o instanceof UnsettingActionEnvironment that)) {
+        return false;
+      }
+      return base.equals(that.base) && unsetEnv.equals(that.unsetEnv);
+    }
+
+    @Override
+    public int hashCode() {
+      return Objects.hash(base, unsetEnv);
     }
   }
 
