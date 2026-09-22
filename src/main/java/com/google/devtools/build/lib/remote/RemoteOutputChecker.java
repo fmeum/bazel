@@ -34,6 +34,7 @@ import com.google.devtools.build.lib.analysis.OutputGroupInfo;
 import com.google.devtools.build.lib.analysis.ProviderCollection;
 import com.google.devtools.build.lib.analysis.TopLevelArtifactContext;
 import com.google.devtools.build.lib.analysis.TopLevelArtifactHelper;
+import com.google.devtools.build.lib.analysis.config.BuildConfigurationValue.RunfileSymlinksMode;
 import com.google.devtools.build.lib.analysis.configuredtargets.RuleConfiguredTarget;
 import com.google.devtools.build.lib.analysis.test.TestProvider;
 import com.google.devtools.build.lib.clock.Clock;
@@ -82,7 +83,7 @@ public class RemoteOutputChecker implements OutputChecker {
       String commandName,
       RemoteOutputsMode outputsMode,
       ImmutableList<Predicate<String>> patternsToDownload,
-      RemoteOutputChecker lastRemoteOutputChecker) {
+      @Nullable RemoteOutputChecker lastRemoteOutputChecker) {
     this.commandMode =
         switch (commandName) {
           case "build" -> CommandMode.BUILD;
@@ -193,7 +194,12 @@ public class RemoteOutputChecker implements OutputChecker {
       return;
     }
     var runfilesTree = runfilesSupport.getRunfilesTree();
-    if (runfilesTree.isBuildRunfileLinks()) {
+    // Only track runfiles trees whose symlinks would be created during the build if they weren't
+    // created lazily (see OutputService#createsRunfilesTreeLazily). With --noenable_runfiles,
+    // SymlinkTreeAction creates the minimal runfiles directory itself and there is nothing to
+    // create lazily.
+    if (runfilesTree.isBuildRunfileLinks()
+        && runfilesTree.getSymlinksMode() == RunfileSymlinksMode.CREATE) {
       topLevelRunfilesTrees.add(runfilesTree.getExecPath());
     }
     var runfiles = runfilesSupport.getRunfiles();
@@ -263,8 +269,8 @@ public class RemoteOutputChecker implements OutputChecker {
 
   /**
    * Returns whether the runfiles tree with the given exec path belongs to a top-level target and
-   * thus has to be created even though runfiles trees are {@linkplain
-   * com.google.devtools.build.lib.vfs.OutputService#createsRunfilesTreesLazily created lazily}.
+   * thus has to be created even though other runfiles trees are {@linkplain
+   * com.google.devtools.build.lib.vfs.OutputService#createsRunfilesTreeLazily created lazily}.
    */
   public boolean shouldCreateRunfilesTree(PathFragment runfilesTreeExecPath) {
     return topLevelRunfilesTrees.contains(runfilesTreeExecPath);
@@ -390,16 +396,6 @@ public class RemoteOutputChecker implements OutputChecker {
 
   @Override
   public boolean shouldTrustCachedMetadata(ActionInput file, FileArtifactValue metadata) {
-    // The lazily created runfiles tree of a top-level target is only materialized when its
-    // RunfilesTreeAction runs (see AbstractActionInputPrefetcher#finalizeAction), so make sure it
-    // does run, just like the actions of top-level outputs that still have to be downloaded
-    // below. The action is cheap and the runfiles tree is synced incrementally.
-    if (file instanceof Artifact artifact
-        && artifact.isRunfilesTree()
-        && shouldCreateRunfilesTree(artifact.getExecPath())) {
-      return false;
-    }
-
     // Local metadata is always trusted.
     if (!metadata.isRemote()) {
       return true;

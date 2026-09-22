@@ -23,7 +23,6 @@ import com.google.devtools.build.lib.actions.ActionExecutionMetadata;
 import com.google.devtools.build.lib.actions.ActionInputMap;
 import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.actions.ArtifactPathResolver;
-import com.google.devtools.build.lib.actions.EnvironmentalExecException;
 import com.google.devtools.build.lib.actions.InputMetadataProvider;
 import com.google.devtools.build.lib.actions.LostInputsActionExecutionException;
 import com.google.devtools.build.lib.actions.OutputChecker;
@@ -173,7 +172,7 @@ public class RemoteOutputService implements OutputService {
 
   @Override
   public void finalizeAction(Action action, OutputMetadataStore outputMetadataStore)
-      throws IOException, EnvironmentalExecException, InterruptedException {
+      throws IOException, InterruptedException {
     if (actionInputFetcher != null) {
       actionInputFetcher.finalizeAction(action, outputMetadataStore);
     }
@@ -206,12 +205,22 @@ public class RemoteOutputService implements OutputService {
 
   @Override
   public boolean createsRunfilesTreesLazily() {
-    // When building without the bytes, only create the runfiles trees that are actually needed:
-    // those of top-level targets (see AbstractActionInputPrefetcher#finalizeAction and
-    // RemoteImportantOutputHandler) and those required by local actions or the run command (see
-    // RunfilesTreeUpdater). When downloading all outputs, SymlinkTreeAction creates them eagerly,
-    // just like with a local output service.
+    // When downloading all outputs, SymlinkTreeAction creates all runfiles trees eagerly, just like
+    // with a local output service.
     return outputsMode != RemoteOutputsMode.ALL;
+  }
+
+  @Override
+  public boolean createsRunfilesTreeLazily(PathFragment runfilesTreeExecPath) {
+    // When building without the bytes, only create the runfiles trees that are actually needed:
+    // those of top-level targets, which SymlinkTreeAction creates just like their outputs are
+    // downloaded, and those required by local actions or the run command, which RunfilesTreeUpdater
+    // creates on demand. Targets that only become top-level after their SymlinkTreeAction has run,
+    // e.g. because they were previously only built as a dependency, are handled by
+    // RemoteImportantOutputHandler at target completion.
+    return createsRunfilesTreesLazily()
+        && (remoteOutputChecker == null
+            || !remoteOutputChecker.shouldCreateRunfilesTree(runfilesTreeExecPath));
   }
 
   @Override

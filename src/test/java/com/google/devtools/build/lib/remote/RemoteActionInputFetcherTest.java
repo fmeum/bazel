@@ -34,7 +34,6 @@ import com.google.devtools.build.lib.actions.util.ActionsTestUtil;
 import com.google.devtools.build.lib.cmdline.RepositoryName;
 import com.google.devtools.build.lib.events.EventBusEventHandler;
 import com.google.devtools.build.lib.events.Reporter;
-import com.google.devtools.build.lib.exec.RunfilesTreeUpdater;
 import com.google.devtools.build.lib.remote.common.BulkTransferException;
 import com.google.devtools.build.lib.remote.options.RemoteOutputsMode;
 import com.google.devtools.build.lib.remote.util.DigestUtil;
@@ -84,8 +83,7 @@ public class RemoteActionInputFetcherTest extends ActionInputPrefetcherTestBase 
         tempPathGenerator,
         DUMMY_REMOTE_OUTPUT_CHECKER,
         ActionOutputDirectoryHelper.createForTesting(),
-        OutputPermissions.READONLY,
-        new RunfilesTreeUpdater(execRoot, SyscallCache.NO_CACHE, () -> true));
+        OutputPermissions.READONLY);
   }
 
   @Test
@@ -102,8 +100,7 @@ public class RemoteActionInputFetcherTest extends ActionInputPrefetcherTestBase 
             tempPathGenerator,
             DUMMY_REMOTE_OUTPUT_CHECKER,
             ActionOutputDirectoryHelper.createForTesting(),
-            OutputPermissions.READONLY,
-            new RunfilesTreeUpdater(execRoot, SyscallCache.NO_CACHE, () -> true));
+            OutputPermissions.READONLY);
     VirtualActionInput a = ActionsTestUtil.createVirtualActionInput("file1", "hello world");
 
     // act
@@ -137,8 +134,7 @@ public class RemoteActionInputFetcherTest extends ActionInputPrefetcherTestBase 
             tempPathGenerator,
             DUMMY_REMOTE_OUTPUT_CHECKER,
             ActionOutputDirectoryHelper.createForTesting(),
-            OutputPermissions.READONLY,
-            new RunfilesTreeUpdater(execRoot, SyscallCache.NO_CACHE, () -> true));
+            OutputPermissions.READONLY);
 
     // act
     wait(
@@ -238,8 +234,7 @@ public class RemoteActionInputFetcherTest extends ActionInputPrefetcherTestBase 
             tempPathGenerator,
             DUMMY_REMOTE_OUTPUT_CHECKER,
             ActionOutputDirectoryHelper.createForTesting(),
-            OutputPermissions.READONLY,
-            new RunfilesTreeUpdater(execRoot, SyscallCache.NO_CACHE, () -> true));
+            OutputPermissions.READONLY);
 
     wait(
         actionInputFetcher.prefetchFilesInterruptibly(
@@ -276,8 +271,7 @@ public class RemoteActionInputFetcherTest extends ActionInputPrefetcherTestBase 
             tempPathGenerator,
             DUMMY_REMOTE_OUTPUT_CHECKER,
             ActionOutputDirectoryHelper.createForTesting(),
-            OutputPermissions.READONLY,
-            new RunfilesTreeUpdater(execRoot, SyscallCache.NO_CACHE, () -> true));
+            OutputPermissions.READONLY);
 
     wait(
         actionInputFetcher.prefetchFilesInterruptibly(

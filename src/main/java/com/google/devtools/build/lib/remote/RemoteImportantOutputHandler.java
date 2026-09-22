@@ -120,11 +120,13 @@ public final class RemoteImportantOutputHandler implements ImportantOutputHandle
   }
 
   /**
-   * Creates the runfiles trees of a top-level target, which aren't created by SymlinkTreeAction
-   * when building without the bytes (see {@link RemoteOutputService#createsRunfilesTreesLazily}).
+   * Creates the runfiles trees of a top-level target that haven't been created yet.
    *
-   * <p>{@link AbstractActionInputPrefetcher#finalizeAction} only does this for targets that were
-   * already known to be top-level when their runfiles tree action ran.
+   * <p>When building without the bytes, SymlinkTreeAction only creates the runfiles trees of
+   * targets that are known to be top-level when it runs (see {@link
+   * RemoteOutputService#createsRunfilesTreeLazily}). This covers targets that only became top-level
+   * afterwards, e.g. because they were previously built as a dependency only or with {@code
+   * --remote_download_minimal}, in which case none of their actions have to rerun.
    */
   private void createRunfilesTrees(ImmutableList<RunfilesTree> runfilesTrees)
       throws ImportantOutputException, InterruptedException {

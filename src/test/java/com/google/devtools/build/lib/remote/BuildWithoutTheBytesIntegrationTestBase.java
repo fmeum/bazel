@@ -258,6 +258,74 @@ public abstract class BuildWithoutTheBytesIntegrationTestBase extends BuildInteg
         .isFalse();
   }
 
+  @Test
+  public void runfilesTrees_downloadToplevel_createdWhenTargetBecomesToplevel(
+      @TestParameter boolean skymeld) throws Exception {
+    assumeFalse(OS.getCurrent() == OS.WINDOWS);
+    writeRunfilesTreesTestFiles();
+    addOptions("--experimental_merged_skyframe_analysis_execution=" + skymeld);
+    setDownloadToplevel();
+
+    buildTarget("//a:use_dep");
+    waitDownloads();
+    Path runfilesDir = getToolRunfilesTree("//a:use_dep");
+    assertRunfilesTreeNotCreated(runfilesDir);
+
+    // None of the actions of the tool have to rerun when it is built as a top-level target, but its
+    // runfiles tree must still be created.
+    buildTarget("//a:dep");
+    waitDownloads();
+
+    assertRunfilesTreeCreated(runfilesDir, "a/data.txt", "data\n");
+  }
+
+  @Test
+  public void runfilesTrees_downloadToplevel_notRecreatedWhenUpToDate() throws Exception {
+    assumeFalse(OS.getCurrent() == OS.WINDOWS);
+    writeRunfilesTreesTestFiles();
+    setDownloadToplevel();
+
+    buildTarget("//a:bin");
+    waitDownloads();
+    Path runfilesDir = getOutputPath("a/bin.sh.runfiles");
+    assertRunfilesTreeCreated(runfilesDir, "a/data.txt", "data\n");
+    // RunfilesTreeUpdater removes files that don't belong to the runfiles tree when it syncs it,
+    // so this file only survives the next build if the tree is left alone.
+    Path canary = runfilesDir.getRelative(TestConstants.WORKSPACE_NAME).getRelative("canary");
+    FileSystemUtils.createEmptyFile(canary);
+
+    ActionEventCollector actionEventCollector = new ActionEventCollector();
+    getRuntimeWrapper().registerSubscriber(actionEventCollector);
+    buildTarget("//a:bin");
+    waitDownloads();
+
+    // The runfiles tree is already up to date: the runfiles tree action is a cache hit and the
+    // tree is neither synced nor recreated.
+    assertThat(actionEventCollector.getActionExecutedEvents()).isEmpty();
+    assertThat(canary.exists(Symlinks.NOFOLLOW)).isTrue();
+    assertRunfilesTreeCreated(runfilesDir, "a/data.txt", "data\n");
+  }
+
+  @Test
+  public void runfilesTrees_downloadToplevel_recreatedWhenDeleted() throws Exception {
+    assumeFalse(OS.getCurrent() == OS.WINDOWS);
+    writeRunfilesTreesTestFiles();
+    setDownloadToplevel();
+
+    buildTarget("//a:bin");
+    waitDownloads();
+    Path runfilesDir = getOutputPath("a/bin.sh.runfiles");
+    assertRunfilesTreeCreated(runfilesDir, "a/data.txt", "data\n");
+
+    // The symlink tree action only recreates the output manifest, so the runfiles tree action has
+    // to run again to recreate the symlinks even though its inputs are unchanged.
+    runfilesDir.deleteTree();
+    buildTarget("//a:bin");
+    waitDownloads();
+
+    assertRunfilesTreeCreated(runfilesDir, "a/data.txt", "data\n");
+  }
+
   private void writeRunfilesTreesTestFiles() throws IOException {
     write(
         "a/defs.bzl",

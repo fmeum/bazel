@@ -56,12 +56,17 @@ public final class SymlinkTreeStrategy implements SymlinkTreeActionContext {
     actionExecutionContext.getEventHandler().post(new RunningActionEvent(action, "local"));
     try (var _ = Profiler.instance().profile("SymlinkTreeStrategy.createSymlinks")) {
       SymlinkTreeHelper helper = createSymlinkTreeHelper(action, actionExecutionContext);
-      // TODO(tjgq): Respect RunfileSymlinksMode.SKIP even in the presence of an OutputService.
       try {
         // Note that the output manifest must always be created last, as its presence ascertains
         // that the runfiles tree has been updated (only the output manifest is an action output,
         // so Skyframe cannot invalidate the symlink tree).
-        if (outputService.canCreateSymlinkTree()) {
+        if (action.getRunfileSymlinksMode() == RunfileSymlinksMode.SKIP) {
+          // Symlinks are not created at all, not even by an output service. Clear the runfiles
+          // directory, then create just the output manifest and the workspace subdirectory. This
+          // is required because only the output manifest is considered an action output, so if
+          // the previous invocation created a symlink tree, Skyframe will not clear it for us.
+          helper.createMinimalRunfilesDirectory();
+        } else if (outputService.canCreateSymlinkTree()) {
           Map<PathFragment, PathFragment> symlinks;
           if (action.isFilesetTree()) {
             symlinks = getFilesetMap(action, actionExecutionContext);
@@ -73,13 +78,11 @@ public final class SymlinkTreeStrategy implements SymlinkTreeActionContext {
           outputService.createSymlinkTree(
               symlinks, action.getOutputManifest().getExecPath().getParentDirectory());
           helper.linkManifest();
-        } else if (action.getRunfileSymlinksMode() == RunfileSymlinksMode.SKIP
-            || (!action.isFilesetTree() && outputService.createsRunfilesTreesLazily())) {
-          // Clear the runfiles directory, then create just the output manifest and the workspace
-          // subdirectory. This is required because only the output manifest is considered an action
-          // output, so if the previous invocation created a symlink tree, Skyframe will not clear
-          // it for us. If runfiles trees are created lazily, the symlinks are created on demand by
-          // RunfilesTreeUpdater.
+        } else if (!action.isFilesetTree()
+            && outputService.createsRunfilesTreeLazily(
+                action.getOutputManifest().getExecPath().getParentDirectory())) {
+          // The symlinks are created on demand by RunfilesTreeUpdater. Only create the output
+          // manifest and the workspace subdirectory, clearing any stale symlinks (see above).
           helper.createMinimalRunfilesDirectory();
         } else {
           if (action.isFilesetTree()) {

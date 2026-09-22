@@ -23,6 +23,7 @@ import com.google.devtools.build.lib.analysis.RunfilesSupport;
 import com.google.devtools.build.lib.analysis.config.BuildConfigurationValue.RunfileSymlinksMode;
 import com.google.devtools.build.lib.util.OS;
 import com.google.devtools.build.lib.vfs.DigestUtils;
+import com.google.devtools.build.lib.vfs.FileStatus;
 import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.build.lib.vfs.PathFragment;
 import com.google.devtools.build.lib.vfs.Symlinks;
@@ -118,6 +119,63 @@ public class RunfilesTreeUpdater {
     }
   }
 
+  /**
+   * Returns whether the given runfiles tree exists and is up to date with its input manifest, in
+   * which case {@link #updateRunfiles} leaves it unchanged.
+   *
+   * <p>This is only ever the case for a tree that was previously populated by this class, which
+   * copies the input manifest into the tree after creating the symlinks. A tree that only contains
+   * an output manifest symlinked to the input manifest, as created by {@code SymlinkTreeAction}
+   * when it doesn't create the symlinks itself, is never up to date.
+   */
+  public boolean isUpToDate(RunfilesTree tree) {
+    Path runfilesDir = execRoot.getRelative(tree.getExecPath());
+    Path inputManifest =
+        execRoot.getRelative(RunfilesSupport.inputManifestExecPath(tree.getExecPath()));
+    Path outputManifest =
+        execRoot.getRelative(RunfilesSupport.outputManifestExecPath(tree.getExecPath()));
+    try {
+      var inputManifestStat = inputManifest.statIfFound();
+      return inputManifestStat != null
+          && isUpToDate(tree, runfilesDir, inputManifest, inputManifestStat, outputManifest);
+    } catch (IOException e) {
+      return false;
+    }
+  }
+
+  private boolean isUpToDate(
+      RunfilesTree tree,
+      Path runfilesDir,
+      Path inputManifest,
+      FileStatus inputManifestStat,
+      Path outputManifest)
+      throws IOException {
+    // The runfiles directory is up to date if the manifest in it matches the input manifest,
+    // implying the symlinks exist and are already up to date. If the output manifest is a symbolic
+    // link, it is a symbolic link to the input manifest created by SymlinkTreeAction, so we cannot
+    // trust it as an up-to-date check.
+    // On Windows, where symlinks may be silently replaced by copies, a previous run in SKIP mode
+    // could have resulted in an output manifest that is an identical copy of the input manifest,
+    // which we must not treat as up to date, but we also don't want to unnecessarily rebuild the
+    // runfiles directory all the time. Instead, check for the presence of the first runfile in
+    // the manifest. If it is present, we can be certain that the previous mode wasn't SKIP.
+    if (tree.getSymlinksMode() != RunfileSymlinksMode.CREATE) {
+      return false;
+    }
+    // Not following symlinks means that the stat describes the output manifest itself, which is
+    // only the file we digest below if it isn't a symbolic link - which is checked first.
+    var outputManifestStat = outputManifest.statIfFound(Symlinks.NOFOLLOW);
+    return outputManifestStat != null
+        && !outputManifestStat.isSymbolicLink()
+        && Arrays.equals(
+            DigestUtils.getDigestWithManualFallback(
+                outputManifest, xattrProvider, outputManifestStat),
+            DigestUtils.getDigestWithManualFallback(
+                inputManifest, xattrProvider, inputManifestStat))
+        && (OS.getCurrent() != OS.WINDOWS
+            || isRunfilesDirectoryPopulated(runfilesDir, outputManifest));
+  }
+
   private void updateRunfilesTree(RunfilesTree tree) throws IOException, ExecException {
     Path runfilesDir = execRoot.getRelative(tree.getExecPath());
     Path inputManifest =
@@ -129,30 +187,8 @@ public class RunfilesTreeUpdater {
     Path outputManifest =
         execRoot.getRelative(RunfilesSupport.outputManifestExecPath(tree.getExecPath()));
     try {
-      // Avoid rebuilding the runfiles directory if the manifest in it matches the input manifest,
-      // implying the symlinks exist and are already up to date. If the output manifest is a
-      // symbolic link, it is likely a symbolic link to the input manifest, so we cannot trust it as
-      // an up-to-date check.
-      // On Windows, where symlinks may be silently replaced by copies, a previous run in SKIP mode
-      // could have resulted in an output manifest that is an identical copy of the input manifest,
-      // which we must not treat as up to date, but we also don't want to unnecessarily rebuild the
-      // runfiles directory all the time. Instead, check for the presence of the first runfile in
-      // the manifest. If it is present, we can be certain that the previous mode wasn't SKIP.
-      if (tree.getSymlinksMode() == RunfileSymlinksMode.CREATE) {
-        // Not following symlinks means that the stat describes the output manifest itself, which is
-        // only the file we digest below if it isn't a symbolic link - which is checked first.
-        var outputManifestStat = outputManifest.statIfFound(Symlinks.NOFOLLOW);
-        if (outputManifestStat != null
-            && !outputManifestStat.isSymbolicLink()
-            && Arrays.equals(
-                DigestUtils.getDigestWithManualFallback(
-                    outputManifest, xattrProvider, outputManifestStat),
-                DigestUtils.getDigestWithManualFallback(
-                    inputManifest, xattrProvider, inputManifestStat))
-            && (OS.getCurrent() != OS.WINDOWS
-                || isRunfilesDirectoryPopulated(runfilesDir, outputManifest))) {
-          return;
-        }
+      if (isUpToDate(tree, runfilesDir, inputManifest, inputManifestStat, outputManifest)) {
+        return;
       }
     } catch (IOException e) {
       // Ignore it - we will just try to create runfiles directory.
@@ -168,7 +204,9 @@ public class RunfilesTreeUpdater {
     switch (tree.getSymlinksMode()) {
       case CREATE -> {
         helper.createRunfilesSymlinks(tree.getMapping());
-        helper.linkManifest();
+        // Copy rather than link the manifest so that the up-to-date check above can tell that the
+        // symlinks have been created and match the manifest.
+        helper.copyManifest();
       }
       case SKIP -> helper.createMinimalRunfilesDirectory();
     }

@@ -83,7 +83,6 @@ import com.google.devtools.build.lib.collect.nestedset.Order;
 import com.google.devtools.build.lib.events.EventBusEventHandler;
 import com.google.devtools.build.lib.events.Reporter;
 import com.google.devtools.build.lib.exec.ExecutionOptions;
-import com.google.devtools.build.lib.exec.RunfilesTreeUpdater;
 import com.google.devtools.build.lib.exec.util.FakeOwner;
 import com.google.devtools.build.lib.remote.RemoteRetrier.ExponentialBackoff;
 import com.google.devtools.build.lib.remote.common.RemotePathResolver;
@@ -1593,8 +1592,7 @@ public class RemoteSpawnRunnerWithGrpcRemoteExecutorTest {
             tempPathGenerator,
             remoteOutputChecker,
             ActionOutputDirectoryHelper.createForTesting(),
-            OutputPermissions.READONLY,
-            new RunfilesTreeUpdater(execRoot, SyscallCache.NO_CACHE, () -> true));
+            OutputPermissions.READONLY);
 
     var actionFileSystem =
         new RemoteActionFileSystem(

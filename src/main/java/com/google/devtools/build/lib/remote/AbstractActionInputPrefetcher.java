@@ -25,7 +25,6 @@ import static com.google.devtools.build.lib.remote.util.RxFutures.toListenableFu
 import static io.reactivex.rxjava3.core.Completable.concat;
 
 import com.google.common.annotations.VisibleForTesting;
-import com.google.common.base.Throwables;
 import com.google.common.collect.HashMultimap;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
@@ -43,23 +42,17 @@ import com.google.devtools.build.lib.actions.ActionOutputDirectoryHelper;
 import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.actions.Artifact.SpecialArtifact;
 import com.google.devtools.build.lib.actions.Artifact.TreeFileArtifact;
-import com.google.devtools.build.lib.actions.EnvironmentalExecException;
-import com.google.devtools.build.lib.actions.ExecException;
 import com.google.devtools.build.lib.actions.FileArtifactValue;
 import com.google.devtools.build.lib.actions.FileContentsProxy;
 import com.google.devtools.build.lib.actions.FileStateType;
 import com.google.devtools.build.lib.actions.InputMetadataProvider;
-import com.google.devtools.build.lib.actions.RunfilesTreeAction;
 import com.google.devtools.build.lib.actions.Spawn;
 import com.google.devtools.build.lib.actions.VirtualActionInput;
 import com.google.devtools.build.lib.actions.cache.OutputMetadataStore;
 import com.google.devtools.build.lib.events.Reporter;
-import com.google.devtools.build.lib.exec.RunfilesTreeUpdater;
 import com.google.devtools.build.lib.profiler.Profiler;
 import com.google.devtools.build.lib.profiler.ProfilerTask;
 import com.google.devtools.build.lib.remote.util.AsyncTaskCache;
-import com.google.devtools.build.lib.server.FailureDetails.Execution;
-import com.google.devtools.build.lib.server.FailureDetails.FailureDetail;
 import com.google.devtools.build.lib.util.TempPathGenerator;
 import com.google.devtools.build.lib.vfs.FileStatus;
 import com.google.devtools.build.lib.vfs.FileSymlinkLoopException;
@@ -94,7 +87,6 @@ public abstract class AbstractActionInputPrefetcher implements ActionInputPrefet
   private final AsyncTaskCache.NoResult<Path> downloadCache = AsyncTaskCache.NoResult.create();
   private final TempPathGenerator tempPathGenerator;
   private final OutputPermissions outputPermissions;
-  private final RunfilesTreeUpdater runfilesTreeUpdater;
   private final ConcurrentArtifactPathTrie rewoundActionOutputs = new ConcurrentArtifactPathTrie();
 
   protected final Path execRoot;
@@ -255,15 +247,13 @@ public abstract class AbstractActionInputPrefetcher implements ActionInputPrefet
       TempPathGenerator tempPathGenerator,
       RemoteOutputChecker remoteOutputChecker,
       @Nullable ActionOutputDirectoryHelper outputDirectoryHelper,
-      OutputPermissions outputPermissions,
-      RunfilesTreeUpdater runfilesTreeUpdater) {
+      OutputPermissions outputPermissions) {
     this.reporter = reporter;
     this.execRoot = execRoot;
     this.tempPathGenerator = tempPathGenerator;
     this.remoteOutputChecker = remoteOutputChecker;
     this.outputDirectoryHelper = outputDirectoryHelper;
     this.outputPermissions = outputPermissions;
-    this.runfilesTreeUpdater = checkNotNull(runfilesTreeUpdater);
   }
 
   private static boolean shouldDownloadFile(Path path, FileArtifactValue metadata)
@@ -882,7 +872,7 @@ public abstract class AbstractActionInputPrefetcher implements ActionInputPrefet
   }
 
   public void finalizeAction(Action action, OutputMetadataStore outputMetadataStore)
-      throws IOException, EnvironmentalExecException, InterruptedException {
+      throws IOException, InterruptedException {
     List<Artifact> outputsToDownload = new ArrayList<>();
     for (Artifact output : action.getOutputs()) {
       if (outputMetadataStore.artifactOmitted(output)) {
@@ -920,30 +910,6 @@ public abstract class AbstractActionInputPrefetcher implements ActionInputPrefet
                 output -> outputMetadataStore.getOutputMetadata((Artifact) output),
                 Priority.HIGH,
                 Reason.OUTPUTS));
-      }
-    }
-
-    // Runfiles trees are created lazily when building without the bytes (see
-    // RemoteOutputService#createsRunfilesTreesLazily). Just like the outputs of top-level targets
-    // are downloaded above as soon as their actions have run, create their runfiles trees as soon
-    // as their runfiles tree actions have run. These actions are cheap and
-    // RemoteOutputChecker#shouldTrustCachedMetadata ensures that they do run.
-    if (action instanceof RunfilesTreeAction runfilesTreeAction) {
-      var runfilesTree = runfilesTreeAction.getRunfilesTree();
-      if (remoteOutputChecker.shouldCreateRunfilesTree(runfilesTree.getExecPath())) {
-        try {
-          runfilesTreeUpdater.updateRunfiles(ImmutableList.of(runfilesTree));
-        } catch (ExecException e) {
-          Throwables.throwIfInstanceOf(e, EnvironmentalExecException.class);
-          throw new EnvironmentalExecException(
-              e,
-              FailureDetail.newBuilder()
-                  .setMessage("Failed to create runfiles symlinks")
-                  .setExecution(
-                      Execution.newBuilder()
-                          .setCode(Execution.Code.SYMLINK_TREE_CREATION_IO_EXCEPTION))
-                  .build());
-        }
       }
     }
   }

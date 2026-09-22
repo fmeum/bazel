@@ -352,8 +352,7 @@ public final class RemoteModule extends BlazeModule {
         env.getOptions().getOptions(BuildRequestOptions.class) != null
             ? env.getOutputDirectoryHelper()
             : null,
-        outputPermissions,
-        env.getRunfilesTreeUpdater());
+        outputPermissions);
   }
 
   /**
@@ -1234,13 +1233,14 @@ public final class RemoteModule extends BlazeModule {
     }
     actionContextProvider.registerSpawnCache(registryBuilder);
 
-    // For skymeld, a non-toplevel target might become a toplevel after it has been executed. This
-    // is the last chance to download the missing toplevel outputs and to create the missing
-    // runfiles trees in this case before sending out TargetCompleteEvent. See
-    // https://github.com/bazelbuild/bazel/issues/20737.
-    if (env.withMergedAnalysisAndExecutionSourceOfTruth()
-        && actionInputFetcher != null
-        && remoteOutputChecker != null) {
+    // Target completion is the last chance to download missing toplevel outputs and to create
+    // missing runfiles trees before sending out TargetCompleteEvent. Without Skymeld, all outputs
+    // of toplevel targets are downloaded as their actions run (or are rerun because their outputs
+    // are no longer trusted), but the runfiles tree of a target whose actions were all cached, e.g.
+    // because it was previously built as a dependency only or with --remote_download_minimal, is
+    // only created here. With Skymeld, a non-toplevel target might additionally become toplevel
+    // after it has been executed. See https://github.com/bazelbuild/bazel/issues/20737.
+    if (actionInputFetcher != null && remoteOutputChecker != null) {
       registryBuilder.register(
           ImportantOutputHandler.class,
           new RemoteImportantOutputHandler(
