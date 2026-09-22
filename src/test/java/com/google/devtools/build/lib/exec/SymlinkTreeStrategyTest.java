@@ -38,6 +38,7 @@ import com.google.devtools.build.lib.analysis.util.BuildViewTestCase;
 import com.google.devtools.build.lib.events.StoredEventHandler;
 import com.google.devtools.build.lib.testutil.TestConstants;
 import com.google.devtools.build.lib.util.Fingerprint;
+import com.google.devtools.build.lib.vfs.Dirent;
 import com.google.devtools.build.lib.vfs.FileSystemUtils;
 import com.google.devtools.build.lib.vfs.OutputService;
 import com.google.devtools.build.lib.vfs.Path;
@@ -177,5 +178,52 @@ public final class SymlinkTreeStrategyTest extends BuildViewTestCase {
     Path q = outputManifest.getPath().getParentDirectory().getRelative("TESTING/dir/empty");
     assertWithMessage("Path %s expected to be a file", q).that(q.isFile()).isTrue();
     assertThat(FileSystemUtils.readContent(q)).isEmpty();
+  }
+
+  @Test
+  public void withLazilyCreatedRunfilesTrees() throws Exception {
+    ActionExecutionContext context = mock(ActionExecutionContext.class);
+    OutputService outputService = mock(OutputService.class);
+    StoredEventHandler eventHandler = new StoredEventHandler();
+
+    when(context.getContext(SymlinkTreeActionContext.class))
+        .thenReturn(new SymlinkTreeStrategy(outputService, TestConstants.WORKSPACE_NAME));
+    when(context.getInputPath(any())).thenAnswer((i) -> ((Artifact) i.getArgument(0)).getPath());
+    when(context.getEventHandler()).thenReturn(eventHandler);
+    when(outputService.canCreateSymlinkTree()).thenReturn(false);
+    when(outputService.createsRunfilesTreesLazily()).thenReturn(true);
+
+    Artifact inputManifest = getBinArtifactWithNoOwner("dir/manifest.in");
+    Artifact outputManifest = getBinArtifactWithNoOwner("dir.runfiles/MANIFEST");
+    Artifact runfile = getBinArtifactWithNoOwner("dir/runfile");
+    // Simulate a symlink tree left behind by a previous build with different runfiles.
+    Path runfilesDir = outputManifest.getPath().getParentDirectory();
+    Path staleRunfile = runfilesDir.getRelative("TESTING/dir/stale");
+    staleRunfile.getParentDirectory().createDirectoryAndParents();
+    FileSystemUtils.createEmptyFile(staleRunfile);
+
+    Runfiles runfiles = new Runfiles.Builder("TESTING").addArtifact(runfile).build();
+    SymlinkTreeAction action =
+        new SymlinkTreeAction(
+            ActionsTestUtil.NULL_ACTION_OWNER,
+            inputManifest,
+            runfiles,
+            outputManifest,
+            /* repoMappingManifest= */ null,
+            ActionEnvironment.EMPTY,
+            RunfileSymlinksMode.CREATE,
+            "workspace");
+
+    action.execute(context);
+
+    verify(outputService, never()).createSymlinkTree(any(), any());
+    // Only the output manifest and the workspace directory are created; the symlinks are created
+    // on demand by RunfilesTreeUpdater.
+    assertThat(runfilesDir.readdir(Symlinks.NOFOLLOW).stream().map(Dirent::getName))
+        .containsExactly("MANIFEST", TestConstants.WORKSPACE_NAME);
+    assertThat(outputManifest.getPath().readSymbolicLink())
+        .isEqualTo(inputManifest.getPath().asFragment());
+    assertThat(runfilesDir.getRelative(TestConstants.WORKSPACE_NAME).readdir(Symlinks.NOFOLLOW))
+        .isEmpty();
   }
 }

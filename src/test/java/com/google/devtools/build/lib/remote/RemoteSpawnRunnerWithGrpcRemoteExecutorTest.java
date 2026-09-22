@@ -67,8 +67,8 @@ import com.google.devtools.build.lib.actions.ActionInput;
 import com.google.devtools.build.lib.actions.ActionInputHelper;
 import com.google.devtools.build.lib.actions.ActionInputMap;
 import com.google.devtools.build.lib.actions.ActionOutputDirectoryHelper;
-import com.google.devtools.build.lib.actions.ArtifactRoot;
 import com.google.devtools.build.lib.actions.ArtifactRoot.RootType;
+import com.google.devtools.build.lib.actions.ArtifactRoot;
 import com.google.devtools.build.lib.actions.ResourceSet;
 import com.google.devtools.build.lib.actions.SimpleSpawn;
 import com.google.devtools.build.lib.actions.Spawn;
@@ -83,6 +83,7 @@ import com.google.devtools.build.lib.collect.nestedset.Order;
 import com.google.devtools.build.lib.events.EventBusEventHandler;
 import com.google.devtools.build.lib.events.Reporter;
 import com.google.devtools.build.lib.exec.ExecutionOptions;
+import com.google.devtools.build.lib.exec.RunfilesTreeUpdater;
 import com.google.devtools.build.lib.exec.util.FakeOwner;
 import com.google.devtools.build.lib.remote.RemoteRetrier.ExponentialBackoff;
 import com.google.devtools.build.lib.remote.common.RemotePathResolver;
@@ -109,8 +110,8 @@ import com.google.longrunning.Operation;
 import com.google.protobuf.Any;
 import com.google.protobuf.ByteString;
 import com.google.rpc.Code;
-import com.google.rpc.PreconditionFailure;
 import com.google.rpc.PreconditionFailure.Violation;
+import com.google.rpc.PreconditionFailure;
 import io.grpc.BindableService;
 import io.grpc.ManagedChannel;
 import io.grpc.Metadata;
@@ -1592,7 +1593,8 @@ public class RemoteSpawnRunnerWithGrpcRemoteExecutorTest {
             tempPathGenerator,
             remoteOutputChecker,
             ActionOutputDirectoryHelper.createForTesting(),
-            OutputPermissions.READONLY);
+            OutputPermissions.READONLY,
+            new RunfilesTreeUpdater(execRoot, SyscallCache.NO_CACHE, () -> true));
 
     var actionFileSystem =
         new RemoteActionFileSystem(

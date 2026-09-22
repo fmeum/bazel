@@ -69,6 +69,7 @@ public class RemoteOutputChecker implements OutputChecker {
   private final ImmutableList<Predicate<String>> patternsToDownload;
   private final ConcurrentArtifactPathTrie pathsToDownload = new ConcurrentArtifactPathTrie();
   private final Set<PathFragment> pathsToSkip = ConcurrentHashMap.newKeySet();
+  private final Set<PathFragment> topLevelRunfilesTrees = ConcurrentHashMap.newKeySet();
 
   public RemoteOutputChecker(
       String commandName,
@@ -191,6 +192,10 @@ public class RemoteOutputChecker implements OutputChecker {
     if (runfilesSupport == null) {
       return;
     }
+    var runfilesTree = runfilesSupport.getRunfilesTree();
+    if (runfilesTree.isBuildRunfileLinks()) {
+      topLevelRunfilesTrees.add(runfilesTree.getExecPath());
+    }
     var runfiles = runfilesSupport.getRunfiles();
     for (Artifact runfile : runfiles.getArtifacts().toList()) {
       if (mayBeRemote(runfile)) {
@@ -254,6 +259,15 @@ public class RemoteOutputChecker implements OutputChecker {
   /** Marks a file for download. */
   public void addOutputToDownload(ActionInput file) {
     pathsToDownload.add(file);
+  }
+
+  /**
+   * Returns whether the runfiles tree with the given exec path belongs to a top-level target and
+   * thus has to be created even though runfiles trees are {@linkplain
+   * com.google.devtools.build.lib.vfs.OutputService#createsRunfilesTreesLazily created lazily}.
+   */
+  public boolean shouldCreateRunfilesTree(PathFragment runfilesTreeExecPath) {
+    return topLevelRunfilesTrees.contains(runfilesTreeExecPath);
   }
 
   /**
@@ -376,6 +390,16 @@ public class RemoteOutputChecker implements OutputChecker {
 
   @Override
   public boolean shouldTrustCachedMetadata(ActionInput file, FileArtifactValue metadata) {
+    // The lazily created runfiles tree of a top-level target is only materialized when its
+    // RunfilesTreeAction runs (see AbstractActionInputPrefetcher#finalizeAction), so make sure it
+    // does run, just like the actions of top-level outputs that still have to be downloaded
+    // below. The action is cheap and the runfiles tree is synced incrementally.
+    if (file instanceof Artifact artifact
+        && artifact.isRunfilesTree()
+        && shouldCreateRunfilesTree(artifact.getExecPath())) {
+      return false;
+    }
+
     // Local metadata is always trusted.
     if (!metadata.isRemote()) {
       return true;

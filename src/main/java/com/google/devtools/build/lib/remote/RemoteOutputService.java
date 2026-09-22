@@ -23,6 +23,7 @@ import com.google.devtools.build.lib.actions.ActionExecutionMetadata;
 import com.google.devtools.build.lib.actions.ActionInputMap;
 import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.actions.ArtifactPathResolver;
+import com.google.devtools.build.lib.actions.EnvironmentalExecException;
 import com.google.devtools.build.lib.actions.InputMetadataProvider;
 import com.google.devtools.build.lib.actions.LostInputsActionExecutionException;
 import com.google.devtools.build.lib.actions.OutputChecker;
@@ -30,6 +31,7 @@ import com.google.devtools.build.lib.actions.cache.OutputMetadataStore;
 import com.google.devtools.build.lib.analysis.BlazeDirectories;
 import com.google.devtools.build.lib.buildtool.buildevent.ExecutionPhaseCompleteEvent;
 import com.google.devtools.build.lib.events.EventHandler;
+import com.google.devtools.build.lib.remote.options.RemoteOutputsMode;
 import com.google.devtools.build.lib.server.FailureDetails.Execution;
 import com.google.devtools.build.lib.server.FailureDetails.Execution.Code;
 import com.google.devtools.build.lib.server.FailureDetails.FailureDetail;
@@ -53,6 +55,7 @@ public class RemoteOutputService implements OutputService {
 
   private final BlazeDirectories directories;
   private final boolean rewindLostInputs;
+  private final RemoteOutputsMode outputsMode;
 
   private RewoundActionSynchronizer rewoundActionSynchronizer = RewoundActionSynchronizer.NOOP;
 
@@ -60,9 +63,11 @@ public class RemoteOutputService implements OutputService {
   @Nullable private RemoteActionInputFetcher actionInputFetcher;
   @Nullable private LeaseService leaseService;
 
-  RemoteOutputService(BlazeDirectories directories, boolean rewindLostInputs) {
+  RemoteOutputService(
+      BlazeDirectories directories, boolean rewindLostInputs, RemoteOutputsMode outputsMode) {
     this.directories = checkNotNull(directories);
     this.rewindLostInputs = rewindLostInputs;
+    this.outputsMode = checkNotNull(outputsMode);
   }
 
   void setRemoteOutputChecker(RemoteOutputChecker remoteOutputChecker) {
@@ -168,7 +173,7 @@ public class RemoteOutputService implements OutputService {
 
   @Override
   public void finalizeAction(Action action, OutputMetadataStore outputMetadataStore)
-      throws IOException, InterruptedException {
+      throws IOException, EnvironmentalExecException, InterruptedException {
     if (actionInputFetcher != null) {
       actionInputFetcher.finalizeAction(action, outputMetadataStore);
     }
@@ -196,8 +201,17 @@ public class RemoteOutputService implements OutputService {
 
   @Override
   public boolean canCreateSymlinkTree() {
-    /* TODO(buchgr): Optimize symlink creation for remote execution */
     return false;
+  }
+
+  @Override
+  public boolean createsRunfilesTreesLazily() {
+    // When building without the bytes, only create the runfiles trees that are actually needed:
+    // those of top-level targets (see AbstractActionInputPrefetcher#finalizeAction and
+    // RemoteImportantOutputHandler) and those required by local actions or the run command (see
+    // RunfilesTreeUpdater). When downloading all outputs, SymlinkTreeAction creates them eagerly,
+    // just like with a local output service.
+    return outputsMode != RemoteOutputsMode.ALL;
   }
 
   @Override

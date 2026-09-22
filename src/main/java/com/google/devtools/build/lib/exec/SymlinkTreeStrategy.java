@@ -73,11 +73,13 @@ public final class SymlinkTreeStrategy implements SymlinkTreeActionContext {
           outputService.createSymlinkTree(
               symlinks, action.getOutputManifest().getExecPath().getParentDirectory());
           helper.linkManifest();
-        } else if (action.getRunfileSymlinksMode() == RunfileSymlinksMode.SKIP) {
+        } else if (action.getRunfileSymlinksMode() == RunfileSymlinksMode.SKIP
+            || (!action.isFilesetTree() && outputService.createsRunfilesTreesLazily())) {
           // Clear the runfiles directory, then create just the output manifest and the workspace
           // subdirectory. This is required because only the output manifest is considered an action
           // output, so if the previous invocation created a symlink tree, Skyframe will not clear
-          // it for us.
+          // it for us. If runfiles trees are created lazily, the symlinks are created on demand by
+          // RunfilesTreeUpdater.
           helper.createMinimalRunfilesDirectory();
         } else {
           if (action.isFilesetTree()) {

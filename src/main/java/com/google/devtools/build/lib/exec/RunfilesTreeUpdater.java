@@ -34,11 +34,15 @@ import java.util.Arrays;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.BooleanSupplier;
 import javax.annotation.concurrent.ThreadSafe;
 
 /**
- * Utility used in local execution to create a runfiles tree if {@code --nobuild_runfile_links} has
- * been specified.
+ * Utility used to create a runfiles tree on demand rather than during the build: before a local
+ * action that has it as an input is executed, before the {@code run} command executes a target,
+ * and for top-level targets if the output service {@linkplain
+ * com.google.devtools.build.lib.vfs.OutputService#createsRunfilesTreesLazily creates runfiles
+ * trees lazily}.
  *
  * <p>It is safe to call {@link #updateRunfiles} concurrently.
  */
@@ -46,6 +50,7 @@ import javax.annotation.concurrent.ThreadSafe;
 public class RunfilesTreeUpdater {
   private final Path execRoot;
   private final XattrProvider xattrProvider;
+  private final BooleanSupplier runfilesTreesCreatedLazily;
 
   /**
    * Deduplicates multiple attempts to update the same runfiles tree.
@@ -58,17 +63,28 @@ public class RunfilesTreeUpdater {
   private final ConcurrentHashMap<PathFragment, CompletableFuture<Void>> updatedTrees =
       new ConcurrentHashMap<>();
 
-  public RunfilesTreeUpdater(Path execRoot, XattrProvider xattrProvider) {
+  /**
+   * @param runfilesTreesCreatedLazily whether the output service {@linkplain
+   *     com.google.devtools.build.lib.vfs.OutputService#createsRunfilesTreesLazily creates runfiles
+   *     trees lazily}, in which case runfiles trees built with {@code --build_runfile_links} also
+   *     need to be created by this class. Supplied lazily as this class may be created before the
+   *     output service is known.
+   */
+  public RunfilesTreeUpdater(
+      Path execRoot, XattrProvider xattrProvider, BooleanSupplier runfilesTreesCreatedLazily) {
     this.execRoot = execRoot;
     this.xattrProvider = xattrProvider;
+    this.runfilesTreesCreatedLazily = runfilesTreesCreatedLazily;
   }
 
-  /** Creates or updates input runfiles trees for a spawn. */
+  /** Creates or updates the given runfiles trees. */
   public void updateRunfiles(Iterable<RunfilesTree> runfilesTrees)
       throws ExecException, IOException, InterruptedException {
     for (RunfilesTree tree : runfilesTrees) {
       PathFragment runfilesDir = tree.getExecPath();
-      if (tree.isBuildRunfileLinks()) {
+      // Runfiles trees built with --build_runfile_links have already been created by
+      // SymlinkTreeAction during the build unless the output service defers that to this class.
+      if (tree.isBuildRunfileLinks() && !runfilesTreesCreatedLazily.getAsBoolean()) {
         continue;
       }
 

@@ -189,6 +189,21 @@ public interface OutputService {
       throws ExecException, InterruptedException;
 
   /**
+   * Returns whether runfiles trees are created lazily.
+   *
+   * <p>If true, a {@link com.google.devtools.build.lib.analysis.actions.SymlinkTreeAction} for a
+   * runfiles tree only creates the output manifest, and the symlinks are created on demand by
+   * {@link com.google.devtools.build.lib.exec.RunfilesTreeUpdater}: before a local action that has
+   * the runfiles tree as an input is executed, before the {@code run} command executes a target,
+   * and for those top-level targets whose runfiles the output service decides to materialize.
+   *
+   * <p>Only consulted if {@link #canCreateSymlinkTree} returns false.
+   */
+  default boolean createsRunfilesTreesLazily() {
+    return false;
+  }
+
+  /**
    * Cleans the entire output tree.
    *
    * @throws ExecException on failure

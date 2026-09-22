@@ -47,6 +47,7 @@ import com.google.devtools.build.lib.actions.RunfilesTree;
 import com.google.devtools.build.lib.actions.util.ActionsTestUtil;
 import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
 import com.google.devtools.build.lib.collect.nestedset.Order;
+import com.google.devtools.build.lib.exec.RunfilesTreeUpdater;
 import com.google.devtools.build.lib.profiler.SilentCloseable;
 import com.google.devtools.build.lib.remote.options.RemoteOutputsMode;
 import com.google.devtools.build.lib.skyframe.ActionTemplateExpansionValue;
@@ -549,6 +550,7 @@ public final class RemoteRewoundActionSynchronizerTest {
   private static InputMetadataProvider mockTopLevelMetadataProvider(
       ImmutableList<Artifact> runfiles, ImmutableList<Artifact> remoteArtifacts) throws Exception {
     RunfilesTree runfilesTree = mock(RunfilesTree.class);
+    when(runfilesTree.getExecPath()).thenReturn(PathFragment.create("bin.runfiles"));
     when(runfilesTree.getArtifacts())
         .thenReturn(NestedSetBuilder.wrap(Order.STABLE_ORDER, runfiles));
     InputMetadataProvider metadataProvider = mock(InputMetadataProvider.class);
@@ -572,7 +574,11 @@ public final class RemoteRewoundActionSynchronizerTest {
       remoteOutputChecker.addOutputToDownload(output);
     }
     return new RemoteImportantOutputHandler(
-        graph, remoteOutputChecker, actionInputFetcher, synchronizer);
+        graph,
+        remoteOutputChecker,
+        actionInputFetcher,
+        synchronizer,
+        mock(RunfilesTreeUpdater.class));
   }
 
   @SuppressWarnings("ThreadPriorityCheck")

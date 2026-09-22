@@ -26,11 +26,15 @@ import com.google.devtools.build.lib.actions.Actions;
 import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.actions.Artifact.DerivedArtifact;
 import com.google.devtools.build.lib.actions.Artifact.TreeFileArtifact;
+import com.google.devtools.build.lib.actions.ExecException;
 import com.google.devtools.build.lib.actions.FileArtifactValue;
 import com.google.devtools.build.lib.actions.ImportantOutputHandler;
 import com.google.devtools.build.lib.actions.InputMetadataProvider;
+import com.google.devtools.build.lib.actions.RunfilesTree;
+import com.google.devtools.build.lib.exec.RunfilesTreeUpdater;
 import com.google.devtools.build.lib.profiler.SilentCloseable;
 import com.google.devtools.build.lib.remote.common.BulkTransferException;
+import com.google.devtools.build.lib.server.FailureDetails.Execution;
 import com.google.devtools.build.lib.server.FailureDetails.FailureDetail;
 import com.google.devtools.build.lib.server.FailureDetails.RemoteExecution;
 import com.google.devtools.build.lib.vfs.OutputService.RewoundActionSynchronizer;
@@ -56,16 +60,19 @@ public final class RemoteImportantOutputHandler implements ImportantOutputHandle
   private final RemoteOutputChecker remoteOutputChecker;
   private final ActionInputPrefetcher actionInputPrefetcher;
   private final RewoundActionSynchronizer rewoundActionSynchronizer;
+  private final RunfilesTreeUpdater runfilesTreeUpdater;
 
   public RemoteImportantOutputHandler(
       WalkableGraph graph,
       RemoteOutputChecker remoteOutputChecker,
       ActionInputPrefetcher actionInputPrefetcher,
-      RewoundActionSynchronizer rewoundActionSynchronizer) {
+      RewoundActionSynchronizer rewoundActionSynchronizer,
+      RunfilesTreeUpdater runfilesTreeUpdater) {
     this.graph = graph;
     this.remoteOutputChecker = remoteOutputChecker;
     this.actionInputPrefetcher = actionInputPrefetcher;
     this.rewoundActionSynchronizer = rewoundActionSynchronizer;
+    this.runfilesTreeUpdater = runfilesTreeUpdater;
   }
 
   @Override
@@ -108,7 +115,35 @@ public final class RemoteImportantOutputHandler implements ImportantOutputHandle
                       .build())
               .build());
     }
+    createRunfilesTrees(metadataProvider.getRunfilesTrees());
     return LostArtifacts.EMPTY;
+  }
+
+  /**
+   * Creates the runfiles trees of a top-level target, which aren't created by SymlinkTreeAction
+   * when building without the bytes (see {@link RemoteOutputService#createsRunfilesTreesLazily}).
+   *
+   * <p>{@link AbstractActionInputPrefetcher#finalizeAction} only does this for targets that were
+   * already known to be top-level when their runfiles tree action ran.
+   */
+  private void createRunfilesTrees(ImmutableList<RunfilesTree> runfilesTrees)
+      throws ImportantOutputException, InterruptedException {
+    try {
+      runfilesTreeUpdater.updateRunfiles(
+          Iterables.filter(
+              runfilesTrees,
+              tree -> remoteOutputChecker.shouldCreateRunfilesTree(tree.getExecPath())));
+    } catch (ExecException | IOException e) {
+      String message = "Failed to create runfiles symlinks: " + e.getMessage();
+      throw new ImportantOutputException(
+          e,
+          FailureDetail.newBuilder()
+              .setMessage(message)
+              .setExecution(
+                  Execution.newBuilder()
+                      .setCode(Execution.Code.SYMLINK_TREE_CREATION_IO_EXCEPTION))
+              .build());
+    }
   }
 
   @Override
