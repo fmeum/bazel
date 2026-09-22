@@ -20,6 +20,6 @@ import com.google.devtools.build.lib.runtime.commands.RunCommand;
 /** A module that contains the built-in commands. */
 public final class BazelBuiltinCommandModule extends BuiltinCommandModule {
   public BazelBuiltinCommandModule() {
-    super(new RunCommand(StandaloneTestStrategy.DEFAULT_LOCAL_POLICY));
+    super(new RunCommand(StandaloneTestStrategy.DEFAULT_RUN_POLICY));
   }
 }

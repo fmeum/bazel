@@ -87,14 +87,26 @@ public class StandaloneTestStrategy extends TestStrategy {
           .put("PYTHON_RUNFILES", TestPolicy.RUNFILES_DIR)
           .put("RUNFILES_DIR", TestPolicy.RUNFILES_DIR)
           .put("TEST_TMPDIR", TestPolicy.TEST_TMP_DIR)
-          // The test encyclopedia recommends setting HOME to TEST_TMPDIR. Since this is the first
-          // layer of the test environment, users can override it via --test_env=HOME=... or
-          // --test_env=HOME (inherit) and unset it via --test_env==HOME.
-          .put("HOME", TestPolicy.TEST_TMP_DIR)
           .put("RUN_UNDER_RUNFILES", "1")
           .buildOrThrow();
 
-  public static final TestPolicy DEFAULT_LOCAL_POLICY = new TestPolicy(ENV_VARS);
+  /** The environment used by {@code bazel test}. */
+  public static final TestPolicy DEFAULT_LOCAL_POLICY =
+      new TestPolicy(
+          ImmutableMap.<String, String>builder()
+              .putAll(ENV_VARS)
+              // The test encyclopedia recommends setting HOME to TEST_TMPDIR. Since this is the
+              // first layer of the test environment, users can override it via --test_env=HOME=...
+              // or --test_env=HOME (inherit) and unset it via --test_env==HOME.
+              .put("HOME", TestPolicy.TEST_TMP_DIR)
+              .buildOrThrow());
+
+  /**
+   * The environment used by {@code bazel run} on a test target. Unlike {@link
+   * #DEFAULT_LOCAL_POLICY}, it doesn't set HOME so that the user's actual home directory is
+   * inherited from the client environment.
+   */
+  public static final TestPolicy DEFAULT_RUN_POLICY = new TestPolicy(ENV_VARS);
 
   private final Path tmpDirRoot;
 

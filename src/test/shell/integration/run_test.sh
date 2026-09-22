@@ -898,6 +898,7 @@ echo "EMPTY_TEST_ENV: '$EMPTY_TEST_ENV'"
 echo "INHERITED_TEST_ENV: '$INHERITED_TEST_ENV'"
 echo "REMOVED_TEST_ENV: '${REMOVED_TEST_ENV:=<unset>}'"
 echo "SET_UNSET_SET: '$SET_UNSET_SET'"
+echo "HOME: '$HOME'"
 EOF
 
   chmod +x "$pkg/foo.sh"
@@ -923,6 +924,9 @@ EOF
   # non-hermetically via bazel run.
   expect_log "REMOVED_TEST_ENV: 'QUZ'"
   expect_log "SET_UNSET_SET: 'set2'"
+  # Unlike bazel test, bazel run doesn't set HOME to TEST_TMPDIR, but inherits
+  # it from the client environment.
+  expect_log "HOME: '$HOME'"
 }
 
 # Test that --run_env does not apply when running a test. Note that this may or
