@@ -28,6 +28,7 @@ import com.google.devtools.build.lib.actions.ActionOwner;
 import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.actions.CommandLineExpansionException;
 import com.google.devtools.build.lib.actions.ExecException;
+import com.google.devtools.build.lib.actions.PathMapper;
 import com.google.devtools.build.lib.actions.UserExecException;
 import com.google.devtools.build.lib.analysis.config.PerLabelOptions;
 import com.google.devtools.build.lib.analysis.config.RunUnder;
@@ -186,13 +187,14 @@ public abstract class TestStrategy implements TestActionContext {
    * should be used in action execution.
    *
    * @param testAction The test action.
+   * @param pathMapper The {@link PathMapper} applied to the spawn that runs the test.
    * @return the command line as string list.
    * @throws ExecException if {@link #expandedArgsFromAction} throws
    */
-  public static ImmutableList<String> getArgs(TestRunnerAction testAction)
+  public static ImmutableList<String> getArgs(TestRunnerAction testAction, PathMapper pathMapper)
       throws ExecException, InterruptedException {
     try {
-      return expandedArgsFromAction(testAction);
+      return expandedArgsFromAction(testAction, pathMapper);
     } catch (CommandLineExpansionException e) {
       throw new UserExecException(
           e,
@@ -208,23 +210,23 @@ public abstract class TestStrategy implements TestActionContext {
    * --run_under} settings.
    *
    * @param testAction The test action.
+   * @param pathMapper The {@link PathMapper} applied to the spawn that runs the test.
    * @return the command line as string list.
    * @throws CommandLineExpansionException
    */
-  public static ImmutableList<String> expandedArgsFromAction(TestRunnerAction testAction)
+  public static ImmutableList<String> expandedArgsFromAction(
+      TestRunnerAction testAction, PathMapper pathMapper)
       throws CommandLineExpansionException, InterruptedException {
     List<String> args = new ArrayList<>();
     OS executionOs = testAction.getExecutionSettings().getExecutionOs();
 
     Artifact testSetup = testAction.getTestSetupScript();
-    args.add(testSetup.getExecPath().getCallablePathStringForOs(executionOs));
+    args.add(pathMapper.map(testSetup.getExecPath()).getCallablePathStringForOs(executionOs));
 
     if (testAction.isCoverageMode()) {
       args.add(
-          testAction
-              .getCollectCoverageScript()
-              .getExecutable()
-              .getExecPath()
+          pathMapper
+              .map(testAction.getCollectCoverageScript().getExecutable().getExecPath())
               .getCallablePathStringForOs(executionOs));
     }
 
@@ -238,7 +240,7 @@ public abstract class TestStrategy implements TestActionContext {
     // Execute the test using the alias in the runfiles tree, as mandated by the Test Encyclopedia.
     // Do not use getCallablePathStringForOs as tw.exe expects a path with forward slashes.
     args.add(execSettings.getExecutable().getRunfilesPath().getCallablePathString());
-    Iterables.addAll(args, execSettings.getArgs().arguments());
+    Iterables.addAll(args, execSettings.getArgs(pathMapper));
     return ImmutableList.copyOf(args);
   }
 
@@ -336,9 +338,19 @@ public abstract class TestStrategy implements TestActionContext {
     }
   }
 
-  public static String getTmpDirName(TestRunnerAction action) {
+  /**
+   * Returns a name for the temporary directory of the given test action that is unique among all
+   * test actions in a build.
+   *
+   * @param pathMapper the {@link PathMapper} applied to the spawn that runs the test. If it is not
+   *     a no-op, the name only depends on the mapped path of the test executable and is thus
+   *     shared by test actions for the same target in different configurations. Callers must only
+   *     pass a non-trivial mapper if the directory is private to the (sandboxed or remote)
+   *     execution of the spawn.
+   */
+  public static String getTmpDirName(TestRunnerAction action, PathMapper pathMapper) {
     Fingerprint digest = new Fingerprint();
-    digest.addPath(action.getExecutionSettings().getExecutable().getExecPath());
+    digest.addPath(pathMapper.map(action.getExecutionSettings().getExecutable().getExecPath()));
     digest.addInt(action.getShardNum());
     digest.addInt(action.getRunNumber());
     // Truncate the string to 32 character to avoid exceeding path length limit on Windows and macOS

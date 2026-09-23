@@ -445,6 +445,102 @@ EOF
   bazel build --experimental_output_paths=strip //pkg:all &> $TEST_log || fail "build failed unexpectedly"
 }
 
+function setup_path_mapped_test() {
+  mkdir -p pkg
+  cat > pkg/BUILD <<'EOF'
+load("@rules_shell//shell:sh_test.bzl", "sh_test")
+
+genrule(
+    name = "gen",
+    outs = ["gen.txt"],
+    cmd = "echo 'generated' > $@",
+)
+
+sh_test(
+    name = "my_test",
+    srcs = ["my_test.sh"],
+    args = ["$(rootpath :gen)"],
+    data = [":gen"],
+    env = {"GEN_EXECPATH": "$(execpath :gen)"},
+)
+EOF
+  cat > pkg/my_test.sh <<'EOF'
+#!/bin/bash
+set -euo pipefail
+[[ "$(cat "$1")" == "generated" ]] || { echo "unexpected content of $1"; exit 1; }
+echo "hello" > "$TEST_UNDECLARED_OUTPUTS_DIR/output.txt"
+cat > "$XML_OUTPUT_FILE" <<'XML'
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites name="custom"><testsuite name="custom" tests="1"><testcase name="custom"/></testsuite></testsuites>
+XML
+EOF
+  chmod +x pkg/my_test.sh
+}
+
+# Verifies that the outputs written by the test under mapped paths are collected by the executor.
+function assert_path_mapped_test_outputs() {
+  assert_contains 'name="custom"' bazel-testlogs/pkg/my_test/test.xml
+  assert_contains 'hello' bazel-testlogs/pkg/my_test/test.outputs/output.txt
+}
+
+function test_path_stripping_test_sandboxed() {
+  if is_windows; then
+    echo "Skipping test_path_stripping_test_sandboxed on Windows as it requires sandboxing"
+    return
+  fi
+
+  setup_path_mapped_test
+  cache_dir=$(mktemp -d)
+
+  bazel test -c fastbuild -s \
+    --disk_cache=$cache_dir \
+    --experimental_output_paths=strip \
+    --nozip_undeclared_test_outputs \
+    --spawn_strategy=sandboxed \
+    //pkg:my_test &> $TEST_log || fail "test failed unexpectedly"
+  expect_log 'TEST_SRCDIR=bazel-out/cfg/bin/pkg/'
+  expect_log 'XML_OUTPUT_FILE=bazel-out/cfg/testlogs/pkg/my_test/test.xml'
+  expect_log 'GEN_EXECPATH=bazel-out/cfg/bin/pkg/gen.txt'
+  expect_not_log 'disk cache hit'
+  assert_path_mapped_test_outputs
+
+  # The test spawn doesn't depend on the compilation mode and thus results in a cache hit.
+  bazel test -c opt \
+    --disk_cache=$cache_dir \
+    --experimental_output_paths=strip \
+    --nozip_undeclared_test_outputs \
+    --spawn_strategy=sandboxed \
+    //pkg:my_test &> $TEST_log || fail "test failed unexpectedly"
+  expect_log 'disk cache hit'
+  assert_path_mapped_test_outputs
+}
+
+function test_path_stripping_test_remote() {
+  setup_path_mapped_test
+
+  bazel test -c fastbuild -s \
+    --experimental_output_paths=strip \
+    --nozip_undeclared_test_outputs \
+    --remote_executor=grpc://localhost:${worker_port} \
+    --remote_download_all \
+    //pkg:my_test &> $TEST_log || fail "test failed unexpectedly"
+  expect_log 'TEST_SRCDIR=bazel-out/cfg/bin/pkg/'
+  expect_log 'XML_OUTPUT_FILE=bazel-out/cfg/testlogs/pkg/my_test/test.xml'
+  expect_log 'GEN_EXECPATH=bazel-out/cfg/bin/pkg/gen.txt'
+  expect_not_log 'remote cache hit'
+  assert_path_mapped_test_outputs
+
+  # The test spawn doesn't depend on the compilation mode and thus results in a cache hit.
+  bazel test -c opt \
+    --experimental_output_paths=strip \
+    --nozip_undeclared_test_outputs \
+    --remote_executor=grpc://localhost:${worker_port} \
+    --remote_download_all \
+    //pkg:my_test &> $TEST_log || fail "test failed unexpectedly"
+  expect_log 'remote cache hit'
+  assert_path_mapped_test_outputs
+}
+
 # Verifies that path mapping results in cache hits for CppCompile actions
 # subject to transitions that don't affect their inputs.
 function test_path_stripping_cc_remote() {

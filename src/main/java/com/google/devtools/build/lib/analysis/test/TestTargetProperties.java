@@ -20,6 +20,8 @@ import com.google.devtools.build.lib.actions.ExecutionRequirements;
 import com.google.devtools.build.lib.actions.ResourceSet;
 import com.google.devtools.build.lib.actions.UserExecException;
 import com.google.devtools.build.lib.analysis.RuleContext;
+import com.google.devtools.build.lib.analysis.actions.PathMappers;
+import com.google.devtools.build.lib.analysis.config.CoreOptions.OutputPathsMode;
 import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.packages.Rule;
 import com.google.devtools.build.lib.packages.TargetUtils;
@@ -117,6 +119,12 @@ public class TestTargetProperties {
     if (executionRequirements != null) {
       // This will overwrite whatever TargetUtils put there, which might be confusing.
       executionInfo.putAll(executionRequirements.getExecutionInfo());
+    }
+    if (PathMappers.getOutputPathsMode(ruleContext.getConfiguration()) == OutputPathsMode.STRIP) {
+      // Test actions support path mapping in all their spawns. The key is only added when path
+      // mapping is enabled so that the action keys of tests remain unchanged otherwise. It can be
+      // removed via --modify_execution_info=TestRunner=-supports-path-mapping.
+      executionInfo.put(ExecutionRequirements.SUPPORTS_PATH_MAPPING, "");
     }
     ruleContext.getConfiguration().modifyExecutionInfo(executionInfo, TestRunnerAction.MNEMONIC);
     this.executionInfo = ImmutableMap.copyOf(executionInfo);

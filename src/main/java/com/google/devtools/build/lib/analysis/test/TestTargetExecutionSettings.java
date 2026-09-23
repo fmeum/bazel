@@ -18,8 +18,11 @@ import static com.google.devtools.build.lib.analysis.constraints.ConstraintConst
 
 import com.google.common.base.Preconditions;
 import com.google.common.collect.ImmutableList;
+import com.google.common.collect.Iterables;
 import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.actions.CommandLine;
+import com.google.devtools.build.lib.actions.CommandLineExpansionException;
+import com.google.devtools.build.lib.actions.PathMapper;
 import com.google.devtools.build.lib.analysis.FilesToRunProvider;
 import com.google.devtools.build.lib.analysis.RuleContext;
 import com.google.devtools.build.lib.analysis.Runfiles;
@@ -40,6 +43,8 @@ import javax.annotation.Nullable;
  */
 public final class TestTargetExecutionSettings {
 
+  private final CommandLine ruleArguments;
+  private final ImmutableList<String> flagArguments;
   private final CommandLine testArguments;
   private final String testFilter;
   private final int totalShards;
@@ -68,9 +73,9 @@ public final class TestTargetExecutionSettings {
     BuildConfigurationValue config = ruleContext.getConfiguration();
     TestConfiguration testConfig = config.getFragment(TestConfiguration.class);
 
-    CommandLine targetArgs = runfilesSupport.getArgs();
-    testArguments =
-        CommandLine.concat(targetArgs, ImmutableList.copyOf(testConfig.getTestArguments()));
+    ruleArguments = runfilesSupport.getArgs();
+    flagArguments = ImmutableList.copyOf(testConfig.getTestArguments());
+    testArguments = CommandLine.concat(ruleArguments, flagArguments);
 
     totalShards = shards;
     totalRuns = runs;
@@ -102,6 +107,24 @@ public final class TestTargetExecutionSettings {
 
   public CommandLine getArgs() {
     return testArguments;
+  }
+
+  /**
+   * Returns the arguments to pass to the test executable, with the given {@link PathMapper}
+   * applied.
+   *
+   * <p>Arguments specified by the rule may contain exec paths obtained via location expansion and
+   * are thus mapped. Arguments passed via {@code --test_arg} are not mapped as they may refer to
+   * absolute paths outside the execroot.
+   */
+  public Iterable<String> getArgs(PathMapper pathMapper)
+      throws CommandLineExpansionException, InterruptedException {
+    if (pathMapper.isNoop()) {
+      return testArguments.arguments();
+    }
+    return Iterables.concat(
+        Iterables.transform(ruleArguments.arguments(), pathMapper::mapHeuristically),
+        flagArguments);
   }
 
   public String getTestFilter() {

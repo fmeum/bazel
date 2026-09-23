@@ -36,6 +36,7 @@ import com.google.devtools.build.lib.actions.ActionKeyContext;
 import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.actions.DiscoveredModulesPruner;
 import com.google.devtools.build.lib.actions.InputMetadataProvider;
+import com.google.devtools.build.lib.actions.PathMapper;
 import com.google.devtools.build.lib.actions.Spawn;
 import com.google.devtools.build.lib.actions.SpawnResult;
 import com.google.devtools.build.lib.actions.SpawnResult.Status;
@@ -278,7 +279,7 @@ public final class StandaloneTestStrategyTest extends BuildViewTestCase {
         """);
     TestRunnerAction testRunnerAction = getTestAction("//standalone:simple_test");
 
-    String tmpDirName = TestStrategy.getTmpDirName(testRunnerAction);
+    String tmpDirName = TestStrategy.getTmpDirName(testRunnerAction, PathMapper.NOOP);
     // Make sure the length of tmpDirName doesn't change unexpectedy: it cannot be too long
     // because Windows and macOS have limitations on file path length.
     // Note: It's OK to update 32 to a smaller number if tmpDirName gets shorter.
@@ -1162,6 +1163,172 @@ public final class StandaloneTestStrategyTest extends BuildViewTestCase {
             testOnPassed ? EventKind.FAIL : EventKind.PASS,
             null,
             "//standalone:empty_test (run 2 of 2)"));
+  }
+
+  @Test
+  public void testPathMappingAppliedToAllSpawns() throws Exception {
+    useConfiguration("--experimental_output_paths=strip");
+    ExecutionOptions executionOptions = Options.getDefaults(ExecutionOptions.class);
+    TestSummaryOptions testSummaryOptions = TestSummaryOptions.DEFAULTS;
+    // A tmp dir root under the exec root is private to the sandboxed or remote execution of the
+    // test and thus gets a configuration-independent name.
+    Path tmpDirRoot = getExecRoot().getRelative("_tmp");
+    tmpDirRoot.createDirectoryAndParents();
+    TestedStandaloneTestStrategy standaloneTestStrategy =
+        new TestedStandaloneTestStrategy(executionOptions, testSummaryOptions, tmpDirRoot);
+
+    scratch.file("standalone/simple_test.sh", "this does not get executed, it is mocked out");
+    // A test rule that supports location expansion in its environment, which is not available on
+    // the mock foo_test rule.
+    scratch.file(
+        "standalone/defs.bzl",
+        """
+        def _impl(ctx):
+            executable = ctx.actions.declare_file(ctx.label.name)
+            ctx.actions.symlink(
+                output = executable,
+                target_file = ctx.files.srcs[0],
+                is_executable = True,
+            )
+            return [
+                DefaultInfo(
+                    executable = executable,
+                    runfiles = ctx.runfiles(files = ctx.files.data),
+                ),
+                RunEnvironmentInfo(environment = {
+                    name: ctx.expand_location(value, ctx.attr.data)
+                    for name, value in ctx.attr.env.items()
+                }),
+            ]
+
+        env_test = rule(
+            implementation = _impl,
+            test = True,
+            attrs = {
+                "srcs": attr.label_list(allow_files = True),
+                "data": attr.label_list(allow_files = True),
+                "env": attr.string_dict(),
+            },
+        )
+        """);
+    scratch.file(
+        "standalone/BUILD",
+        """
+        load(":defs.bzl", "env_test")
+        genrule(
+            name = "gen",
+            outs = ["gen.txt"],
+            cmd = "touch $@",
+        )
+        env_test(
+            name = "simple_test",
+            size = "small",
+            srcs = ["simple_test.sh"],
+            data = [":gen"],
+            args = ["$(execpath :gen)"],
+            env = {"GEN": "$(execpath :gen)"},
+        )
+        """);
+    TestRunnerAction testRunnerAction = getTestAction("//standalone:simple_test");
+
+    List<Spawn> spawns = new ArrayList<>();
+    when(spawnStrategy.exec(any(), any()))
+        .thenAnswer(
+            invocation -> {
+              spawns.add(invocation.getArgument(0));
+              return ImmutableList.of(PASSED_TEST_SPAWN);
+            });
+    ActionExecutionContext actionExecutionContext =
+        new FakeActionExecutionContext(
+            createTempOutErr(tmpDirRoot), inputMetadataFor(testRunnerAction), spawnStrategy);
+
+    execute(testRunnerAction, actionExecutionContext, standaloneTestStrategy);
+
+    String outDir = analysisMock.getProductName() + "-out";
+    // The test spawn is followed by the spawn that generates the test.xml from the test log.
+    assertThat(spawns).hasSize(2);
+
+    Spawn testSpawn = spawns.get(0);
+    PathMapper pathMapper = testSpawn.getPathMapper();
+    assertThat(pathMapper.isNoop()).isFalse();
+    // Arguments and environment variables specified by the rule are subject to location expansion
+    // and thus have to be mapped.
+    assertThat(testSpawn.getArguments()).contains(outDir + "/cfg/bin/standalone/gen.txt");
+    assertThat(testSpawn.getEnvironment())
+        .containsEntry("GEN", outDir + "/cfg/bin/standalone/gen.txt");
+    assertThat(testSpawn.getEnvironment())
+        .containsEntry("TEST_SRCDIR", outDir + "/cfg/bin/standalone/simple_test.runfiles");
+    assertThat(testSpawn.getEnvironment())
+        .containsEntry("RUNFILES_DIR", outDir + "/cfg/bin/standalone/simple_test.runfiles");
+    assertThat(testSpawn.getEnvironment())
+        .containsEntry("XML_OUTPUT_FILE", outDir + "/cfg/testlogs/standalone/simple_test/test.xml");
+    assertThat(testSpawn.getEnvironment())
+        .containsEntry(
+            "TEST_UNDECLARED_OUTPUTS_DIR",
+            outDir + "/cfg/testlogs/standalone/simple_test/test.outputs");
+    assertThat(testSpawn.getEnvironment())
+        .containsEntry(
+            "TEST_TMPDIR", "_tmp/" + TestStrategy.getTmpDirName(testRunnerAction, pathMapper));
+    assertThat(TestStrategy.getTmpDirName(testRunnerAction, pathMapper))
+        .isNotEqualTo(TestStrategy.getTmpDirName(testRunnerAction, PathMapper.NOOP));
+    // Inputs and outputs are mapped by the executor, so the spawn still refers to them by their
+    // unmapped paths.
+    assertThat(testSpawn.getOutputFiles().stream().map(output -> output.getExecPathString()))
+        .contains(
+            testRunnerAction.getTestXml().getExecPathString());
+    assertThat(testRunnerAction.getTestXml().getExecPathString()).doesNotContain("/cfg/");
+
+    Spawn xmlSpawn = spawns.get(1);
+    assertThat(xmlSpawn.getPathMapper()).isSameInstanceAs(pathMapper);
+    assertThat(xmlSpawn.getArguments())
+        .containsAtLeast(
+            outDir + "/cfg/testlogs/standalone/simple_test/test.log",
+            outDir + "/cfg/testlogs/standalone/simple_test/test.xml");
+    assertThat(xmlSpawn.getEnvironment())
+        .containsEntry("XML_OUTPUT_FILE", outDir + "/cfg/testlogs/standalone/simple_test/test.xml");
+  }
+
+  @Test
+  public void testPathMappingNotAppliedToLocalTest() throws Exception {
+    useConfiguration("--experimental_output_paths=strip");
+    ExecutionOptions executionOptions = Options.getDefaults(ExecutionOptions.class);
+    TestSummaryOptions testSummaryOptions = TestSummaryOptions.DEFAULTS;
+    Path tmpDirRoot = TestStrategy.getTmpRoot(rootDirectory, outputBase, executionOptions);
+    TestedStandaloneTestStrategy standaloneTestStrategy =
+        new TestedStandaloneTestStrategy(executionOptions, testSummaryOptions, tmpDirRoot);
+
+    scratch.file("standalone/simple_test.sh", "this does not get executed, it is mocked out");
+    scratch.file(
+        "standalone/BUILD",
+        """
+        load('//test_defs:foo_test.bzl', 'foo_test')
+        foo_test(
+            name = "simple_test",
+            size = "small",
+            srcs = ["simple_test.sh"],
+            tags = ["local"],
+        )
+        """);
+    TestRunnerAction testRunnerAction = getTestAction("//standalone:simple_test");
+
+    List<Spawn> spawns = new ArrayList<>();
+    when(spawnStrategy.exec(any(), any()))
+        .thenAnswer(
+            invocation -> {
+              spawns.add(invocation.getArgument(0));
+              return ImmutableList.of(PASSED_TEST_SPAWN);
+            });
+    ActionExecutionContext actionExecutionContext =
+        new FakeActionExecutionContext(
+            createTempOutErr(tmpDirRoot), inputMetadataFor(testRunnerAction), spawnStrategy);
+
+    execute(testRunnerAction, actionExecutionContext, standaloneTestStrategy);
+
+    assertThat(spawns).hasSize(2);
+    for (Spawn spawn : spawns) {
+      assertThat(spawn.getPathMapper().isNoop()).isTrue();
+      assertThat(spawn.getEnvironment().get("XML_OUTPUT_FILE")).doesNotContain("/cfg/");
+    }
   }
 
   @Test

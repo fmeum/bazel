@@ -587,9 +587,7 @@ public class PathMappersTest extends BuildViewTestCase {
 
   @Test
   public void testRunnerAction_environmentVariablesStripped() throws Exception {
-    useConfiguration(
-        "--experimental_output_paths=strip",
-        "--modify_execution_info=TestRunner=+supports-path-mapping");
+    useConfiguration("--experimental_output_paths=strip");
     scratch.file("tests/test.sh", "#!/bin/bash", "exit 0");
     scratch.file(
         "tests/BUILD",
@@ -606,8 +604,11 @@ public class PathMappersTest extends BuildViewTestCase {
         (TestRunnerAction)
             getGeneratingAction(TestProvider.getTestStatusArtifacts(testTarget).get(0));
 
+    assertThat(action.getExecutionInfo()).containsKey(ExecutionRequirements.SUPPORTS_PATH_MAPPING);
+    PathMapper pathMapper = action.createPathMapper(/* inputMetadataProvider= */ null);
+    assertThat(pathMapper.isNoop()).isFalse();
     Map<String, String> env = new HashMap<>();
-    action.setupEnvVariables(env);
+    action.setupEnvVariables(env, pathMapper);
 
     String outDir = analysisMock.getProductName() + "-out";
     assertThat(env)
@@ -649,10 +650,70 @@ public class PathMappersTest extends BuildViewTestCase {
         (TestRunnerAction)
             getGeneratingAction(TestProvider.getTestStatusArtifacts(testTarget).get(0));
 
+    assertThat(action.getExecutionInfo())
+        .doesNotContainKey(ExecutionRequirements.SUPPORTS_PATH_MAPPING);
+    PathMapper pathMapper = action.createPathMapper(/* inputMetadataProvider= */ null);
+    assertThat(pathMapper.isNoop()).isTrue();
     Map<String, String> env = new HashMap<>();
-    action.setupEnvVariables(env);
+    action.setupEnvVariables(env, pathMapper);
 
     String outDir = analysisMock.getProductName() + "-out";
     assertThat(env.get("XML_OUTPUT_FILE")).doesNotContain(format("%s/cfg/", outDir));
+  }
+
+  @Test
+  public void testRunnerAction_disabledViaModifyExecutionInfo() throws Exception {
+    useConfiguration(
+        "--experimental_output_paths=strip",
+        "--modify_execution_info=TestRunner=-supports-path-mapping");
+    scratch.file("tests3/test.sh", "#!/bin/bash", "exit 0");
+    scratch.file(
+        "tests3/BUILD",
+        """
+        load('//test_defs:foo_test.bzl', 'foo_test')
+        foo_test(
+            name = "test",
+            srcs = ["test.sh"],
+        )
+        """);
+
+    ConfiguredTarget testTarget = getConfiguredTarget("//tests3:test");
+    TestRunnerAction action =
+        (TestRunnerAction)
+            getGeneratingAction(TestProvider.getTestStatusArtifacts(testTarget).get(0));
+
+    assertThat(action.getExecutionInfo())
+        .doesNotContainKey(ExecutionRequirements.SUPPORTS_PATH_MAPPING);
+    PathMapper pathMapper = action.createPathMapper(/* inputMetadataProvider= */ null);
+    assertThat(pathMapper.isNoop()).isTrue();
+    Map<String, String> env = new HashMap<>();
+    action.setupEnvVariables(env, pathMapper);
+
+    String outDir = analysisMock.getProductName() + "-out";
+    assertThat(env.get("XML_OUTPUT_FILE")).doesNotContain(format("%s/cfg/", outDir));
+  }
+
+  @Test
+  public void testRunnerAction_disabledForLocalTests() throws Exception {
+    useConfiguration("--experimental_output_paths=strip");
+    scratch.file("tests4/test.sh", "#!/bin/bash", "exit 0");
+    scratch.file(
+        "tests4/BUILD",
+        """
+        load('//test_defs:foo_test.bzl', 'foo_test')
+        foo_test(
+            name = "test",
+            srcs = ["test.sh"],
+            tags = ["local"],
+        )
+        """);
+
+    ConfiguredTarget testTarget = getConfiguredTarget("//tests4:test");
+    TestRunnerAction action =
+        (TestRunnerAction)
+            getGeneratingAction(TestProvider.getTestStatusArtifacts(testTarget).get(0));
+
+    assertThat(action.getExecutionInfo()).containsKey(ExecutionRequirements.SUPPORTS_PATH_MAPPING);
+    assertThat(action.createPathMapper(/* inputMetadataProvider= */ null).isNoop()).isTrue();
   }
 }

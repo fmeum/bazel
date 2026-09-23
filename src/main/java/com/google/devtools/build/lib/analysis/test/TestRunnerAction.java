@@ -546,6 +546,13 @@ public class TestRunnerAction extends AbstractAction
     fp.addBoolean(testConfiguration.getZipUndeclaredTestOutputs());
     fp.addStringMap(getExecutionInfo());
     fp.addNullableString(unrunnableReason);
+    PathMappers.addToFingerprint(
+        getMnemonic(),
+        getExecutionInfo(),
+        getAdditionalArtifactsForPathMapping(),
+        actionKeyContext,
+        PathMappers.getOutputPathsMode(configuration),
+        fp);
   }
 
   /**
@@ -738,18 +745,34 @@ public class TestRunnerAction extends AbstractAction
     }
   }
 
-  public void setupEnvVariables(Map<String, String> env) {
-    PathMapper pathMapper =
-        PathMappers.create(
-            this,
-            PathMappers.getOutputPathsMode(getConfiguration()),
-            /* isStarlarkAction= */ false,
-            // Null inputMetadataProvider is safe here because this is only used for environment
-            // variable string path mapping and doesn't affect file contents.
-            /* inputMetadataProvider= */ null);
+  /**
+   * Creates the {@link PathMapper} to apply to the arguments, environment, inputs and outputs of
+   * the spawns that execute this action.
+   *
+   * <p>The same instance must be used for all of these so that the paths the test runner is told
+   * about match the paths at which the executor stages inputs and collects outputs.
+   *
+   * @param inputMetadataProvider if non-null, used to verify that colliding inputs (from different
+   *     configurations mapping to the same path) have identical file digests
+   */
+  public PathMapper createPathMapper(@Nullable InputMetadataProvider inputMetadataProvider) {
+    return PathMappers.create(
+        this,
+        PathMappers.getOutputPathsMode(configuration),
+        /* isStarlarkAction= */ false,
+        inputMetadataProvider);
+  }
 
-    // Allow --test_env and rules to overwite these values
-    coverageEnv.forEach(env::putIfAbsent);
+  /**
+   * Adds the environment variables that describe the test to the given map.
+   *
+   * @param pathMapper the {@link PathMapper} applied to the spawn that will run with this
+   *     environment, see {@link #createPathMapper}
+   */
+  public void setupEnvVariables(Map<String, String> env, PathMapper pathMapper) {
+    // Allow --test_env and rules to overwrite these values. The values may contain exec paths of
+    // tools that were computed during analysis and thus have to be mapped here.
+    coverageEnv.forEach((name, value) -> env.putIfAbsent(name, pathMapper.mapHeuristically(value)));
 
     env.put("TEST_TARGET", Label.print(getOwner().getLabel()));
     env.put("TEST_SIZE", getTestProperties().getSize().toString());
@@ -1141,7 +1164,7 @@ public class TestRunnerAction extends AbstractAction
 
   @Override
   public List<String> getArguments() throws CommandLineExpansionException, InterruptedException {
-    return TestStrategy.expandedArgsFromAction(this);
+    return TestStrategy.expandedArgsFromAction(this, PathMapper.NOOP);
   }
 
   @Override

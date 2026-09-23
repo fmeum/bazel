@@ -14,6 +14,8 @@
 package com.google.devtools.build.lib.exec;
 
 import com.google.common.collect.ImmutableMap;
+import com.google.devtools.build.lib.actions.ActionEnvironment;
+import com.google.devtools.build.lib.actions.PathMapper;
 import com.google.devtools.build.lib.analysis.test.TestRunnerAction;
 import com.google.devtools.build.lib.util.UserUtils;
 import com.google.devtools.build.lib.vfs.PathFragment;
@@ -61,13 +63,14 @@ public class TestPolicy {
       TestRunnerAction testAction,
       Map<String, String> clientEnv,
       PathFragment relativeRunfilesDir,
-      PathFragment tmpDir) {
+      PathFragment tmpDir,
+      PathMapper pathMapper) {
     Map<String, String> env = new LinkedHashMap<>();
 
     // Add all env variables, allow some string replacements and inheritance.
     String userProp = UserUtils.getUserName();
     String tmpDirPath = tmpDir.getPathString();
-    String runfilesDirPath = relativeRunfilesDir.getPathString();
+    String runfilesDirPath = pathMapper.map(relativeRunfilesDir).getPathString();
     for (Map.Entry<String, String> entry : envVariables.entrySet()) {
       String val = entry.getValue();
       if (val.contains("${")) {
@@ -91,12 +94,23 @@ public class TestPolicy {
     // Overwrite with the environment common to all tests, see --test_env.
     testAction.getConfiguration().getTestActionEnvironment().resolve(env, clientEnv);
 
-    // Rule-specified test env.
-    testAction.getExtraTestEnv().resolve(env, clientEnv);
+    // Rule-specified test env. Fixed values may contain exec paths obtained via location expansion
+    // and thus have to be mapped, whereas inherited values come from the client environment and
+    // are left untouched.
+    ActionEnvironment extraTestEnv = testAction.getExtraTestEnv();
+    extraTestEnv
+        .getFixedEnv()
+        .forEach((name, value) -> env.put(name, pathMapper.mapHeuristically(value)));
+    for (String name : extraTestEnv.getInheritedEnv()) {
+      String value = clientEnv.get(name);
+      if (value != null) {
+        env.put(name, value);
+      }
+    }
 
     // Setup bazel test-specific env variables; note that this does not overwrite
     // some values if they're already set.
-    testAction.setupEnvVariables(env);
+    testAction.setupEnvVariables(env, pathMapper);
 
     return env;
   }
