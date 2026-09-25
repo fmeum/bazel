@@ -36,11 +36,20 @@ public final class StarlarkInfoCodecTest {
   public void objectCodecTests() throws Exception {
     ImmutableMap<String, Object> map =
         ImmutableMap.of("a", StarlarkInt.of(1), "b", StarlarkInt.of(2), "c", StarlarkInt.of(3));
+    ImmutableMap.Builder<String, Object> largeMap = ImmutableMap.builder();
+    for (int i = 0; i < 10; i++) {
+      largeMap.put("f" + i, StarlarkInt.of(i));
+    }
     StarlarkProvider provider = makeProvider();
     new SerializationTester(
             StarlarkInfo.create(provider, map),
             // empty
             StarlarkInfo.create(provider, ImmutableMap.of()),
+            // optimized
+            StarlarkInfo.create(provider, map).unsafeOptimizeMemoryLayout(),
+            StarlarkInfo.create(provider, ImmutableMap.of()).unsafeOptimizeMemoryLayout(),
+            StarlarkInfo.create(StructProvider.STRUCT, largeMap.buildOrThrow())
+                .unsafeOptimizeMemoryLayout(),
             // with an error message
             StarlarkInfoWithMessage.createWithCustomMessage(provider, map, "Dummy error: %s"),
             StarlarkInfoWithMessage.createWithCustomMessage(

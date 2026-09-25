@@ -42,6 +42,13 @@ public final class StarlarkInfoWithMessage extends StarlarkInfoNoSchema {
     this.unknownFieldError = unknownFieldError;
   }
 
+  @Override
+  public StarlarkInfoWithMessage unsafeOptimizeMemoryLayout() {
+    // Instances with a custom error message are rare, so don't bother sharing their keys.
+    optimizeValues();
+    return this;
+  }
+
   /** Returns the per-instance error message, if specified, or the provider's message otherwise. */
   @Override
   public String getErrorMessageForUnknownField(String name) {

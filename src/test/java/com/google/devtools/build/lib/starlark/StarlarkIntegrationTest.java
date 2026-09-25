@@ -1265,6 +1265,48 @@ public class StarlarkIntegrationTest extends BuildViewTestCase {
   }
 
   @Test
+  public void testRetainedStructBehavesLikeFreshStruct() throws Exception {
+    scratch.file(
+        "test/starlark/extension.bzl",
+        """
+        load('//myinfo:myinfo.bzl', 'MyInfo')
+
+        def _dep_impl(ctx):
+            return [MyInfo(s = struct(a = 1, b = (2,)))]
+
+        dep_rule = rule(implementation = _dep_impl)
+
+        def _use_impl(ctx):
+            retained = ctx.attr.dep[MyInfo].s
+            fresh = struct(a = 1, b = (2,))
+            if retained != fresh or fresh != retained:
+                fail("retained and fresh structs differ")
+            if {fresh: "value"}.get(retained) != "value":
+                fail("retained and fresh structs have different hashes")
+            if retained + struct(c = 3) != struct(a = 1, b = (2,), c = 3):
+                fail("wrong result of retained + fresh")
+            if struct(c = 3) + retained != struct(a = 1, b = (2,), c = 3):
+                fail("wrong result of fresh + retained")
+            if repr(retained) != repr(fresh):
+                fail("retained and fresh structs have different reprs")
+            return []
+
+        use_rule = rule(implementation = _use_impl, attrs = {'dep': attr.label()})
+        """);
+    scratch.file(
+        "test/starlark/BUILD",
+        """
+        load('//test/starlark:extension.bzl', 'dep_rule', 'use_rule')
+
+        dep_rule(name = 'dep')
+
+        use_rule(name = 'use', dep = ':dep')
+        """);
+
+    assertThat(getConfiguredTarget("//test/starlark:use")).isNotNull();
+  }
+
+  @Test
   public void testInstrumentedFilesForwardedFromDepsByDefault() throws Exception {
     scratch.file(
         "test/starlark/extension.bzl",

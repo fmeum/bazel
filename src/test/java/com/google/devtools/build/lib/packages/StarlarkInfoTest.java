@@ -19,15 +19,21 @@ import static com.google.devtools.build.lib.skyframe.BzlLoadValue.keyForBuild;
 import static org.junit.Assert.assertThrows;
 
 import com.google.common.collect.ImmutableMap;
+import com.google.common.testing.EqualsTester;
 import com.google.devtools.build.lib.cmdline.Label;
+import java.lang.reflect.Field;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Random;
 import javax.annotation.Nullable;
 import net.starlark.java.eval.EvalException;
+import net.starlark.java.eval.Mutability;
 import net.starlark.java.eval.StarlarkInt;
+import net.starlark.java.eval.StarlarkList;
 import net.starlark.java.eval.StarlarkValue;
 import net.starlark.java.eval.SymbolGenerator;
 import net.starlark.java.syntax.Location;
@@ -125,6 +131,132 @@ public class StarlarkInfoTest {
     assertThat(result.getFieldNames()).containsExactly("f1", "f2");
     assertThat(result.getValue("f1")).isEqualTo(StarlarkInt.of(4));
     assertThat(result.getValue("f2")).isEqualTo(StarlarkInt.of(5));
+  }
+
+  @Test
+  public void optimizedInstancesAreEquivalent() throws Exception {
+    StarlarkProvider provider = makeExportedProvider();
+    // Covers both linear and binary search for keys.
+    for (int size : new int[] {0, 1, 2, 5, 20}) {
+      Map<String, Object> values = new HashMap<>();
+      for (int i = 0; i < size; i++) {
+        values.put("f" + i, StarlarkInt.of(i));
+      }
+      StarlarkInfo original = StarlarkInfo.create(provider, values);
+      StarlarkInfo copy = StarlarkInfo.create(provider, values);
+      StarlarkInfo optimized = StarlarkInfo.create(provider, values).unsafeOptimizeMemoryLayout();
+
+      assertThat(fieldNamesOf(optimized)).isNotNull();
+      assertThat(optimized.getProvider()).isSameInstanceAs(provider);
+      assertThat(optimized.getFieldNames())
+          .containsExactlyElementsIn(original.getFieldNames())
+          .inOrder();
+      for (String name : original.getFieldNames()) {
+        assertThat(optimized.getValue(name)).isEqualTo(original.getValue(name));
+      }
+      assertThat(optimized.getValue("missing")).isNull();
+      assertThat(optimized.isImmutable()).isTrue();
+      assertThat(optimized.unsafeOptimizeMemoryLayout()).isSameInstanceAs(optimized);
+      new EqualsTester()
+          .addEqualityGroup(original, copy, optimized, copy.unsafeOptimizeMemoryLayout())
+          .testEquals();
+    }
+  }
+
+  @Test
+  public void optimizedInstancesEquivalence() throws Exception {
+    StarlarkProvider provider = makeExportedProvider();
+    StarlarkInfo f1 = makeInfoWithF1F2Values(provider, StarlarkInt.of(4), null);
+    StarlarkInfo f1OtherValue = makeInfoWithF1F2Values(provider, StarlarkInt.of(5), null);
+    StarlarkInfo f2 = makeInfoWithF1F2Values(provider, null, StarlarkInt.of(4));
+    StarlarkInfo f1OtherProvider = makeInfoWithF1F2Values(makeProvider(), StarlarkInt.of(4), null);
+    new EqualsTester()
+        .addEqualityGroup(f1, f1.unsafeOptimizeMemoryLayout())
+        .addEqualityGroup(f1OtherValue, f1OtherValue.unsafeOptimizeMemoryLayout())
+        .addEqualityGroup(f2, f2.unsafeOptimizeMemoryLayout())
+        .addEqualityGroup(f1OtherProvider, f1OtherProvider.unsafeOptimizeMemoryLayout())
+        .testEquals();
+  }
+
+  @Test
+  public void optimizedInstancesShareFieldNames() throws Exception {
+    StarlarkInfo f1 =
+        makeInfoWithF1F2Values(makeExportedProvider(), StarlarkInt.of(1), null)
+            .unsafeOptimizeMemoryLayout();
+    StarlarkInfo f1OtherValueAndProvider =
+        makeInfoWithF1F2Values(makeProvider(), StarlarkInt.of(2), null)
+            .unsafeOptimizeMemoryLayout();
+    StarlarkInfo f2 =
+        makeInfoWithF1F2Values(makeExportedProvider(), null, StarlarkInt.of(1))
+            .unsafeOptimizeMemoryLayout();
+    assertThat(fieldNamesOf(f1)).isSameInstanceAs(fieldNamesOf(f1OtherValueAndProvider));
+    assertThat(fieldNamesOf(f1)).isNotSameInstanceAs(fieldNamesOf(f2));
+  }
+
+  @Test
+  public void optimizingInstanceOptimizesValues() throws Exception {
+    StarlarkList<?> list;
+    try (Mutability mu = Mutability.create()) {
+      list = StarlarkList.of(mu, StarlarkInt.of(1));
+    }
+    StarlarkInfo nested =
+        StarlarkInfo.create(makeExportedProvider(), ImmutableMap.of("a", StarlarkInt.of(1)));
+    StarlarkInfo original =
+        StarlarkInfo.create(StructProvider.STRUCT, ImmutableMap.of("list", list, "nested", nested));
+
+    StarlarkInfo optimized = original.unsafeOptimizeMemoryLayout();
+
+    assertThat(optimized.getValue("list")).isEqualTo(list);
+    assertThat(optimized.getValue("list")).isNotSameInstanceAs(list);
+    assertThat(fieldNamesOf((StarlarkInfo) optimized.getValue("nested"))).isNotNull();
+    assertThat(optimized.getValue("nested")).isEqualTo(nested);
+    // The values of the original are optimized in place, so that they are shared with other
+    // optimized copies of it.
+    assertThat(original.unsafeOptimizeMemoryLayout().getValue("list"))
+        .isSameInstanceAs(optimized.getValue("list"));
+  }
+
+  @Test
+  public void optimizingInstanceWithCustomMessageKeepsMessage() {
+    StarlarkInfo info =
+        StarlarkInfoWithMessage.createWithCustomMessage(
+            StructProvider.STRUCT, ImmutableMap.of("a", StarlarkInt.of(1)), "no field '%s'");
+    StarlarkInfo optimized = info.unsafeOptimizeMemoryLayout();
+    assertThat(optimized.getErrorMessageForUnknownField("b")).startsWith("no field 'b'");
+    assertThat(optimized.getValue("a")).isEqualTo(StarlarkInt.of(1));
+  }
+
+  @Test
+  public void concatOptimizedAndUnoptimizedInstances() throws Exception {
+    StarlarkProvider provider = makeExportedProvider();
+    StarlarkInfo expected = makeInfoWithF1F2Values(provider, StarlarkInt.of(4), StarlarkInt.of(5));
+    for (boolean optimizeLeft : new boolean[] {false, true}) {
+      for (boolean optimizeRight : new boolean[] {false, true}) {
+        StarlarkInfo left = makeInfoWithF1F2Values(provider, StarlarkInt.of(4), null);
+        StarlarkInfo right = makeInfoWithF1F2Values(provider, null, StarlarkInt.of(5));
+        if (optimizeLeft) {
+          left = left.unsafeOptimizeMemoryLayout();
+        }
+        if (optimizeRight) {
+          right = right.unsafeOptimizeMemoryLayout();
+        }
+        StarlarkInfo x = left;
+        StarlarkInfo y = right;
+
+        assertThat(x.binaryOp(TokenKind.PLUS, y, true)).isEqualTo(expected);
+        assertThat(y.binaryOp(TokenKind.PLUS, x, false)).isEqualTo(expected);
+        assertThat(assertThrows(EvalException.class, () -> x.binaryOp(TokenKind.PLUS, x, true)))
+            .hasMessageThat()
+            .contains("cannot add struct instances with common field 'f1'");
+      }
+    }
+  }
+
+  /** Returns the shared field names of an optimized instance. */
+  private static Object fieldNamesOf(StarlarkInfo info) throws Exception {
+    Field field = info.getClass().getDeclaredField("fieldNames");
+    field.setAccessible(true);
+    return field.get(info);
   }
 
   /** Creates an unexported schemaless provider type with builtin location. */

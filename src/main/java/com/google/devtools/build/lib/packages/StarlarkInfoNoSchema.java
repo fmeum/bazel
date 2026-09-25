@@ -17,6 +17,9 @@ package com.google.devtools.build.lib.packages;
 import com.google.common.base.Preconditions;
 import com.google.common.collect.ImmutableCollection;
 import com.google.common.collect.ImmutableList;
+import com.google.common.collect.Interner;
+import com.google.devtools.build.lib.concurrent.BlazeInterners;
+import com.google.devtools.build.lib.skyframe.serialization.autocodec.AutoCodec;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
@@ -37,6 +40,7 @@ public class StarlarkInfoNoSchema extends StarlarkInfo {
 
   // For a n-element info, the table contains n key strings, sorted,
   // followed by the n corresponding legal Starlark values.
+  // For an Optimized info, the table only contains the values.
   private final Object[] table;
 
   // TODO(adonovan): restrict type of provider to StarlarkProvider?
@@ -61,6 +65,18 @@ public class StarlarkInfoNoSchema extends StarlarkInfo {
   @Override
   public Provider getProvider() {
     return provider;
+  }
+
+  /** Returns the number of fields. */
+  private int size() {
+    return this instanceof Optimized optimized
+        ? optimized.fieldNames.names.length
+        : table.length / 2;
+  }
+
+  /** Returns an array whose first {@link #size} elements are the sorted keys. */
+  private Object[] keys() {
+    return this instanceof Optimized optimized ? optimized.fieldNames.names : table;
   }
 
   /**
@@ -182,7 +198,7 @@ public class StarlarkInfoNoSchema extends StarlarkInfo {
   public ImmutableCollection<String> getFieldNames() {
     // TODO(adonovan): opt: can we avoid allocating three objects?
     @SuppressWarnings("unchecked")
-    List<String> keys = (List<String>) (List<?>) Arrays.asList(table).subList(0, table.length / 2);
+    List<String> keys = (List<String>) (List<?>) Arrays.asList(keys()).subList(0, size());
     return ImmutableList.copyOf(keys);
   }
 
@@ -192,7 +208,7 @@ public class StarlarkInfoNoSchema extends StarlarkInfo {
     if (!provider.isExported()) {
       return false;
     }
-    for (int i = table.length / 2; i < table.length; i++) {
+    for (int i = table.length - size(); i < table.length; i++) {
       if (!Starlark.isImmutable(table[i])) {
         return false;
       }
@@ -208,7 +224,7 @@ public class StarlarkInfoNoSchema extends StarlarkInfo {
     // inconsistent and arguably wrong, but fixing it would be a breaking change.
     // Thus, instead of checking whether the values are Starlark-hashable, below we only check
     // whether they have a usable hashCode() implementation.
-    for (int i = table.length / 2; i < table.length; i++) {
+    for (int i = table.length - size(); i < table.length; i++) {
       Object val = table[i];
       if (!Starlark.isAcyclic(val)) {
         // A self-referential value's hashCode() can cause a stack overflow. Trigger it early; the
@@ -222,23 +238,24 @@ public class StarlarkInfoNoSchema extends StarlarkInfo {
   @Nullable
   @Override
   public Object getValue(String name) {
-    int n = table.length / 2;
+    int n = size();
+    Object[] keys = keys();
     int i;
     if (n <= BINARY_SEARCH_THRESHOLD) {
       i = -1;
       for (int j = 0; j < n; j++) {
-        if (table[j].equals(name)) {
+        if (keys[j].equals(name)) {
           i = j;
           break;
         }
       }
     } else {
-      i = Arrays.binarySearch(table, 0, n, name);
+      i = Arrays.binarySearch(keys, 0, n, name);
     }
     if (i < 0) {
       return null;
     }
-    return table[n + i];
+    return table[table.length - n + i];
   }
 
   @Nullable
@@ -262,24 +279,28 @@ public class StarlarkInfoNoSchema extends StarlarkInfo {
   private static StarlarkInfo plus(StarlarkInfoNoSchema x, StarlarkInfoNoSchema y)
       throws EvalException {
     // ztable = merge(x.table, y.table)
-    int xsize = x.table.length / 2;
-    int ysize = y.table.length / 2;
+    int xsize = x.size();
+    int ysize = y.size();
+    Object[] xkeys = x.keys();
+    Object[] ykeys = y.keys();
+    int xoffset = x.table.length - xsize;
+    int yoffset = y.table.length - ysize;
     int zsize = xsize + ysize;
     Object[] ztable = new Object[zsize + zsize];
     int xi = 0;
     int yi = 0;
     int zi = 0;
     while (xi < xsize && yi < ysize) {
-      String xk = (String) x.table[xi];
-      String yk = (String) y.table[yi];
+      String xk = (String) xkeys[xi];
+      String yk = (String) ykeys[yi];
       int cmp = xk.compareTo(yk);
       if (cmp < 0) {
         ztable[zi] = xk;
-        ztable[zi + zsize] = x.table[xi + xsize];
+        ztable[zi + zsize] = x.table[xoffset + xi];
         xi++;
       } else if (cmp > 0) {
         ztable[zi] = yk;
-        ztable[zi + zsize] = y.table[yi + ysize];
+        ztable[zi + zsize] = y.table[yoffset + yi];
         yi++;
       } else {
         throw Starlark.errorf("cannot add struct instances with common field '%s'", xk);
@@ -287,14 +308,14 @@ public class StarlarkInfoNoSchema extends StarlarkInfo {
       zi++;
     }
     while (xi < xsize) {
-      ztable[zi] = x.table[xi];
-      ztable[zi + zsize] = x.table[xi + xsize];
+      ztable[zi] = xkeys[xi];
+      ztable[zi + zsize] = x.table[xoffset + xi];
       xi++;
       zi++;
     }
     while (yi < ysize) {
-      ztable[zi] = y.table[yi];
-      ztable[zi + zsize] = y.table[yi + ysize];
+      ztable[zi] = ykeys[yi];
+      ztable[zi + zsize] = y.table[yoffset + yi];
       yi++;
       zi++;
     }
@@ -310,21 +331,98 @@ public class StarlarkInfoNoSchema extends StarlarkInfo {
     if (!(o instanceof StarlarkInfoNoSchema other)) {
       return false;
     }
-    return provider.equals(other.provider) && Arrays.equals(table, other.table);
+    int n = size();
+    return provider.equals(other.provider)
+        && n == other.size()
+        && Arrays.equals(keys(), 0, n, other.keys(), 0, n)
+        && Arrays.equals(
+            table,
+            table.length - n,
+            table.length,
+            other.table,
+            other.table.length - n,
+            other.table.length);
   }
 
   @Override
   public final int hashCode() {
-    return 31 * provider.hashCode() + Arrays.hashCode(table);
+    // Hashes the sorted keys followed by the values, like Arrays.hashCode(table) before
+    // optimization.
+    int n = size();
+    Object[] keys = keys();
+    int hash = 1;
+    for (int i = 0; i < n; i++) {
+      hash = 31 * hash + keys[i].hashCode();
+    }
+    for (int i = table.length - n; i < table.length; i++) {
+      hash = 31 * hash + table[i].hashCode();
+    }
+    return 31 * provider.hashCode() + hash;
   }
 
   @Override
   public StarlarkInfoNoSchema unsafeOptimizeMemoryLayout() {
-    for (int i = table.length / 2; i < table.length; i++) {
+    optimizeValues();
+    // The keys are only shared now rather than during construction so that transient instances
+    // don't pay for it.
+    int n = size();
+    return new Optimized(
+        provider,
+        FieldNames.intern(new FieldNames(Arrays.copyOf(table, n, String[].class))),
+        Arrays.copyOfRange(table, n, table.length));
+  }
+
+  final void optimizeValues() {
+    for (int i = table.length - size(); i < table.length; i++) {
       if (table[i] instanceof Compactable compactable) {
         table[i] = compactable.unsafeOptimizeMemoryLayout();
       }
     }
-    return this;
+  }
+
+  /** Sorted field names, weakly interned so that they are shared by all optimized instances. */
+  @AutoCodec
+  static final class FieldNames {
+    private static final Interner<FieldNames> interner = BlazeInterners.newWeakInterner();
+
+    private final String[] names;
+
+    private FieldNames(String[] names) {
+      this.names = names;
+    }
+
+    @AutoCodec.Interner
+    static FieldNames intern(FieldNames fieldNames) {
+      return interner.intern(fieldNames);
+    }
+
+    @Override
+    public boolean equals(Object o) {
+      return o instanceof FieldNames other && Arrays.equals(names, other.names);
+    }
+
+    @Override
+    public int hashCode() {
+      return Arrays.hashCode(names);
+    }
+  }
+
+  /**
+   * An instance returned by {@link #unsafeOptimizeMemoryLayout}, which stores only the values in
+   * its table and shares its keys with other instances with the same fields.
+   */
+  private static final class Optimized extends StarlarkInfoNoSchema {
+    private final FieldNames fieldNames;
+
+    private Optimized(Provider provider, FieldNames fieldNames, Object[] values) {
+      super(provider, values);
+      this.fieldNames = fieldNames;
+    }
+
+    @Override
+    public Optimized unsafeOptimizeMemoryLayout() {
+      optimizeValues();
+      return this;
+    }
   }
 }
