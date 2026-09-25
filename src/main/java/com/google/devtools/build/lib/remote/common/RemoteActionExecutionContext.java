@@ -73,6 +73,7 @@ public class RemoteActionExecutionContext {
   private final NetworkTime networkTime;
   private final CachePolicy writeCachePolicy;
   private final CachePolicy readCachePolicy;
+  private final boolean checkDiskCacheActionResultIntegrity;
 
   private RemoteActionExecutionContext(
       @Nullable Spawn spawn,
@@ -85,7 +86,8 @@ public class RemoteActionExecutionContext {
         requestMetadata,
         networkTime,
         CachePolicy.ANY_CACHE,
-        CachePolicy.ANY_CACHE);
+        CachePolicy.ANY_CACHE,
+        /* checkDiskCacheActionResultIntegrity= */ false);
   }
 
   private RemoteActionExecutionContext(
@@ -94,13 +96,15 @@ public class RemoteActionExecutionContext {
       RequestMetadata requestMetadata,
       NetworkTime networkTime,
       CachePolicy writeCachePolicy,
-      CachePolicy readCachePolicy) {
+      CachePolicy readCachePolicy,
+      boolean checkDiskCacheActionResultIntegrity) {
     this.spawn = spawn;
     this.spawnExecutionContext = spawnExecutionContext;
     this.requestMetadata = requestMetadata;
     this.networkTime = networkTime;
     this.writeCachePolicy = writeCachePolicy;
     this.readCachePolicy = readCachePolicy;
+    this.checkDiskCacheActionResultIntegrity = checkDiskCacheActionResultIntegrity;
   }
 
   public RemoteActionExecutionContext withWriteCachePolicy(CachePolicy writeCachePolicy) {
@@ -110,7 +114,8 @@ public class RemoteActionExecutionContext {
         requestMetadata,
         networkTime,
         writeCachePolicy,
-        readCachePolicy);
+        readCachePolicy,
+        checkDiskCacheActionResultIntegrity);
   }
 
   public RemoteActionExecutionContext withReadCachePolicy(CachePolicy readCachePolicy) {
@@ -120,7 +125,23 @@ public class RemoteActionExecutionContext {
         requestMetadata,
         networkTime,
         writeCachePolicy,
-        readCachePolicy);
+        readCachePolicy,
+        checkDiskCacheActionResultIntegrity);
+  }
+
+  /**
+   * Returns a context whose disk cache lookups only return an action result if all of the blobs it
+   * references are present in the disk cache, even if the disk cache doesn't check this by default.
+   */
+  public RemoteActionExecutionContext withDiskCacheActionResultIntegrityCheck() {
+    return new RemoteActionExecutionContext(
+        spawn,
+        spawnExecutionContext,
+        requestMetadata,
+        networkTime,
+        writeCachePolicy,
+        readCachePolicy,
+        /* checkDiskCacheActionResultIntegrity= */ true);
   }
 
   /**
@@ -172,6 +193,11 @@ public class RemoteActionExecutionContext {
     return readCachePolicy;
   }
 
+  /** See {@link #withDiskCacheActionResultIntegrityCheck}. */
+  public boolean shouldCheckDiskCacheActionResultIntegrity() {
+    return checkDiskCacheActionResultIntegrity;
+  }
+
   /** Creates a {@link RemoteActionExecutionContext} with given {@link RequestMetadata}. */
   public static RemoteActionExecutionContext create(RequestMetadata metadata) {
     return new RemoteActionExecutionContext(
@@ -200,6 +226,7 @@ public class RemoteActionExecutionContext {
         requestMetadata,
         new NetworkTime(),
         writeCachePolicy,
-        readCachePolicy);
+        readCachePolicy,
+        /* checkDiskCacheActionResultIntegrity= */ false);
   }
 }

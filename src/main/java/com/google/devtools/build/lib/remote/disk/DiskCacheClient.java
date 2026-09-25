@@ -298,6 +298,18 @@ public class DiskCacheClient {
   }
 
   public ListenableFuture<ActionResult> downloadActionResult(ActionKey actionKey) {
+    return downloadActionResult(actionKey, /* forceIntegrityCheck= */ false);
+  }
+
+  /**
+   * Downloads the action result for the given key.
+   *
+   * @param forceIntegrityCheck whether to only return an action result whose referenced blobs are
+   *     all present in the disk cache, even if this client doesn't check this by default
+   */
+  public ListenableFuture<ActionResult> downloadActionResult(
+      ActionKey actionKey, boolean forceIntegrityCheck) {
+    boolean checkIntegrity = checkActionResultIntegrity || forceIntegrityCheck;
     return Futures.transformAsync(
         // Update the mtime on the action result itself before any of the blobs it references.
         // This ensures that the blobs are always newer than the action result, so that trimming the
@@ -309,10 +321,9 @@ public class DiskCacheClient {
           }
 
           boolean allBlobsPresent =
-              refreshActionResult(
-                  actionResult, /* stopAtFirstMissing= */ checkActionResultIntegrity);
+              refreshActionResult(actionResult, /* stopAtFirstMissing= */ checkIntegrity);
 
-          if (checkActionResultIntegrity && !allBlobsPresent) {
+          if (checkIntegrity && !allBlobsPresent) {
             // If at least one of the referenced blobs is missing, consider the action result to be
             // stale.
             return immediateFuture(null);

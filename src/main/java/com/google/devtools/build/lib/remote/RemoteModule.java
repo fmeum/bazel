@@ -1460,6 +1460,11 @@ public final class RemoteModule extends BlazeModule {
   }
 
   @VisibleForTesting
+  public int getKnownMissingCasDigestsSize() {
+    return knownMissingCasDigests.size();
+  }
+
+  @VisibleForTesting
   RepositoryRemoteHelpersFactory getRepositoryRemoteHelpersFactoryDelegate() {
     return repositoryRemoteHelpersFactoryDelegate;
   }

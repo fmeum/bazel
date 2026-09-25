@@ -53,12 +53,14 @@ import com.google.common.io.ByteStreams;
 import com.google.common.util.concurrent.ListeningScheduledExecutorService;
 import com.google.common.util.concurrent.MoreExecutors;
 import com.google.common.util.concurrent.SettableFuture;
+import com.google.devtools.build.lib.actions.Action;
 import com.google.devtools.build.lib.actions.ActionContext;
 import com.google.devtools.build.lib.actions.ActionInput;
 import com.google.devtools.build.lib.actions.ActionInputHelper;
 import com.google.devtools.build.lib.actions.ActionInputMap;
 import com.google.devtools.build.lib.actions.ActionOutputDirectoryHelper;
 import com.google.devtools.build.lib.actions.Artifact;
+import com.google.devtools.build.lib.actions.Artifact.DerivedArtifact;
 import com.google.devtools.build.lib.actions.ArtifactRoot;
 import com.google.devtools.build.lib.actions.ArtifactRoot.RootType;
 import com.google.devtools.build.lib.actions.ExecException;
@@ -88,6 +90,8 @@ import com.google.devtools.build.lib.exec.SpawnRunner.SpawnExecutionContext;
 import com.google.devtools.build.lib.exec.SpawnSchedulingEvent;
 import com.google.devtools.build.lib.exec.SpawnUploadingEvent;
 import com.google.devtools.build.lib.exec.util.FakeOwner;
+import com.google.devtools.build.lib.exec.util.SpawnBuilder;
+import com.google.devtools.build.lib.profiler.SilentCloseable;
 import com.google.devtools.build.lib.remote.CombinedCache.CachedActionResult;
 import com.google.devtools.build.lib.remote.RemoteExecutionService.RemoteActionResult;
 import com.google.devtools.build.lib.remote.common.ActionKey;
@@ -95,6 +99,7 @@ import com.google.devtools.build.lib.remote.common.BulkTransferException;
 import com.google.devtools.build.lib.remote.common.CacheNotFoundException;
 import com.google.devtools.build.lib.remote.common.OperationObserver;
 import com.google.devtools.build.lib.remote.common.RemoteActionExecutionContext;
+import com.google.devtools.build.lib.remote.common.RemoteActionExecutionContext.CachePolicy;
 import com.google.devtools.build.lib.remote.common.RemoteExecutionCapabilitiesException;
 import com.google.devtools.build.lib.remote.common.RemoteExecutionClient;
 import com.google.devtools.build.lib.remote.common.RemotePathResolver;
@@ -115,6 +120,7 @@ import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.build.lib.vfs.PathFragment;
 import com.google.devtools.build.lib.vfs.SyscallCache;
 import com.google.devtools.build.lib.vfs.inmemoryfs.InMemoryFileSystem;
+import com.google.devtools.build.skyframe.WalkableGraph;
 import com.google.devtools.common.options.Options;
 import com.google.longrunning.Operation;
 import com.google.protobuf.Any;
@@ -489,6 +495,44 @@ public class RemoteSpawnRunnerTest {
     SpawnExecutionContext policy = getSpawnContext(spawn);
 
     assertThrows(ExecException.class, () -> runner.exec(spawn, policy));
+  }
+
+  @Test
+  public void rewoundAction_firstRewind_acceptsRemotelyCachedResults() throws Exception {
+    RemoteRewoundActionSynchronizer rewoundActionSynchronizer = newRewoundActionSynchronizer();
+    RemoteSpawnRunner runner = newSpawnRunnerWithRewinding(rewoundActionSynchronizer);
+    Action action = newRewindableAction();
+
+    try (SilentCloseable c =
+        rewoundActionSynchronizer.enterActionPreparation(action, /* wasRewound= */ true)) {
+      execSpawnOf(runner, action);
+    }
+
+    RemoteActionExecutionContext context = getActionResultLookupContext();
+    assertThat(context.shouldCheckDiskCacheActionResultIntegrity()).isTrue();
+    assertThat(context.getReadCachePolicy()).isEqualTo(CachePolicy.REMOTE_CACHE_ONLY);
+    assertThat(getExecuteRequest().getSkipCacheLookup()).isFalse();
+  }
+
+  @Test
+  public void rewoundAction_secondRewind_skipsRemoteCacheLookups() throws Exception {
+    RemoteRewoundActionSynchronizer rewoundActionSynchronizer = newRewoundActionSynchronizer();
+    RemoteSpawnRunner runner = newSpawnRunnerWithRewinding(rewoundActionSynchronizer);
+    Action action = newRewindableAction();
+    try (SilentCloseable c =
+        rewoundActionSynchronizer.enterActionPreparation(action, /* wasRewound= */ true)) {
+      // The first rewind doesn't execute the spawn.
+    }
+
+    try (SilentCloseable c =
+        rewoundActionSynchronizer.enterActionPreparation(action, /* wasRewound= */ true)) {
+      execSpawnOf(runner, action);
+    }
+
+    RemoteActionExecutionContext context = getActionResultLookupContext();
+    assertThat(context.shouldCheckDiskCacheActionResultIntegrity()).isTrue();
+    assertThat(context.getReadCachePolicy()).isEqualTo(CachePolicy.NO_CACHE);
+    assertThat(getExecuteRequest().getSkipCacheLookup()).isTrue();
   }
 
   @Test
@@ -1888,12 +1932,84 @@ public class RemoteSpawnRunnerTest {
         ResourceSet.ZERO);
   }
 
+  private static RemoteRewoundActionSynchronizer newRewoundActionSynchronizer() {
+    return new RemoteRewoundActionSynchronizer(
+        mock(RemoteActionInputFetcher.class), mock(WalkableGraph.class));
+  }
+
+  /** Returns an action that {@link RemoteRewoundActionSynchronizer} can track as rewound. */
+  private Action newRewindableAction() {
+    DerivedArtifact output =
+        (DerivedArtifact) ActionsTestUtil.createArtifact(artifactRoot, "output");
+    output.setGeneratingActionKey(ActionsTestUtil.NULL_ACTION_LOOKUP_DATA);
+    Action action = mock(Action.class);
+    when(action.getPrimaryOutput()).thenReturn(output);
+    when(action.getOutputs()).thenReturn(ImmutableList.<Artifact>of(output));
+    return action;
+  }
+
+  /** Executes a spawn owned by the given action, which results in a remote cache miss. */
+  private void execSpawnOf(RemoteSpawnRunner runner, Action action) throws Exception {
+    when(executor.executeRemotely(
+            any(RemoteActionExecutionContext.class),
+            any(ExecuteRequest.class),
+            any(OperationObserver.class)))
+        .thenReturn(
+            ExecuteResponse.newBuilder()
+                .setResult(ActionResult.newBuilder().setExitCode(0).build())
+                .build());
+    Spawn spawn =
+        new SpawnBuilder("/bin/echo", "Hi!")
+            .withOwnerPrimaryOutput(action.getPrimaryOutput())
+            .build();
+
+    var unused = runner.exec(spawn, getSpawnContext(spawn));
+  }
+
+  /** Returns the context of the only action result lookup in {@link #cache}. */
+  private RemoteActionExecutionContext getActionResultLookupContext() throws Exception {
+    ArgumentCaptor<RemoteActionExecutionContext> contextCaptor =
+        ArgumentCaptor.forClass(RemoteActionExecutionContext.class);
+    verify(cache)
+        .downloadActionResult(
+            contextCaptor.capture(),
+            any(ActionKey.class),
+            /* inlineOutErr= */ eq(false),
+            /* inlineOutputFiles= */ eq(ImmutableSet.of()));
+    return contextCaptor.getValue();
+  }
+
+  /** Returns the only request sent to {@link #executor}. */
+  private ExecuteRequest getExecuteRequest() throws Exception {
+    ArgumentCaptor<ExecuteRequest> requestCaptor = ArgumentCaptor.forClass(ExecuteRequest.class);
+    verify(executor)
+        .executeRemotely(
+            any(RemoteActionExecutionContext.class),
+            requestCaptor.capture(),
+            any(OperationObserver.class));
+    return requestCaptor.getValue();
+  }
+
   private RemoteSpawnRunner newSpawnRunner() {
     return newSpawnRunner(executor, RemotePathResolver.createDefault(execRoot));
   }
 
   private RemoteSpawnRunner newSpawnRunner(
       @Nullable RemoteExecutionClient executor, RemotePathResolver remotePathResolver) {
+    return newSpawnRunner(executor, remotePathResolver, mock(OutputService.class));
+  }
+
+  private RemoteSpawnRunner newSpawnRunnerWithRewinding(
+      RemoteRewoundActionSynchronizer rewoundActionSynchronizer) {
+    RemoteOutputService outputService = mock(RemoteOutputService.class);
+    when(outputService.getRewoundActionSynchronizer()).thenReturn(rewoundActionSynchronizer);
+    return newSpawnRunner(executor, RemotePathResolver.createDefault(execRoot), outputService);
+  }
+
+  private RemoteSpawnRunner newSpawnRunner(
+      @Nullable RemoteExecutionClient executor,
+      RemotePathResolver remotePathResolver,
+      OutputService outputService) {
     RemoteExecutionService service =
         spy(
             new RemoteExecutionService(
@@ -1912,7 +2028,7 @@ public class RemoteSpawnRunnerTest {
                 tempPathGenerator,
                 /* captureCorruptedOutputsDir= */ null,
                 remoteOutputChecker,
-                mock(OutputService.class),
+                outputService,
                 Sets.newConcurrentHashSet()));
 
     return new RemoteSpawnRunner(

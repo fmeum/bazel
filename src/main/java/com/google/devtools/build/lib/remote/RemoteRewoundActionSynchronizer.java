@@ -37,6 +37,7 @@ import com.google.devtools.build.lib.skyframe.ActionTemplateExpansionValue;
 import com.google.devtools.build.lib.vfs.OutputService.RewoundActionSynchronizer;
 import com.google.devtools.build.skyframe.WalkableGraph;
 import com.google.errorprone.annotations.CheckReturnValue;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.locks.ReadWriteLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
@@ -63,6 +64,14 @@ public final class RemoteRewoundActionSynchronizer implements RewoundActionSynch
   // An action generally has at most one such task in flight, but nothing prevents an action from
   // executing multiple spawns whose outputs are uploaded concurrently.
   private final ConcurrentHashMap<ActionLookupData, ImmutableList<Cancellable>> outputUploadTasks =
+      new ConcurrentHashMap<>();
+
+  // The keys of the rewound actions that are currently between the start of their preparation and
+  // the end of their execution, i.e., that hold the write lock on their own key.
+  private final Set<ActionLookupData> rewoundActionsInFlight = ConcurrentHashMap.newKeySet();
+
+  // The number of times each action has been rewound during the current build.
+  private final ConcurrentHashMap<ActionLookupData, Integer> rewindCounts =
       new ConcurrentHashMap<>();
 
   // A single coarse lock is used to synchronize rewound actions (writers) and both rewound and
@@ -207,7 +216,8 @@ public final class RemoteRewoundActionSynchronizer implements RewoundActionSynch
       }
     }
 
-    var writeLock = fineLocks.get(actionKeyFor(action));
+    ActionLookupData key = actionKeyFor(action);
+    var writeLock = fineLocks.get(key);
     try (SilentCloseable c =
         Profiler.instance()
             .profile(ProfilerTask.ACTION_LOCK, "action.awaitRewoundActionConsumers")) {
@@ -220,7 +230,28 @@ public final class RemoteRewoundActionSynchronizer implements RewoundActionSynch
       writeLock.unlockWrite();
       throw t;
     }
-    return writeLock::unlockWrite;
+    // Only the holder of the write lock adds or removes the key, so these updates can't interleave
+    // with those of another execution of the same action.
+    rewindCounts.merge(key, 1, Integer::sum);
+    rewoundActionsInFlight.add(key);
+    return () -> {
+      rewoundActionsInFlight.remove(key);
+      writeLock.unlockWrite();
+    };
+  }
+
+  /**
+   * Returns the number of times {@code action} has been rewound during the current build if it is
+   * a rewound action that is currently being prepared or executed, or 0 otherwise.
+   */
+  public int getRewindCountIfInFlight(@Nullable ActionExecutionMetadata action) {
+    if (rewoundActionsInFlight.isEmpty()
+        || action == null
+        || !(action.getPrimaryOutput() instanceof DerivedArtifact primaryOutput)) {
+      return 0;
+    }
+    ActionLookupData key = primaryOutput.getGeneratingActionKey();
+    return rewoundActionsInFlight.contains(key) ? rewindCounts.getOrDefault(key, 0) : 0;
   }
 
   /**

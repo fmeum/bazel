@@ -787,12 +787,25 @@ public class RemoteExecutionService {
           ImmutableSet.of(action.getRemotePathResolver().localPathToOutputPath(inMemoryOutputPath));
     }
 
+    var context = action.getRemoteActionExecutionContext();
+    int rewindCount = getRewindCount(action);
+    if (rewindCount > 0) {
+      // A rewound action is re-executed because one of its outputs has been lost, so its cached
+      // result may reference blobs that are no longer present. With action rewinding, the disk
+      // cache doesn't verify this by default. Other actions may still receive such a stale
+      // result, but action rewinding recovers from that.
+      context = context.withDiskCacheActionResultIntegrityCheck();
+      if (!acceptsRemoteCachedResult(rewindCount)) {
+        context =
+            context.withReadCachePolicy(
+                CachePolicy.create(
+                    /* allowRemoteCache= */ false, context.getReadCachePolicy().allowDiskCache()));
+      }
+    }
+
     CachedActionResult cachedActionResult =
         combinedCache.downloadActionResult(
-            action.getRemoteActionExecutionContext(),
-            action.getActionKey(),
-            /* inlineOutErr= */ false,
-            inlineOutputFiles);
+            context, action.getActionKey(), /* inlineOutErr= */ false, inlineOutputFiles);
 
     if (cachedActionResult == null) {
       return null;
@@ -802,8 +815,9 @@ public class RemoteExecutionService {
 
     // We only add digests to `knownMissingCasDigests` when LostInputsEvent occurs which will cause
     // the build to abort and rewind, so there is no data race here. This allows us to avoid the
-    // check until cache eviction happens.
-    if (!knownMissingCasDigests.isEmpty()) {
+    // check until cache eviction happens. With action rewinding, lost blobs are handled above
+    // instead (see also onLostInputs).
+    if (getRewoundActionSynchronizer() == null && !knownMissingCasDigests.isEmpty()) {
       var metadata =
           result.getOrParseActionResultMetadata(
               combinedCache,
@@ -1820,6 +1834,33 @@ public class RemoteExecutionService {
     }
   }
 
+  /**
+   * Returns the number of times the action owning the given {@link RemoteAction} has been rewound
+   * during the current build if it is currently being re-executed after rewinding, or 0 otherwise.
+   */
+  private int getRewindCount(RemoteAction action) {
+    var rewoundActionSynchronizer = getRewoundActionSynchronizer();
+    return rewoundActionSynchronizer != null
+        ? rewoundActionSynchronizer.getRewindCountIfInFlight(action.getSpawn().getResourceOwner())
+        : 0;
+  }
+
+  /**
+   * Returns whether a cached result may be accepted from the remote cache or the remote executor
+   * for an action that has been rewound {@code rewindCount} times.
+   *
+   * <p>A rewound action is re-executed because one of its outputs has been lost, so a cached result
+   * may reference blobs that are no longer present. Most gRPC remote caches verify that they
+   * aren't, as recommended by the remote execution API, so cached results are accepted the first
+   * time an action is rewound. If it is rewound again, this may be due to a remote cache that
+   * doesn't verify its results, so they are no longer accepted. HTTP caches can't verify their
+   * results at all.
+   */
+  private boolean acceptsRemoteCachedResult(int rewindCount) {
+    return rewindCount == 0
+        || (rewindCount == 1 && !CombinedCacheClientFactory.isHttpCache(remoteOptions));
+  }
+
   @Nullable
   private RemoteRewoundActionSynchronizer getRewoundActionSynchronizer() {
     if (outputService instanceof RemoteOutputService remoteOutputService
@@ -2048,7 +2089,8 @@ public class RemoteExecutionService {
             .setInstanceName(remoteOptions.getRemoteInstanceName())
             .setDigestFunction(digestUtil.getDigestFunction())
             .setActionDigest(action.getActionKey().digest())
-            .setSkipCacheLookup(!acceptCachedResult);
+            .setSkipCacheLookup(
+                !acceptCachedResult || !acceptsRemoteCachedResult(getRewindCount(action)));
     if (remoteOptions.getRemoteResultCachePriority() != 0) {
       requestBuilder
           .getResultsCachePolicyBuilder()
@@ -2132,6 +2174,14 @@ public class RemoteExecutionService {
 
   @Subscribe
   public void onLostInputs(LostInputsEvent event) {
+    if (getRewoundActionSynchronizer() != null) {
+      // With action rewinding, cached results of rewound actions, which are the ones that need to
+      // recover lost blobs, are handled based on how often they have been rewound (see
+      // acceptsRemoteCachedResult). knownMissingCasDigests is only needed for invocation retries
+      // and for action rewinding without RemoteRewoundActionSynchronizer, e.g. with
+      // BazelOutputService.
+      return;
+    }
     for (String digest : event.missingDigests()) {
       knownMissingCasDigests.add(DigestUtil.fromString(digest));
     }

@@ -508,6 +508,31 @@ public class DiskCacheClientTest {
   }
 
   @Test
+  public void downloadActionResult_forcedIntegrityCheck_withReferencedFileMissing_returnsNull()
+      throws Exception {
+    var clientWithoutIntegrityCheck =
+        new DiskCacheClient(root, DIGEST_UTIL, /* checkActionResultIntegrity= */ false);
+    Digest stdoutDigest = getDigest("stdout contents");
+    Digest missingFileDigest = getDigest("missing file contents");
+    ActionKey actionKey = new ActionKey(getDigest("key"));
+    ActionResult actionResult =
+        ActionResult.newBuilder()
+            .setStdoutDigest(stdoutDigest)
+            .addOutputFiles(OutputFile.newBuilder().setDigest(missingFileDigest).build())
+            .build();
+
+    populateAc(actionKey, actionResult);
+    populateCas(stdoutDigest, "stdout contents");
+
+    var result =
+        getFromFuture(
+            clientWithoutIntegrityCheck.downloadActionResult(
+                actionKey, /* forceIntegrityCheck= */ true));
+
+    assertThat(result).isNull();
+  }
+
+  @Test
   public void downloadActionResult_withoutIntegrityCheck_whenMissing_returnsNull()
       throws Exception {
     var clientWithoutIntegrityCheck =

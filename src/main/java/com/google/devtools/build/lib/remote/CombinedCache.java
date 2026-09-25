@@ -248,7 +248,8 @@ public class CombinedCache extends AbstractReferenceCounted {
       }
       future =
           Futures.transform(
-              diskCacheClient.downloadActionResult(actionKey),
+              diskCacheClient.downloadActionResult(
+                  actionKey, context.shouldCheckDiskCacheActionResultIntegrity()),
               CachedActionResult::disk,
               directExecutor());
     }

@@ -44,11 +44,16 @@ import com.google.common.collect.Iterables;
 import com.google.common.collect.Sets;
 import com.google.common.io.ByteStreams;
 import com.google.common.util.concurrent.ListenableFuture;
+import com.google.devtools.build.lib.actions.Action;
 import com.google.devtools.build.lib.actions.ActionContext;
 import com.google.devtools.build.lib.actions.ActionExecutionMetadata;
 import com.google.devtools.build.lib.actions.ActionInput;
 import com.google.devtools.build.lib.actions.ActionInputHelper;
+import com.google.devtools.build.lib.actions.Artifact;
+import com.google.devtools.build.lib.actions.Artifact.DerivedArtifact;
 import com.google.devtools.build.lib.actions.ArtifactPathResolver;
+import com.google.devtools.build.lib.actions.ArtifactRoot;
+import com.google.devtools.build.lib.actions.ArtifactRoot.RootType;
 import com.google.devtools.build.lib.actions.ExecException;
 import com.google.devtools.build.lib.actions.ExecutionRequirements;
 import com.google.devtools.build.lib.actions.InputMetadataProvider;
@@ -60,6 +65,7 @@ import com.google.devtools.build.lib.actions.Spawn;
 import com.google.devtools.build.lib.actions.SpawnInputs;
 import com.google.devtools.build.lib.actions.SpawnResult;
 import com.google.devtools.build.lib.actions.SpawnResult.Status;
+import com.google.devtools.build.lib.actions.util.ActionsTestUtil;
 import com.google.devtools.build.lib.authandtls.credentialhelper.CredentialHelperException;
 import com.google.devtools.build.lib.clock.JavaClock;
 import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
@@ -76,11 +82,15 @@ import com.google.devtools.build.lib.exec.SpawnInputExpander;
 import com.google.devtools.build.lib.exec.SpawnRunner.ProgressStatus;
 import com.google.devtools.build.lib.exec.SpawnRunner.SpawnExecutionContext;
 import com.google.devtools.build.lib.exec.util.FakeOwner;
+import com.google.devtools.build.lib.exec.util.SpawnBuilder;
+import com.google.devtools.build.lib.profiler.SilentCloseable;
 import com.google.devtools.build.lib.remote.CombinedCache.CachedActionResult;
 import com.google.devtools.build.lib.remote.RemoteExecutionService.RemoteActionResult;
 import com.google.devtools.build.lib.remote.common.ActionKey;
 import com.google.devtools.build.lib.remote.common.CacheNotFoundException;
+import com.google.devtools.build.lib.remote.common.LostInputsEvent;
 import com.google.devtools.build.lib.remote.common.RemoteActionExecutionContext;
+import com.google.devtools.build.lib.remote.common.RemoteActionExecutionContext.CachePolicy;
 import com.google.devtools.build.lib.remote.common.RemoteCacheClient;
 import com.google.devtools.build.lib.remote.common.RemoteExecutionCapabilitiesException;
 import com.google.devtools.build.lib.remote.common.RemotePathResolver;
@@ -102,6 +112,7 @@ import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.build.lib.vfs.PathFragment;
 import com.google.devtools.build.lib.vfs.SyscallCache;
 import com.google.devtools.build.lib.vfs.inmemoryfs.InMemoryFileSystem;
+import com.google.devtools.build.skyframe.WalkableGraph;
 import com.google.devtools.common.options.Options;
 import com.google.protobuf.ByteString;
 import java.io.IOException;
@@ -302,6 +313,24 @@ public class RemoteSpawnCacheTest {
 
   private RemoteSpawnCache remoteSpawnCacheWithOptions(
       RemoteOptions options, ExecutionOptions executionOptions) {
+    return remoteSpawnCacheWithOptions(
+        options, executionOptions, mock(OutputService.class), Sets.newConcurrentHashSet());
+  }
+
+  private RemoteSpawnCache remoteSpawnCacheWithRewinding(
+      RemoteOptions options, RemoteRewoundActionSynchronizer rewoundActionSynchronizer) {
+    return remoteSpawnCacheWithOptions(
+        options,
+        Options.getDefaults(ExecutionOptions.class),
+        remoteOutputServiceWith(rewoundActionSynchronizer),
+        Sets.newConcurrentHashSet());
+  }
+
+  private RemoteSpawnCache remoteSpawnCacheWithOptions(
+      RemoteOptions options,
+      ExecutionOptions executionOptions,
+      OutputService outputService,
+      Set<Digest> knownMissingCasDigests) {
     RemoteExecutionService service =
         spy(
             new RemoteExecutionService(
@@ -320,9 +349,59 @@ public class RemoteSpawnCacheTest {
                 tempPathGenerator,
                 /* captureCorruptedOutputsDir= */ null,
                 DUMMY_REMOTE_OUTPUT_CHECKER,
-                mock(OutputService.class),
-                Sets.newConcurrentHashSet()));
+                outputService,
+                knownMissingCasDigests));
     return new RemoteSpawnCache(options, /* verboseFailures= */ true, service, digestUtil);
+  }
+
+  private static RemoteOutputService remoteOutputServiceWith(
+      RemoteRewoundActionSynchronizer rewoundActionSynchronizer) {
+    RemoteOutputService outputService = mock(RemoteOutputService.class);
+    when(outputService.getRewoundActionSynchronizer()).thenReturn(rewoundActionSynchronizer);
+    return outputService;
+  }
+
+  private static RemoteRewoundActionSynchronizer newRewoundActionSynchronizer() {
+    return new RemoteRewoundActionSynchronizer(
+        mock(RemoteActionInputFetcher.class), mock(WalkableGraph.class));
+  }
+
+  /** Returns an action that {@link RemoteRewoundActionSynchronizer} can track as rewound. */
+  private Action newRewindableAction() {
+    ArtifactRoot outputRoot = ArtifactRoot.asDerivedRoot(execRoot, RootType.OUTPUT, "out");
+    DerivedArtifact output = (DerivedArtifact) ActionsTestUtil.createArtifact(outputRoot, "output");
+    output.setGeneratingActionKey(ActionsTestUtil.NULL_ACTION_LOOKUP_DATA);
+    Action action = mock(Action.class);
+    when(action.getPrimaryOutput()).thenReturn(output);
+    when(action.getOutputs()).thenReturn(ImmutableList.<Artifact>of(output));
+    return action;
+  }
+
+  /** Looks up the result of a spawn owned by the given action, which results in a cache miss. */
+  private void lookUpSpawnOf(RemoteSpawnCache cache, Action action) throws Exception {
+    Spawn spawn =
+        new SpawnBuilder("/bin/echo", "Hi!")
+            .withOwnerPrimaryOutput(action.getPrimaryOutput())
+            .build();
+    SpawnExecutionContext policy =
+        createSpawnExecutionContext(
+            spawn, execRoot, new FakeActionInputFileCache(execRoot), outErr);
+    try (CacheHandle entry = cache.lookup(spawn, policy)) {
+      assertThat(entry.hasResult()).isFalse();
+    }
+  }
+
+  /** Returns the context of the only action result lookup in {@link #combinedCache}. */
+  private RemoteActionExecutionContext getActionResultLookupContext() throws Exception {
+    ArgumentCaptor<RemoteActionExecutionContext> contextCaptor =
+        ArgumentCaptor.forClass(RemoteActionExecutionContext.class);
+    verify(combinedCache)
+        .downloadActionResult(
+            contextCaptor.capture(),
+            any(ActionKey.class),
+            /* inlineOutErr= */ eq(false),
+            /* inlineOutputFiles= */ eq(ImmutableSet.of()));
+    return contextCaptor.getValue();
   }
 
   @Before
@@ -611,6 +690,110 @@ public class RemoteSpawnCacheTest {
             any(ActionKey.class),
             /* inlineOutErr= */ eq(false),
             /* inlineOutputFiles= */ eq(ImmutableSet.of()));
+  }
+
+  @Test
+  public void rewoundAction_firstRewind_acceptsVerifiedDiskAndGrpcCachedResults()
+      throws Exception {
+    when(combinedCache.hasDiskCache()).thenReturn(true);
+    RemoteRewoundActionSynchronizer rewoundActionSynchronizer = newRewoundActionSynchronizer();
+    RemoteSpawnCache cache =
+        remoteSpawnCacheWithRewinding(
+            Options.getDefaults(RemoteOptions.class), rewoundActionSynchronizer);
+    Action action = newRewindableAction();
+
+    try (SilentCloseable c =
+        rewoundActionSynchronizer.enterActionPreparation(action, /* wasRewound= */ true)) {
+      lookUpSpawnOf(cache, action);
+    }
+
+    RemoteActionExecutionContext context = getActionResultLookupContext();
+    assertThat(context.shouldCheckDiskCacheActionResultIntegrity()).isTrue();
+    assertThat(context.getReadCachePolicy()).isEqualTo(CachePolicy.ANY_CACHE);
+  }
+
+  @Test
+  public void rewoundAction_secondRewind_onlyAcceptsVerifiedDiskCachedResults() throws Exception {
+    when(combinedCache.hasDiskCache()).thenReturn(true);
+    RemoteRewoundActionSynchronizer rewoundActionSynchronizer = newRewoundActionSynchronizer();
+    RemoteSpawnCache cache =
+        remoteSpawnCacheWithRewinding(
+            Options.getDefaults(RemoteOptions.class), rewoundActionSynchronizer);
+    Action action = newRewindableAction();
+    try (SilentCloseable c =
+        rewoundActionSynchronizer.enterActionPreparation(action, /* wasRewound= */ true)) {
+      // The first rewind doesn't look up the cache.
+    }
+
+    try (SilentCloseable c =
+        rewoundActionSynchronizer.enterActionPreparation(action, /* wasRewound= */ true)) {
+      lookUpSpawnOf(cache, action);
+    }
+
+    RemoteActionExecutionContext context = getActionResultLookupContext();
+    assertThat(context.shouldCheckDiskCacheActionResultIntegrity()).isTrue();
+    assertThat(context.getReadCachePolicy()).isEqualTo(CachePolicy.DISK_CACHE_ONLY);
+  }
+
+  @Test
+  public void rewoundAction_httpCache_onlyAcceptsVerifiedDiskCachedResults() throws Exception {
+    when(combinedCache.hasDiskCache()).thenReturn(true);
+    RemoteOptions remoteOptions = Options.getDefaults(RemoteOptions.class);
+    remoteOptions.setRemoteCache("https://somecache.com");
+    RemoteRewoundActionSynchronizer rewoundActionSynchronizer = newRewoundActionSynchronizer();
+    RemoteSpawnCache cache =
+        remoteSpawnCacheWithRewinding(remoteOptions, rewoundActionSynchronizer);
+    Action action = newRewindableAction();
+
+    try (SilentCloseable c =
+        rewoundActionSynchronizer.enterActionPreparation(action, /* wasRewound= */ true)) {
+      lookUpSpawnOf(cache, action);
+    }
+
+    RemoteActionExecutionContext context = getActionResultLookupContext();
+    assertThat(context.shouldCheckDiskCacheActionResultIntegrity()).isTrue();
+    assertThat(context.getReadCachePolicy()).isEqualTo(CachePolicy.DISK_CACHE_ONLY);
+  }
+
+  @Test
+  public void nonRewoundAction_withRewinding_acceptsAllCachedResults() throws Exception {
+    when(combinedCache.hasDiskCache()).thenReturn(true);
+    RemoteOptions remoteOptions = Options.getDefaults(RemoteOptions.class);
+    remoteOptions.setRemoteCache("https://somecache.com");
+    RemoteSpawnCache cache =
+        remoteSpawnCacheWithRewinding(remoteOptions, newRewoundActionSynchronizer());
+
+    lookUpSpawnOf(cache, newRewindableAction());
+
+    RemoteActionExecutionContext context = getActionResultLookupContext();
+    assertThat(context.shouldCheckDiskCacheActionResultIntegrity()).isFalse();
+    assertThat(context.getReadCachePolicy()).isEqualTo(CachePolicy.ANY_CACHE);
+  }
+
+  @Test
+  public void lostInputs_onlyTrackedWithoutRewinding() {
+    Digest lostDigest = digestUtil.computeAsUtf8("lost");
+    var event = new LostInputsEvent(ImmutableSet.of(DigestUtil.toString(lostDigest)));
+    Set<Digest> knownMissingWithoutRewinding = Sets.newConcurrentHashSet();
+    Set<Digest> knownMissingWithRewinding = Sets.newConcurrentHashSet();
+
+    remoteSpawnCacheWithOptions(
+            Options.getDefaults(RemoteOptions.class),
+            Options.getDefaults(ExecutionOptions.class),
+            mock(OutputService.class),
+            knownMissingWithoutRewinding)
+        .getRemoteExecutionService()
+        .onLostInputs(event);
+    remoteSpawnCacheWithOptions(
+            Options.getDefaults(RemoteOptions.class),
+            Options.getDefaults(ExecutionOptions.class),
+            remoteOutputServiceWith(newRewoundActionSynchronizer()),
+            knownMissingWithRewinding)
+        .getRemoteExecutionService()
+        .onLostInputs(event);
+
+    assertThat(knownMissingWithoutRewinding).containsExactly(lostDigest);
+    assertThat(knownMissingWithRewinding).isEmpty();
   }
 
   @Test

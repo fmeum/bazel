@@ -94,6 +94,29 @@ public final class RemoteRewoundActionSynchronizerTest {
   }
 
   @Test
+  public void getRewindCountIfInFlight_countsRewindsWhileRewoundActionIsPreparedOrExecuted()
+      throws Exception {
+    Action action = newAction();
+
+    assertThat(synchronizer.getRewindCountIfInFlight(action)).isEqualTo(0);
+    try (SilentCloseable ignored =
+        synchronizer.enterActionPreparation(action, /* wasRewound= */ false)) {
+      assertThat(synchronizer.getRewindCountIfInFlight(action)).isEqualTo(0);
+    }
+    try (SilentCloseable ignored =
+        synchronizer.enterActionPreparation(action, /* wasRewound= */ true)) {
+      assertThat(synchronizer.getRewindCountIfInFlight(action)).isEqualTo(1);
+      assertThat(synchronizer.getRewindCountIfInFlight(null)).isEqualTo(0);
+    }
+    assertThat(synchronizer.getRewindCountIfInFlight(action)).isEqualTo(0);
+    try (SilentCloseable ignored =
+        synchronizer.enterActionPreparation(action, /* wasRewound= */ true)) {
+      assertThat(synchronizer.getRewindCountIfInFlight(action)).isEqualTo(2);
+    }
+    assertThat(synchronizer.getRewindCountIfInFlight(action)).isEqualTo(0);
+  }
+
+  @Test
   public void rewind_interruptedWhileAwaiting_cancelsAndAwaitsEveryTask() throws Exception {
     Action action = newAction();
     var first = mock(RemoteRewoundActionSynchronizer.Cancellable.class);
