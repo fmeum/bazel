@@ -71,8 +71,6 @@ class JsonTraceFileWriter implements Runnable {
       new TaskData(
           /* threadId= */ 0, /* startTimeNanos= */ 0, /* eventType= */ null, "poison pill");
 
-  // Equivalent to JsonWriter#setIndent with the given indent, which would create and validate a
-  // new FormattingStyle on every call.
   static final FormattingStyle INDENT_2 = FormattingStyle.PRETTY.withIndent("  ");
   static final FormattingStyle INDENT_4 = FormattingStyle.PRETTY.withIndent("    ");
   static final FormattingStyle NO_INDENT = FormattingStyle.COMPACT;
@@ -284,8 +282,6 @@ class JsonTraceFileWriter implements Runnable {
 
         try (JsonWriter writer =
             new JsonWriter(
-                // Without buffering, OutputStreamWriter allocates a CharBuffer for each of the many
-                // small writes performed by JsonWriter.
                 new BufferedWriter(
                     // Bazel internally stores strings as raw bytes encoded in ISO_8859_1, so we use
                     // the same encoding here to also write out raw bytes.
