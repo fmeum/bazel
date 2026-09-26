@@ -14,7 +14,6 @@
 package com.google.devtools.build.lib.remote.util;
 
 import static com.google.common.collect.ImmutableSet.toImmutableSet;
-import static java.nio.charset.StandardCharsets.US_ASCII;
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static java.util.Comparator.comparing;
 
@@ -43,6 +42,7 @@ import java.io.OutputStream;
 import java.nio.ByteBuffer;
 import java.util.Arrays;
 import java.util.Comparator;
+import java.util.HexFormat;
 import java.util.List;
 
 /** Utility methods to work with {@link Digest}. */
@@ -51,7 +51,7 @@ public class DigestUtil {
       comparing(Digest::getHashBytes, ByteString.unsignedLexicographicalComparator())
           .thenComparingLong(Digest::getSizeBytes);
 
-  private static final byte[] HEX_DIGITS = "0123456789abcdef".getBytes(US_ASCII);
+  private static final HexFormat HEX_FORMAT = HexFormat.of();
 
   private final XattrProvider xattrProvider;
   private final DigestHashFunction hashFn;
@@ -188,8 +188,8 @@ public class DigestUtil {
     Preconditions.checkArgument(hash.length > 0, "A hash must contain at least 1 byte.");
     byte[] hex = new byte[2 * hash.length];
     for (int i = 0; i < hash.length; i++) {
-      hex[2 * i] = HEX_DIGITS[(hash[i] >> 4) & 0xf];
-      hex[2 * i + 1] = HEX_DIGITS[hash[i] & 0xf];
+      hex[2 * i] = (byte) HEX_FORMAT.toHighHexDigit(hash[i]);
+      hex[2 * i + 1] = (byte) HEX_FORMAT.toLowHexDigit(hash[i]);
     }
     return Digest.newBuilder()
         .setHashBytes(UnsafeByteOperations.unsafeWrap(hex))
