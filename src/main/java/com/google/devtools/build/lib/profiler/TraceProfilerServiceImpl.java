@@ -69,8 +69,10 @@ public final class TraceProfilerServiceImpl implements TraceProfilerService {
 
   private static final ImmutableMap<String, Predicate<? super String>> DEFAULT_VFS_TYPE_HEURISTICS =
       ImmutableMap.of(
-          "blaze-out", (String path) -> path.contains("/blaze-out/"),
-          "source", Predicates.<CharSequence>alwaysTrue());
+          "blaze-out",
+          (String path) -> path.contains("/blaze-out/"),
+          "source",
+          Predicates.<CharSequence>alwaysTrue());
 
   /**
    * Aggregator class that keeps track of the slowest tasks of the specified type.
