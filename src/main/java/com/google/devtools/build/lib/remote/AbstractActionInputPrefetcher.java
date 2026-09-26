@@ -291,8 +291,8 @@ public abstract class AbstractActionInputPrefetcher implements ActionInputPrefet
   /**
    * Returns whether the file at the given path with the given metadata should be downloaded.
    *
-   * <p>Must only return true for regular files with local metadata if {@link #forceRefetch}
-   * returns true for them, as such files are otherwise skipped without calling this method.
+   * <p>Must only return true for regular files with local metadata if {@link #forceRefetch} returns
+   * true for them, as such files are otherwise skipped without calling this method.
    */
   protected abstract boolean canDownloadFile(Path path, FileArtifactValue metadata)
       throws IOException;
