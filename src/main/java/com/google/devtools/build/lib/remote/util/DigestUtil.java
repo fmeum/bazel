@@ -14,6 +14,7 @@
 package com.google.devtools.build.lib.remote.util;
 
 import static com.google.common.collect.ImmutableSet.toImmutableSet;
+import static java.nio.charset.StandardCharsets.US_ASCII;
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static java.util.Comparator.comparing;
 
@@ -36,6 +37,7 @@ import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.build.lib.vfs.XattrProvider;
 import com.google.protobuf.ByteString;
 import com.google.protobuf.Message;
+import com.google.protobuf.UnsafeByteOperations;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.nio.ByteBuffer;
@@ -48,6 +50,8 @@ public class DigestUtil {
   public static final Comparator<Digest> DIGEST_COMPARATOR =
       comparing(Digest::getHashBytes, ByteString.unsignedLexicographicalComparator())
           .thenComparingLong(Digest::getSizeBytes);
+
+  private static final byte[] HEX_DIGITS = "0123456789abcdef".getBytes(US_ASCII);
 
   private final XattrProvider xattrProvider;
   private final DigestHashFunction hashFn;
@@ -77,7 +81,7 @@ public class DigestUtil {
   }
 
   public Digest compute(byte[] blob) {
-    return buildDigest(hashFn.getHashFunction().hashBytes(blob).toString(), blob.length);
+    return buildDigest(hashFn.getHashFunction().hashBytes(blob).asBytes(), blob.length);
   }
 
   /**
@@ -89,7 +93,7 @@ public class DigestUtil {
    * @param length the number of bytes to hash
    */
   public Digest compute(byte[] data, int offset, int length) {
-    return buildDigest(hashFn.getHashFunction().hashBytes(data, offset, length).toString(), length);
+    return buildDigest(hashFn.getHashFunction().hashBytes(data, offset, length).asBytes(), length);
   }
 
   /** Computes a digest of the given {@link ByteString} without copying its contents. */
@@ -98,7 +102,7 @@ public class DigestUtil {
     for (ByteBuffer buffer : blob.asReadOnlyByteBufferList()) {
       hasher.putBytes(buffer);
     }
-    return buildDigest(hasher.hash().toString(), blob.size());
+    return buildDigest(hasher.hash().asBytes(), blob.size());
   }
 
   /**
@@ -177,8 +181,25 @@ public class DigestUtil {
     return hashFn.getHashFunction().hashBytes(data).asBytes();
   }
 
+  /**
+   * Builds a {@link Digest} from a binary hash.
+   *
+   * <p>The hex encoding of the hash is stored as bytes rather than a {@link String}. This avoids
+   * intermediate copies and, since the hash is a {@code string} field, encoding it as UTF-8 every
+   * time the digest is serialized, which happens frequently when computing Merkle trees. The
+   * {@link String} is created lazily by {@link Digest#getHash()}.
+   */
   public static Digest buildDigest(byte[] hash, long size) {
-    return buildDigest(HashCode.fromBytes(hash).toString(), size);
+    Preconditions.checkArgument(hash.length > 0, "A hash must contain at least 1 byte.");
+    byte[] hex = new byte[2 * hash.length];
+    for (int i = 0; i < hash.length; i++) {
+      hex[2 * i] = HEX_DIGITS[(hash[i] >> 4) & 0xf];
+      hex[2 * i + 1] = HEX_DIGITS[hash[i] & 0xf];
+    }
+    return Digest.newBuilder()
+        .setHashBytes(UnsafeByteOperations.unsafeWrap(hex))
+        .setSizeBytes(size)
+        .build();
   }
 
   public static Digest buildDigest(String hexHash, long size) {
