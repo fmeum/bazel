@@ -64,6 +64,7 @@ import com.google.common.util.concurrent.ListenableFuture;
 import com.google.common.util.concurrent.ListeningExecutorService;
 import com.google.common.util.concurrent.MoreExecutors;
 import com.google.common.util.concurrent.SettableFuture;
+import com.google.devtools.build.lib.actions.ActionAnalysisMetadata;
 import com.google.devtools.build.lib.actions.ActionExecutionMetadata;
 import com.google.devtools.build.lib.actions.ActionInput;
 import com.google.devtools.build.lib.actions.Artifact;
@@ -158,6 +159,7 @@ import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Predicate;
 import java.util.stream.Stream;
 import javax.annotation.Nullable;
 
@@ -203,7 +205,16 @@ public class RemoteExecutionService {
   private final OutputService outputService;
 
   @Nullable private final Scrubber scrubber;
+
+  /**
+   * Digests known to be missing from the remote CAS, learned from {@link LostInputsEvent}.
+   *
+   * <p>Only consulted when action rewinding is disabled, see {@link #lookupCache}.
+   */
   private final Set<Digest> knownMissingCasDigests;
+
+  /** Whether the given action was rewound during the current build. */
+  private final Predicate<ActionAnalysisMetadata> wasActionRewound;
 
   private Boolean useOutputPaths;
 
@@ -224,7 +235,8 @@ public class RemoteExecutionService {
       @Nullable Path captureCorruptedOutputsDir,
       @Nullable RemoteOutputChecker remoteOutputChecker,
       OutputService outputService,
-      Set<Digest> knownMissingCasDigests) {
+      Set<Digest> knownMissingCasDigests,
+      Predicate<ActionAnalysisMetadata> wasActionRewound) {
     this.reporter = reporter;
     this.verboseFailures = verboseFailures;
     this.execRoot = execRoot;
@@ -255,6 +267,7 @@ public class RemoteExecutionService {
     this.remoteOutputChecker = remoteOutputChecker;
     this.outputService = outputService;
     this.knownMissingCasDigests = knownMissingCasDigests;
+    this.wasActionRewound = wasActionRewound;
   }
 
   private Command buildCommand(
@@ -338,6 +351,20 @@ public class RemoteExecutionService {
     boolean allowDiskCache = useDiskCache() && Spawns.mayBeCached(spawn);
 
     return CachePolicy.create(allowRemoteCache, allowDiskCache);
+  }
+
+  /**
+   * Returns whether a cached result may be accepted for the given spawn.
+   *
+   * <p>With action rewinding, an action is rewound because outputs referenced by its previous
+   * result turned out to be missing from the remote cache. Looking up the cache again would only
+   * find the same stale entry, so a rewound action doesn't accept cached results at all. This only
+   * affects the action cache lookup: the read cache policy is unaffected and such an action may
+   * still download blobs from the CAS.
+   */
+  public boolean shouldAcceptCachedResult(Spawn spawn, SpawnExecutionContext context) {
+    return getReadCachePolicy(spawn).allowAnyCache()
+        && !(context.isRewindingEnabled() && wasActionRewound.test(spawn.getResourceOwner()));
   }
 
   public CachePolicy getWriteCachePolicy(Spawn spawn) {
@@ -800,10 +827,14 @@ public class RemoteExecutionService {
 
     var result = RemoteActionResult.createFromCache(cachedActionResult);
 
-    // We only add digests to `knownMissingCasDigests` when LostInputsEvent occurs which will cause
-    // the build to abort and rewind, so there is no data race here. This allows us to avoid the
-    // check until cache eviction happens.
-    if (!knownMissingCasDigests.isEmpty()) {
+    // With action rewinding, an action whose outputs were lost is rewound and doesn't accept cached
+    // results at all (see shouldAcceptCachedResult), so its stale action cache entry is never
+    // consulted again. Without rewinding, recovery relies on an invocation retry, which starts a
+    // fresh build with no memory of which actions were affected. `knownMissingCasDigests` bridges
+    // that gap. It is only populated by LostInputsEvent, which fails the build, so there is no data
+    // race here, and it allows skipping the check until cache eviction actually happens.
+    if (!action.getSpawnExecutionContext().isRewindingEnabled()
+        && !knownMissingCasDigests.isEmpty()) {
       var metadata =
           result.getOrParseActionResultMetadata(
               combinedCache,

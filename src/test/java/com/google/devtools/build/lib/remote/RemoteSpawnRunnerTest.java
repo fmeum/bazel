@@ -53,6 +53,7 @@ import com.google.common.io.ByteStreams;
 import com.google.common.util.concurrent.ListeningScheduledExecutorService;
 import com.google.common.util.concurrent.MoreExecutors;
 import com.google.common.util.concurrent.SettableFuture;
+import com.google.devtools.build.lib.actions.ActionAnalysisMetadata;
 import com.google.devtools.build.lib.actions.ActionContext;
 import com.google.devtools.build.lib.actions.ActionInput;
 import com.google.devtools.build.lib.actions.ActionInputHelper;
@@ -130,6 +131,7 @@ import java.time.Instant;
 import java.util.List;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Predicate;
 import javax.annotation.Nullable;
 import org.junit.After;
 import org.junit.Before;
@@ -263,6 +265,42 @@ public class RemoteSpawnRunnerTest {
     verify(service, never()).lookupCache(any());
     verify(service, never()).uploadOutputs(any(), any(), any(), any());
     verifyNoMoreInteractions(localRunner);
+  }
+
+  @Test
+  public void rewoundActionSkipsCacheLookup() throws Exception {
+    // A rewound action is re-executed because outputs referenced by its cached result were lost.
+    // Neither Bazel nor the remote execution server should look up the stale entry again.
+    remoteOptions.setRemoteAcceptCached(true);
+    Spawn spawn = newSimpleSpawn();
+    RemoteSpawnRunner runner =
+        newSpawnRunner(
+            executor,
+            RemotePathResolver.createDefault(execRoot),
+            /* wasActionRewound= */ owner -> owner == spawn.getResourceOwner());
+    RemoteExecutionService service = runner.getRemoteExecutionService();
+    ExecuteResponse succeeded =
+        ExecuteResponse.newBuilder()
+            .setResult(ActionResult.newBuilder().setExitCode(0).build())
+            .build();
+    when(executor.executeRemotely(
+            any(RemoteActionExecutionContext.class),
+            any(ExecuteRequest.class),
+            any(OperationObserver.class)))
+        .thenReturn(succeeded);
+    FakeSpawnExecutionContext policy = getSpawnContext(spawn);
+    policy.setRewindingEnabled(true);
+
+    runner.exec(spawn, policy);
+
+    ArgumentCaptor<ExecuteRequest> requestCaptor = ArgumentCaptor.forClass(ExecuteRequest.class);
+    verify(executor)
+        .executeRemotely(
+            any(RemoteActionExecutionContext.class),
+            requestCaptor.capture(),
+            any(OperationObserver.class));
+    assertThat(requestCaptor.getValue().getSkipCacheLookup()).isTrue();
+    verify(service, never()).lookupCache(any());
   }
 
   private FakeSpawnExecutionContext getSpawnContext(Spawn spawn) {
@@ -1380,7 +1418,8 @@ public class RemoteSpawnRunnerTest {
             /* captureCorruptedOutputsDir= */ null,
             remoteOutputChecker,
             mock(OutputService.class),
-            Sets.newConcurrentHashSet());
+            Sets.newConcurrentHashSet(),
+            /* wasActionRewound= */ unused -> false);
     RemoteSpawnRunner runner =
         new RemoteSpawnRunner(
             remoteOptions,
@@ -1894,6 +1933,13 @@ public class RemoteSpawnRunnerTest {
 
   private RemoteSpawnRunner newSpawnRunner(
       @Nullable RemoteExecutionClient executor, RemotePathResolver remotePathResolver) {
+    return newSpawnRunner(executor, remotePathResolver, /* wasActionRewound= */ unused -> false);
+  }
+
+  private RemoteSpawnRunner newSpawnRunner(
+      @Nullable RemoteExecutionClient executor,
+      RemotePathResolver remotePathResolver,
+      Predicate<ActionAnalysisMetadata> wasActionRewound) {
     RemoteExecutionService service =
         spy(
             new RemoteExecutionService(
@@ -1913,7 +1959,8 @@ public class RemoteSpawnRunnerTest {
                 /* captureCorruptedOutputsDir= */ null,
                 remoteOutputChecker,
                 mock(OutputService.class),
-                Sets.newConcurrentHashSet()));
+                Sets.newConcurrentHashSet(),
+                wasActionRewound));
 
     return new RemoteSpawnRunner(
         remoteOptions,

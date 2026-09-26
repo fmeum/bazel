@@ -31,6 +31,8 @@ import static java.util.concurrent.TimeUnit.SECONDS;
 import static java.util.function.Function.identity;
 import static org.junit.Assert.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.mock;
@@ -68,6 +70,7 @@ import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Sets;
 import com.google.common.util.concurrent.Futures;
 import com.google.common.util.concurrent.SettableFuture;
+import com.google.devtools.build.lib.actions.ActionAnalysisMetadata;
 import com.google.devtools.build.lib.actions.ActionInput;
 import com.google.devtools.build.lib.actions.ActionInputHelper;
 import com.google.devtools.build.lib.actions.ActionInputMap;
@@ -157,6 +160,7 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.Random;
+import java.util.Set;
 import java.util.SortedMap;
 import java.util.concurrent.ConcurrentLinkedDeque;
 import java.util.concurrent.CountDownLatch;
@@ -166,6 +170,7 @@ import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Predicate;
 import java.util.random.RandomGeneratorFactory;
 import javax.annotation.Nullable;
 import org.junit.Before;
@@ -3284,6 +3289,104 @@ public class RemoteExecutionServiceTest {
         ImmutableMap.of(REMOTE_EXECUTION_INLINE_OUTPUTS, inMemoryOutput.getPathString()), result);
   }
 
+  @Test
+  public void shouldAcceptCachedResult_rewoundActionWithRewinding_returnsFalse() throws Exception {
+    Spawn spawn = newSpawn(ImmutableMap.of(), ImmutableSet.of());
+    FakeSpawnExecutionContext context = newSpawnExecutionContext(spawn);
+    context.setRewindingEnabled(true);
+    RemoteExecutionService service =
+        newRemoteExecutionService(
+            remoteOptions,
+            Sets.newConcurrentHashSet(),
+            /* wasActionRewound= */ owner -> owner == spawn.getResourceOwner());
+
+    assertThat(service.shouldAcceptCachedResult(spawn, context)).isFalse();
+    // Only the action cache lookup is affected, the action may still download from the CAS.
+    assertThat(service.getReadCachePolicy(spawn).allowRemoteCache()).isTrue();
+  }
+
+  @Test
+  public void shouldAcceptCachedResult_notRewoundWithRewinding_returnsTrue() throws Exception {
+    Spawn spawn = newSpawn(ImmutableMap.of(), ImmutableSet.of());
+    FakeSpawnExecutionContext context = newSpawnExecutionContext(spawn);
+    context.setRewindingEnabled(true);
+    RemoteExecutionService service =
+        newRemoteExecutionService(
+            remoteOptions, Sets.newConcurrentHashSet(), /* wasActionRewound= */ unused -> false);
+
+    assertThat(service.shouldAcceptCachedResult(spawn, context)).isTrue();
+  }
+
+  @Test
+  public void shouldAcceptCachedResult_rewoundActionWithoutRewinding_returnsTrue()
+      throws Exception {
+    // Without rewinding, stale action cache entries are handled via knownMissingCasDigests instead.
+    Spawn spawn = newSpawn(ImmutableMap.of(), ImmutableSet.of());
+    FakeSpawnExecutionContext context = newSpawnExecutionContext(spawn);
+    RemoteExecutionService service =
+        newRemoteExecutionService(
+            remoteOptions, Sets.newConcurrentHashSet(), /* wasActionRewound= */ unused -> true);
+
+    assertThat(service.shouldAcceptCachedResult(spawn, context)).isTrue();
+  }
+
+  @Test
+  public void lookupCache_rewindingDisabled_ignoresResultWithKnownMissingDigest()
+      throws Exception {
+    Digest fooDigest = digestUtil.computeAsUtf8("foo-contents");
+    ActionResult actionResult =
+        ActionResult.newBuilder()
+            .addOutputFiles(OutputFile.newBuilder().setPath("outputs/foo").setDigest(fooDigest))
+            .build();
+    Artifact output =
+        ActionsTestUtil.createArtifact(
+            artifactRoot, remotePathResolver.outputPathToLocalPath("outputs/foo"));
+    Spawn spawn = newSpawn(ImmutableMap.of(), ImmutableSet.of(output));
+    FakeSpawnExecutionContext context = newSpawnExecutionContext(spawn);
+    Set<Digest> knownMissingCasDigests = Sets.newConcurrentHashSet();
+    knownMissingCasDigests.add(fooDigest);
+    RemoteExecutionService service =
+        newRemoteExecutionService(
+            remoteOptions, knownMissingCasDigests, /* wasActionRewound= */ unused -> false);
+    RemoteAction action = service.buildRemoteAction(spawn, context);
+    doReturn(CachedActionResult.remote(actionResult))
+        .when(cache)
+        .downloadActionResult(any(), eq(action.getActionKey()), anyBoolean(), any());
+
+    assertThat(service.lookupCache(action)).isNull();
+    // The digest is expected to be uploaded by the execution that follows the cache miss.
+    assertThat(knownMissingCasDigests).isEmpty();
+  }
+
+  @Test
+  public void lookupCache_rewindingEnabled_ignoresKnownMissingDigests() throws Exception {
+    // With rewinding, a stale action cache entry is dealt with by not accepting cached results for
+    // the rewound action, see shouldAcceptCachedResult.
+    Digest fooDigest = digestUtil.computeAsUtf8("foo-contents");
+    ActionResult actionResult =
+        ActionResult.newBuilder()
+            .addOutputFiles(OutputFile.newBuilder().setPath("outputs/foo").setDigest(fooDigest))
+            .build();
+    Artifact output =
+        ActionsTestUtil.createArtifact(
+            artifactRoot, remotePathResolver.outputPathToLocalPath("outputs/foo"));
+    Spawn spawn = newSpawn(ImmutableMap.of(), ImmutableSet.of(output));
+    FakeSpawnExecutionContext context = newSpawnExecutionContext(spawn);
+    context.setRewindingEnabled(true);
+    Set<Digest> knownMissingCasDigests = Sets.newConcurrentHashSet();
+    knownMissingCasDigests.add(fooDigest);
+    RemoteExecutionService service =
+        newRemoteExecutionService(
+            remoteOptions, knownMissingCasDigests, /* wasActionRewound= */ unused -> false);
+    RemoteAction action = service.buildRemoteAction(spawn, context);
+    doReturn(CachedActionResult.remote(actionResult))
+        .when(cache)
+        .downloadActionResult(any(), eq(action.getActionKey()), anyBoolean(), any());
+
+    assertThat(service.lookupCache(action)).isNotNull();
+    assertThat(knownMissingCasDigests).containsExactly(fooDigest);
+  }
+
   private Spawn newSpawn(
       ImmutableMap<String, String> executionInfo, ImmutableSet<Artifact> outputs) {
     return newSpawn(executionInfo, outputs, NestedSetBuilder.emptySet(Order.STABLE_ORDER));
@@ -3337,6 +3440,14 @@ public class RemoteExecutionServiceTest {
   }
 
   private RemoteExecutionService newRemoteExecutionService(RemoteOptions remoteOptions) {
+    return newRemoteExecutionService(
+        remoteOptions, Sets.newConcurrentHashSet(), /* wasActionRewound= */ unused -> false);
+  }
+
+  private RemoteExecutionService newRemoteExecutionService(
+      RemoteOptions remoteOptions,
+      Set<Digest> knownMissingCasDigests,
+      Predicate<ActionAnalysisMetadata> wasActionRewound) {
     return new RemoteExecutionService(
         reporter,
         /* verboseFailures= */ true,
@@ -3354,7 +3465,8 @@ public class RemoteExecutionServiceTest {
         null,
         remoteOutputChecker,
         outputService,
-        Sets.newConcurrentHashSet());
+        knownMissingCasDigests,
+        wasActionRewound);
   }
 
   private RunfilesTree createRunfilesTree(String root, Collection<Artifact> artifacts) {

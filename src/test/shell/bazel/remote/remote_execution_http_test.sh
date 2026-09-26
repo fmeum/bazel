@@ -587,4 +587,51 @@ EOF
   [[ "$remote_cas_files" == 3 ]] || fail "Expected 3 remote cas entries, not $remote_cas_files"
 }
 
+function test_remote_http_cache_with_missing_cas_referenced_by_ac_rewinding() {
+  mkdir -p a
+  cat > a/BUILD <<EOF
+genrule(
+  name = 'bar',
+  outs = ["bar.txt"],
+  cmd = "echo \"bar\" > \$@",
+)
+genrule(
+  name = 'foo',
+  srcs = [":bar"],
+  outs = ["foo.txt"],
+  cmd = "echo \"foo\" > \$@",
+  tags = ["local"],
+)
+EOF
+
+  # Populate the cache
+  bazel build \
+      --remote_cache=http://localhost:${http_port} \
+      //a:foo \
+      || fail "Failed to build //a:foo with remote cache"
+  remote_cas_files="$(count_remote_cas_files)"
+  # bar.txt, stdout and stderr for action 'bar'
+  [[ "$remote_cas_files" == 3 ]] || fail "Expected 3 remote cas entries, not $remote_cas_files"
+
+  # Delete blobs from CAS
+  delete_remote_cas_files
+
+  # The HTTP cache doesn't verify that the blobs referenced by an action cache
+  # entry still exist, so the stale entry for 'bar' is accepted. The missing
+  # blob is discovered when 'foo' fetches its input, which rewinds 'bar'. The
+  # rewound action doesn't accept the stale cached result again and executes
+  # instead, all within a single invocation.
+  bazel clean
+  bazel build \
+      --remote_cache=http://localhost:${http_port} \
+      --rewind_lost_inputs \
+      //a:foo &> $TEST_log \
+      || fail "Failed to build //a:foo with remote cache"
+
+  expect_not_log "Lost inputs no longer available remotely"
+  expect_not_log "Missing digest"
+  remote_cas_files="$(count_remote_cas_files)"
+  [[ "$remote_cas_files" == 3 ]] || fail "Expected 3 remote cas entries, not $remote_cas_files"
+}
+
 run_suite "Remote execution and remote cache tests"

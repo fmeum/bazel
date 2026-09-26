@@ -48,6 +48,7 @@ public class FakeSpawnExecutionContext implements SpawnExecutionContext {
   @Nullable private final RemoteActionFileSystem actionFileSystem;
 
   @Nullable private Digest digest;
+  private boolean rewindingEnabled;
 
   public FakeSpawnExecutionContext(
       Spawn spawn,
@@ -133,9 +134,13 @@ public class FakeSpawnExecutionContext implements SpawnExecutionContext {
     return actionContextRegistry.getInstance(identifyingType);
   }
 
+  public void setRewindingEnabled(boolean rewindingEnabled) {
+    this.rewindingEnabled = rewindingEnabled;
+  }
+
   @Override
   public boolean isRewindingEnabled() {
-    return false;
+    return rewindingEnabled;
   }
 
   @Override

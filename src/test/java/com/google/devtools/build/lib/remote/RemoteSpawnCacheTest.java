@@ -44,6 +44,7 @@ import com.google.common.collect.Iterables;
 import com.google.common.collect.Sets;
 import com.google.common.io.ByteStreams;
 import com.google.common.util.concurrent.ListenableFuture;
+import com.google.devtools.build.lib.actions.ActionAnalysisMetadata;
 import com.google.devtools.build.lib.actions.ActionContext;
 import com.google.devtools.build.lib.actions.ActionExecutionMetadata;
 import com.google.devtools.build.lib.actions.ActionInput;
@@ -113,6 +114,7 @@ import java.util.SortedMap;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Predicate;
 import javax.annotation.Nullable;
 import org.junit.Before;
 import org.junit.Test;
@@ -141,6 +143,7 @@ public class RemoteSpawnCacheTest {
   private Path execRoot;
   private TempPathGenerator tempPathGenerator;
   private SimpleSpawn simpleSpawn;
+  private FakeActionInputFileCache fakeFileCache;
   private SpawnExecutionContext simplePolicy;
   private ActionResult successfulResult;
   @Mock private CombinedCache combinedCache;
@@ -152,7 +155,11 @@ public class RemoteSpawnCacheTest {
   private RemotePathResolver remotePathResolver;
 
   private static SpawnExecutionContext createSpawnExecutionContext(
-      Spawn spawn, Path execRoot, FakeActionInputFileCache fakeFileCache, FileOutErr outErr) {
+      Spawn spawn,
+      Path execRoot,
+      FakeActionInputFileCache fakeFileCache,
+      FileOutErr outErr,
+      boolean rewindingEnabled) {
     return new SpawnExecutionContext() {
       @Nullable private com.google.devtools.build.lib.exec.Protos.Digest digest;
 
@@ -216,7 +223,7 @@ public class RemoteSpawnCacheTest {
 
       @Override
       public boolean isRewindingEnabled() {
-        return false;
+        return rewindingEnabled;
       }
 
       @Override
@@ -302,6 +309,14 @@ public class RemoteSpawnCacheTest {
 
   private RemoteSpawnCache remoteSpawnCacheWithOptions(
       RemoteOptions options, ExecutionOptions executionOptions) {
+    return remoteSpawnCacheWithOptions(
+        options, executionOptions, /* wasActionRewound= */ unused -> false);
+  }
+
+  private RemoteSpawnCache remoteSpawnCacheWithOptions(
+      RemoteOptions options,
+      ExecutionOptions executionOptions,
+      Predicate<ActionAnalysisMetadata> wasActionRewound) {
     RemoteExecutionService service =
         spy(
             new RemoteExecutionService(
@@ -321,7 +336,8 @@ public class RemoteSpawnCacheTest {
                 /* captureCorruptedOutputsDir= */ null,
                 DUMMY_REMOTE_OUTPUT_CHECKER,
                 mock(OutputService.class),
-                Sets.newConcurrentHashSet()));
+                Sets.newConcurrentHashSet(),
+                wasActionRewound));
     return new RemoteSpawnCache(options, /* verboseFailures= */ true, service, digestUtil);
   }
 
@@ -333,7 +349,7 @@ public class RemoteSpawnCacheTest {
     execRoot = fs.getPath("/exec/root");
     execRoot.createDirectoryAndParents();
     tempPathGenerator = new TempPathGenerator(fs.getPath("/execroot/_tmp/actions/remote"));
-    FakeActionInputFileCache fakeFileCache = new FakeActionInputFileCache(execRoot);
+    fakeFileCache = new FakeActionInputFileCache(execRoot);
     simpleSpawn = simpleSpawnWithExecutionInfo(ImmutableMap.of());
     successfulResult = createSuccessfulResult(simpleSpawn);
 
@@ -347,7 +363,9 @@ public class RemoteSpawnCacheTest {
     reporter.addHandler(eventHandler);
 
     remotePathResolver = RemotePathResolver.createDefault(execRoot);
-    simplePolicy = createSpawnExecutionContext(simpleSpawn, execRoot, fakeFileCache, outErr);
+    simplePolicy =
+        createSpawnExecutionContext(
+            simpleSpawn, execRoot, fakeFileCache, outErr, /* rewindingEnabled= */ false);
 
     fakeFileCache.createScratchInput(
         Iterables.getOnlyElement(simpleSpawn.getInputFiles().flatten()), "xyz");
@@ -415,6 +433,59 @@ public class RemoteSpawnCacheTest {
     // We expect the CachedLocalSpawnRunner to _not_ write to outErr at all.
     assertThat(outErr.hasRecordedOutput()).isFalse();
     assertThat(outErr.hasRecordedStderr()).isFalse();
+  }
+
+  @Test
+  public void rewoundActionDoesNotAcceptCachedResult() throws Exception {
+    // A rewound action is re-executed because outputs referenced by its cached result were lost.
+    // Looking up the cache again would only find the same stale entry.
+    RemoteSpawnCache cache =
+        remoteSpawnCacheWithOptions(
+            Options.getDefaults(RemoteOptions.class),
+            Options.getDefaults(ExecutionOptions.class),
+            /* wasActionRewound= */ owner -> owner == simpleSpawn.getResourceOwner());
+    RemoteExecutionService service = cache.getRemoteExecutionService();
+    SpawnExecutionContext policy =
+        createSpawnExecutionContext(
+            simpleSpawn, execRoot, fakeFileCache, outErr, /* rewindingEnabled= */ true);
+
+    CacheHandle entry = cache.lookup(simpleSpawn, policy);
+
+    assertThat(entry.hasResult()).isFalse();
+    verify(combinedCache, never()).downloadActionResult(any(), any(), anyBoolean(), any());
+    // The result of the re-execution is still uploaded, replacing the stale entry.
+    SpawnResult result =
+        new SpawnResult.Builder()
+            .setExitCode(0)
+            .setStatus(Status.SUCCESS)
+            .setRunnerName("test")
+            .build();
+    doNothing().when(service).uploadOutputs(any(), any(), any(), any());
+    entry.store(result);
+    verify(service).uploadOutputs(any(), any(), any(), any());
+  }
+
+  @Test
+  public void rewoundActionAcceptsCachedResultWithoutRewinding() throws Exception {
+    // Whether an action was rewound only matters if rewinding is enabled.
+    RemoteSpawnCache cache =
+        remoteSpawnCacheWithOptions(
+            Options.getDefaults(RemoteOptions.class),
+            Options.getDefaults(ExecutionOptions.class),
+            /* wasActionRewound= */ owner -> owner == simpleSpawn.getResourceOwner());
+    RemoteExecutionService service = cache.getRemoteExecutionService();
+    when(combinedCache.downloadActionResult(
+            any(RemoteActionExecutionContext.class),
+            any(),
+            /* inlineOutErr= */ eq(false),
+            /* inlineOutputFiles= */ eq(ImmutableSet.of())))
+        .thenReturn(CachedActionResult.remote(successfulResult));
+    doReturn(null).when(service).downloadOutputs(any(), any());
+
+    CacheHandle entry = cache.lookup(simpleSpawn, simplePolicy);
+
+    assertThat(entry.hasResult()).isTrue();
+    assertThat(entry.getResult().isCacheHit()).isTrue();
   }
 
   @Test
