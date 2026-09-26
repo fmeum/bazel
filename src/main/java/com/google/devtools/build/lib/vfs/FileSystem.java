@@ -63,8 +63,7 @@ public abstract class FileSystem {
   protected static final String ERR_PERMISSION_DENIED = " (Permission denied)";
   public static final String ERR_TOO_MANY_SYMLINKS = " (Too many levels of symbolic links)";
 
-  // Reused by getDigest, which is called for every source file and action output. Cleared while in
-  // use so that a reentrant call, e.g. from a custom getInputStream, can't clobber it.
+  // Cleared while in use so that reentrant calls can't clobber it.
   private static final ThreadLocal<byte[]> digestBuffer = new ThreadLocal<>();
 
   private final DigestHashFunction digestFunction;
