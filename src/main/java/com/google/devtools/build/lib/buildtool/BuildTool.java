@@ -28,8 +28,10 @@ import com.google.common.base.Splitter;
 import com.google.common.base.Stopwatch;
 import com.google.common.base.Throwables;
 import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Iterables;
+import com.google.common.collect.Maps;
 import com.google.common.collect.Sets;
 import com.google.common.flogger.GoogleLogger;
 import com.google.devtools.build.lib.actions.BuildFailedException;
@@ -369,8 +371,10 @@ public class BuildTool {
                     BuildEventIdUtil.structuredCommandlineId(
                         CommandLineEvent.CanonicalCommandLineEvent.LABEL)));
       }
-      buildOptions = runtime.createBuildOptions(optionsParser);
-      buildOptions = addPlatformFlags(request, buildOptions);
+      BuildOptions optionsWithoutPlatformFlags = runtime.createBuildOptions(optionsParser);
+      buildOptions = addPlatformFlags(request, optionsWithoutPlatformFlags);
+      ImmutableMap<Label, BuildOptions> topLevelTargetOptions =
+          getHostPlatformTopLevelTargetOptions(request, optionsWithoutPlatformFlags);
 
       if (request.needsInstrumentationFilter()) {
         applyHeuristicInstrumentationFilter(buildOptions, targetPatternPhaseValue);
@@ -395,6 +399,7 @@ public class BuildTool {
             result,
             targetPatternPhaseValue,
             buildOptions,
+            topLevelTargetOptions,
             analysisCachingDeps,
             analysisCacheReaderDeps);
       } else {
@@ -403,6 +408,7 @@ public class BuildTool {
             result,
             targetPatternPhaseValue,
             buildOptions,
+            topLevelTargetOptions,
             analysisCachingDeps,
             analysisCacheReaderDeps);
       }
@@ -516,6 +522,27 @@ public class BuildTool {
     return originalOptions;
   }
 
+  /**
+   * Returns the options of the top-level targets that {@link
+   * BuildRequest#getHostPlatformTopLevelTargets} requests to be configured for the host platform.
+   *
+   * <p>The platform-based flags of the target platform don't apply to these targets, but those of
+   * the host platform do.
+   */
+  private ImmutableMap<Label, BuildOptions> getHostPlatformTopLevelTargetOptions(
+      BuildRequest request, BuildOptions optionsWithoutPlatformFlags)
+      throws InterruptedException, RepositoryMappingResolutionException {
+    if (request.getHostPlatformTopLevelTargets().isEmpty()) {
+      return ImmutableMap.of();
+    }
+    BuildOptions hostPlatformOptions = optionsWithoutPlatformFlags.clone();
+    PlatformOptions platformOptions = hostPlatformOptions.get(PlatformOptions.class);
+    platformOptions.setPlatforms(ImmutableList.of(platformOptions.getHostPlatform()));
+    BuildOptions hostPlatformOptionsWithFlags = addPlatformFlags(request, hostPlatformOptions);
+    return Maps.toMap(
+        request.getHostPlatformTopLevelTargets(), label -> hostPlatformOptionsWithFlags);
+  }
+
   private static TargetPatternPhaseValue evaluateTargetPatterns(
       ExtendedEventHandler reporter,
       SkyframeExecutor skyframeExecutor,
@@ -575,6 +602,7 @@ public class BuildTool {
       BuildResult result,
       TargetPatternPhaseValue targetPatternPhaseValue,
       BuildOptions buildOptions,
+      ImmutableMap<Label, BuildOptions> topLevelTargetOptions,
       RemoteAnalysisCachingDependenciesProvider remoteAnalysisCachingDeps,
       RemoteAnalysisCacheReaderDepsProvider remoteAnalysisCacheReaderDeps)
       throws BuildFailedException,
@@ -592,6 +620,7 @@ public class BuildTool {
             request,
             targetPatternPhaseValue,
             buildOptions,
+            topLevelTargetOptions,
             remoteAnalysisCachingDeps,
             remoteAnalysisCacheReaderDeps);
     ExecutionTool executionTool = null;
@@ -680,6 +709,7 @@ public class BuildTool {
       BuildResult result,
       TargetPatternPhaseValue targetPatternPhaseValue,
       BuildOptions buildOptions,
+      ImmutableMap<Label, BuildOptions> topLevelTargetOptions,
       RemoteAnalysisCachingDependenciesProvider remoteAnalysisCachingDependenciesProvider,
       RemoteAnalysisCacheReaderDepsProvider remoteAnalysisCacheReaderDeps)
       throws InterruptedException,
@@ -707,6 +737,7 @@ public class BuildTool {
               env,
               request,
               buildOptions,
+              topLevelTargetOptions,
               targetPatternPhaseValue,
               () -> executionTool.prepareForExecution(executionTimer),
               result::setBuildConfiguration,

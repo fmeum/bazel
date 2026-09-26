@@ -23,6 +23,7 @@ import com.google.common.base.Preconditions;
 import com.google.common.base.Strings;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
+import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.ImmutableSortedMap;
 import com.google.common.collect.ImmutableSortedSet;
 import com.google.common.collect.Iterables;
@@ -54,6 +55,7 @@ import com.google.devtools.build.lib.buildtool.BuildTool;
 import com.google.devtools.build.lib.buildtool.PathPrettyPrinter;
 import com.google.devtools.build.lib.buildtool.buildevent.ExecRequestEvent;
 import com.google.devtools.build.lib.buildtool.buildevent.RunBuildCompleteEvent;
+import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.events.Event;
 import com.google.devtools.build.lib.events.Reporter;
 import com.google.devtools.build.lib.exec.ExecutionOptions;
@@ -93,6 +95,7 @@ import com.google.devtools.build.lib.vfs.PathFragment;
 import com.google.devtools.common.options.Option;
 import com.google.devtools.common.options.OptionDocumentationCategory;
 import com.google.devtools.common.options.OptionEffectTag;
+import com.google.devtools.common.options.OptionMetadataTag;
 import com.google.devtools.common.options.OptionsBase;
 import com.google.devtools.common.options.OptionsClass;
 import com.google.devtools.common.options.OptionsParser;
@@ -205,6 +208,23 @@ public class RunCommand implements BlazeCommand {
                 + " arguments passed to the target. If set to false, the output will contain the"
                 + " arguments passed to the target.")
     public abstract boolean getRunOmitRunArgs();
+
+    @Option(
+        name = "incompatible_bazel_run_host_run_under",
+        defaultValue = "false",
+        documentationCategory = OptionDocumentationCategory.TOOLCHAIN,
+        effectTags = {OptionEffectTag.AFFECTS_OUTPUTS, OptionEffectTag.LOADING_AND_ANALYSIS},
+        metadataTags = {OptionMetadataTag.INCOMPATIBLE_CHANGE},
+        help =
+            """
+            If enabled, `bazel run --run_under=//:runner` builds `//:runner` for the host
+            platform (`--host_platform`). If disabled, it builds `//:runner` for the target
+            platform (`--platforms`). `bazel run` executes the `--run_under` target on the
+            machine Bazel runs on, so the former is more correct when cross-compiling. This
+            doesn't affect test targets, whose `--run_under` target is configured according
+            to `--incompatible_bazel_test_exec_run_under`.
+            """)
+    public abstract boolean getBazelRunHostRunUnder();
   }
 
   private static final String NO_TARGET_MESSAGE = "No targets found to run";
@@ -404,6 +424,11 @@ public class RunCommand implements BlazeCommand {
         runUnder instanceof LabelRunUnder runUnderLabel
             ? ImmutableList.of(targetString, runUnderLabel.label().toString())
             : ImmutableList.of(targetString);
+    ImmutableSet<Label> hostPlatformTopLevelTargets =
+        runUnder instanceof LabelRunUnder runUnderLabel
+                && options.getOptions(RunOptions.class).getBazelRunHostRunUnder()
+            ? ImmutableSet.of(runUnderLabel.label())
+            : ImmutableSet.of();
     BuildRequest request =
         BuildRequest.builder()
             .setCommandName(RunCommand.class.getAnnotation(Command.class).name())
@@ -412,6 +437,7 @@ public class RunCommand implements BlazeCommand {
             .setStartupOptions(env.getRuntime().getStartupOptionsProvider())
             .setOutErr(env.getReporter().getOutErr())
             .setTargets(targetsToBuild)
+            .setHostPlatformTopLevelTargets(hostPlatformTopLevelTargets)
             .setStartTimeMillis(env.getCommandStartTime())
             .build();
 

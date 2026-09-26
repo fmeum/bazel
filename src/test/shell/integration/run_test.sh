@@ -716,6 +716,87 @@ EOF
   expect_not_log "goodbye"
 }
 
+function test_run_under_label_host_platform() {
+  add_rules_shell "MODULE.bazel"
+  local -r pkg="pkg${LINENO}"
+  mkdir -p "${pkg}"
+  cat > "$pkg/BUILD" <<'EOF'
+load("@rules_shell//shell:sh_binary.bzl", "sh_binary")
+
+constraint_setting(name = "flavor")
+
+constraint_value(
+    name = "host_flavor",
+    constraint_setting = ":flavor",
+)
+
+constraint_value(
+    name = "target_flavor",
+    constraint_setting = ":flavor",
+)
+
+platform(
+    name = "host_platform",
+    constraint_values = [":host_flavor"],
+    parents = ["@bazel_tools//tools:host_platform"],
+)
+
+platform(
+    name = "target_platform",
+    constraint_values = [":target_flavor"],
+    parents = ["@bazel_tools//tools:host_platform"],
+)
+
+config_setting(
+    name = "is_host",
+    constraint_values = [":host_flavor"],
+)
+
+sh_binary(
+    name = "runner",
+    srcs = select({
+        ":is_host": ["host_runner.sh"],
+        "//conditions:default": ["target_runner.sh"],
+    }),
+)
+
+sh_binary(
+    name = "farewell",
+    srcs = ["farewell.sh"],
+)
+EOF
+  for platform in host target; do
+    cat > "$pkg/${platform}_runner.sh" <<EOF
+#!/bin/sh
+echo "runner built for the ${platform} platform"
+exec "\$@"
+EOF
+    chmod +x "$pkg/${platform}_runner.sh"
+  done
+  cat > "$pkg/farewell.sh" <<'EOF'
+#!/bin/sh
+echo "goodbye"
+EOF
+  chmod +x "$pkg/farewell.sh"
+
+  local -r platform_flags=(
+    "--host_platform=//$pkg:host_platform"
+    "--platforms=//$pkg:target_platform"
+  )
+
+  bazel run "${platform_flags[@]}" --run_under="//$pkg:runner" \
+      --noincompatible_bazel_run_host_run_under "//$pkg:farewell" >$TEST_log \
+      || fail "expected run to succeed"
+  expect_log "runner built for the target platform"
+  expect_log "goodbye"
+
+  bazel run "${platform_flags[@]}" --run_under="//$pkg:runner" \
+      --incompatible_bazel_run_host_run_under "//$pkg:farewell" >$TEST_log \
+      || fail "expected run to succeed"
+  expect_log "runner built for the host platform"
+  expect_log "goodbye"
+}
+
 function test_run_under_command_change_preserves_cache() {
   if is_windows; then
     echo "This test requires --run_under to be able to run echo."

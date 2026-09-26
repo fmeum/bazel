@@ -239,6 +239,7 @@ public class BuildViewForTesting {
         explicitTargetPatterns,
         aspects,
         aspectsParameters,
+        /* topLevelTargetOptions= */ ImmutableMap.of(),
         viewOptions,
         keepGoing,
         /* skipIncompatibleExplicitTargets= */ false,

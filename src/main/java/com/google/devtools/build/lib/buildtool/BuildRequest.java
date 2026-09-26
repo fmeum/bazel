@@ -21,11 +21,13 @@ import com.google.common.base.Optional;
 import com.google.common.base.Preconditions;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
+import com.google.common.collect.ImmutableSet;
 import com.google.devtools.build.lib.analysis.AnalysisOptions;
 import com.google.devtools.build.lib.analysis.AspectCollection;
 import com.google.devtools.build.lib.analysis.OutputGroupInfo;
 import com.google.devtools.build.lib.analysis.TopLevelArtifactContext;
 import com.google.devtools.build.lib.analysis.ViewCreationFailedException;
+import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.exec.ExecutionOptions;
 import com.google.devtools.build.lib.packages.semantics.BuildLanguageOptions;
 import com.google.devtools.build.lib.pkgcache.LoadingOptions;
@@ -84,6 +86,7 @@ public class BuildRequest implements OptionsProvider {
     private boolean runTests;
     private boolean checkForActionConflicts = true;
     private boolean reportIncompatibleTargets = true;
+    private ImmutableSet<Label> hostPlatformTopLevelTargets = ImmutableSet.of();
 
     private Builder() {}
 
@@ -162,6 +165,16 @@ public class BuildRequest implements OptionsProvider {
       return this;
     }
 
+    /**
+     * Sets the labels of top-level targets to configure for the host platform (as given by {@code
+     * --host_platform}) instead of the target platform.
+     */
+    @CanIgnoreReturnValue
+    public Builder setHostPlatformTopLevelTargets(ImmutableSet<Label> hostPlatformTopLevelTargets) {
+      this.hostPlatformTopLevelTargets = hostPlatformTopLevelTargets;
+      return this;
+    }
+
     public BuildRequest build() {
       return new BuildRequest(
           commandName,
@@ -174,7 +187,8 @@ public class BuildRequest implements OptionsProvider {
           needsInstrumentationFilter,
           runTests,
           checkForActionConflicts,
-          reportIncompatibleTargets);
+          reportIncompatibleTargets,
+          hostPlatformTopLevelTargets);
     }
   }
 
@@ -201,6 +215,7 @@ public class BuildRequest implements OptionsProvider {
   private final boolean runTests;
   private final boolean checkForActionConflicts;
   private final boolean reportIncompatibleTargets;
+  private final ImmutableSet<Label> hostPlatformTopLevelTargets;
   private final ImmutableMap<String, String> userOptions;
 
   private BuildRequest(
@@ -214,7 +229,8 @@ public class BuildRequest implements OptionsProvider {
       boolean needsInstrumentationFilter,
       boolean runTests,
       boolean checkForActionConflicts,
-      boolean reportIncompatibleTargets) {
+      boolean reportIncompatibleTargets,
+      ImmutableSet<Label> hostPlatformTopLevelTargets) {
     this.commandName = commandName;
     this.optionsDescription = OptionsUtils.asShellEscapedString(options);
     this.outErr = outErr;
@@ -244,6 +260,7 @@ public class BuildRequest implements OptionsProvider {
     this.runTests = runTests;
     this.checkForActionConflicts = checkForActionConflicts;
     this.reportIncompatibleTargets = reportIncompatibleTargets;
+    this.hostPlatformTopLevelTargets = hostPlatformTopLevelTargets;
 
     for (Class<? extends OptionsBase> optionsClass : MANDATORY_OPTIONS) {
       Preconditions.checkNotNull(getOptions(optionsClass));
@@ -480,5 +497,13 @@ public class BuildRequest implements OptionsProvider {
 
   public boolean reportIncompatibleTargets() {
     return reportIncompatibleTargets;
+  }
+
+  /**
+   * Returns the labels of top-level targets to configure for the host platform instead of the
+   * target platform.
+   */
+  public ImmutableSet<Label> getHostPlatformTopLevelTargets() {
+    return hostPlatformTopLevelTargets;
   }
 }

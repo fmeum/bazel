@@ -107,6 +107,7 @@ import com.google.devtools.build.lib.util.RegexFilter;
 import com.google.devtools.build.skyframe.WalkableGraph;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -114,6 +115,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Function;
 import java.util.function.Predicate;
 import java.util.stream.Collectors;
 import javax.annotation.Nullable;
@@ -227,6 +229,7 @@ public class BuildView {
       ImmutableSet<Label> explicitTargetPatterns,
       List<String> aspects,
       ImmutableMap<String, String> aspectsParameters,
+      ImmutableMap<Label, BuildOptions> topLevelTargetOptions,
       AnalysisOptions viewOptions,
       boolean keepGoing,
       boolean skipIncompatibleExplicitTargets,
@@ -378,20 +381,34 @@ public class BuildView {
                   + " (--nocheck_visibility)."));
     }
 
-    var configurationKey = topLevelConfig.getKey();
+    // Some top-level targets may request to be configured with options other than targetOptions.
+    Map<Label, BuildConfigurationValue> topLevelConfigOverrides = new HashMap<>();
+    for (Label label : labelToTargetMap.keySet()) {
+      BuildOptions options = topLevelTargetOptions.get(label);
+      if (options != null) {
+        topLevelConfigOverrides.put(
+            label, skyframeExecutor.getConfiguration(eventHandler, options, keepGoing));
+      }
+    }
+    Function<Label, BuildConfigurationValue> configurationForTopLevelTarget =
+        label -> topLevelConfigOverrides.getOrDefault(label, topLevelConfig);
     ImmutableList<ConfiguredTargetKey> topLevelCtKeys =
         labelToTargetMap.keySet().stream()
             .map(
                 label ->
                     ConfiguredTargetKey.builder()
                         .setLabel(label)
-                        .setConfigurationKey(configurationKey)
+                        .setConfiguration(configurationForTopLevelTarget.apply(label))
                         .build())
             .collect(toImmutableList());
 
     ImmutableList<TopLevelAspectsKey> aspectKeys =
         createTopLevelAspectKeys(
-            aspects, aspectsParameters, labelToTargetMap, topLevelConfig, eventHandler);
+            aspects,
+            aspectsParameters,
+            labelToTargetMap,
+            configurationForTopLevelTarget,
+            eventHandler);
 
     skyframeExecutor.setRemoteAnalysisCachingDependenciesProvider(
         remoteAnalysisCachingDependenciesProvider, remoteAnalysisCacheReaderDeps);
@@ -569,7 +586,7 @@ public class BuildView {
       List<String> aspects,
       ImmutableMap<String, String> aspectsParameters,
       ImmutableMap<Label, Target> topLevelTargets,
-      BuildConfigurationValue configuration,
+      Function<Label, BuildConfigurationValue> configurationForTopLevelTarget,
       ExtendedEventHandler eventHandler)
       throws InterruptedException, ViewCreationFailedException {
     RepositoryMapping mainRepoMapping;
@@ -657,7 +674,10 @@ public class BuildView {
         .map(
             target ->
                 AspectKeyCreator.createTopLevelAspectsKey(
-                    aspectClasses, target.getKey(), configuration, aspectsParameters))
+                    aspectClasses,
+                    target.getKey(),
+                    configurationForTopLevelTarget.apply(target.getKey()),
+                    aspectsParameters))
         .collect(toImmutableList());
   }
 

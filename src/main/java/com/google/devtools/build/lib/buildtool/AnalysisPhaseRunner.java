@@ -101,6 +101,7 @@ public final class AnalysisPhaseRunner {
       BuildRequest request,
       TargetPatternPhaseValue targetPatternPhaseValue,
       BuildOptions buildOptions,
+      ImmutableMap<Label, BuildOptions> topLevelTargetOptions,
       RemoteAnalysisCachingDependenciesProvider remoteAnalysisCachingDependenciesProvider,
       RemoteAnalysisCacheReaderDepsProvider remoteAnalysisCacheReaderDeps)
       throws BuildFailedException,
@@ -126,6 +127,7 @@ public final class AnalysisPhaseRunner {
                   request,
                   targetPatternPhaseValue,
                   buildOptions,
+                  topLevelTargetOptions,
                   remoteAnalysisCachingDependenciesProvider,
                   remoteAnalysisCacheReaderDeps);
         } finally {
@@ -357,6 +359,7 @@ public final class AnalysisPhaseRunner {
       BuildRequest request,
       TargetPatternPhaseValue loadingResult,
       BuildOptions targetOptions,
+      ImmutableMap<Label, BuildOptions> topLevelTargetOptions,
       RemoteAnalysisCachingDependenciesProvider remoteAnalysisCachingDependenciesProvider,
       RemoteAnalysisCacheReaderDepsProvider remoteAnalysisCacheReaderDeps)
       throws InterruptedException,
@@ -389,6 +392,7 @@ public final class AnalysisPhaseRunner {
               explicitTargetPatterns,
               request.getAspects(),
               request.getAspectsParameters(),
+              topLevelTargetOptions,
               request.getViewOptions(),
               request.getKeepGoing(),
               request.getViewOptions().getSkipIncompatibleExplicitTargets(),
