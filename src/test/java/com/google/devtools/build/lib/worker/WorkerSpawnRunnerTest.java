@@ -37,8 +37,8 @@ import com.google.common.collect.Iterables;
 import com.google.common.collect.Maps;
 import com.google.devtools.build.lib.actions.ActionInput;
 import com.google.devtools.build.lib.actions.ActionInputHelper;
-import com.google.devtools.build.lib.actions.ExecutionRequirements;
 import com.google.devtools.build.lib.actions.ExecutionRequirements.WorkerProtocolFormat;
+import com.google.devtools.build.lib.actions.ExecutionRequirements;
 import com.google.devtools.build.lib.actions.InputMetadataProvider;
 import com.google.devtools.build.lib.actions.PathMapper;
 import com.google.devtools.build.lib.actions.ResourceManager;
@@ -67,15 +67,17 @@ import com.google.devtools.build.lib.vfs.inmemoryfs.InMemoryFileSystem;
 import com.google.devtools.build.lib.worker.WorkerProtocol.WorkRequest;
 import com.google.devtools.build.lib.worker.WorkerProtocol.WorkResponse;
 import com.google.devtools.common.options.Options;
+import com.google.testing.junit.testparameterinjector.TestParameter;
+import com.google.testing.junit.testparameterinjector.TestParameterInjector;
 import java.io.IOException;
 import java.time.Duration;
+import java.util.HexFormat;
 import java.util.Optional;
 import java.util.concurrent.Semaphore;
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
-import org.junit.runners.JUnit4;
 import org.mockito.ArgumentCaptor;
 import org.mockito.ArgumentMatchers;
 import org.mockito.Mock;
@@ -84,7 +86,7 @@ import org.mockito.junit.MockitoRule;
 import org.mockito.stubbing.Answer;
 
 /** Unit tests for the WorkerSpawnRunner. */
-@RunWith(JUnit4.class)
+@RunWith(TestParameterInjector.class)
 public class WorkerSpawnRunnerTest {
   final FileSystem fs = new InMemoryFileSystem(DigestHashFunction.SHA256);
   @Rule public final MockitoRule mockito = MockitoJUnit.rule();
@@ -652,5 +654,22 @@ public class WorkerSpawnRunnerTest {
 
   private static String logMarker(String text) {
     return "---8<---8<--- " + text + " ---8<---8<---\n";
+  }
+
+  @Test
+  public void toHex_matchesLowercaseHexEncoding(
+      @TestParameter({
+            "00",
+            "0f",
+            "10",
+            "7f",
+            "80",
+            "ff",
+            "0123456789abcdef",
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          })
+          String hex) {
+    assertThat(WorkerSpawnRunner.toHex(HexFormat.of().parseHex(hex)).toStringUtf8())
+        .isEqualTo(hex);
   }
 }

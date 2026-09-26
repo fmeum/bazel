@@ -20,7 +20,6 @@ import static java.nio.charset.StandardCharsets.UTF_8;
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Stopwatch;
 import com.google.common.collect.ImmutableMap;
-import com.google.common.hash.HashCode;
 import com.google.devtools.build.lib.actions.ActionExecutionMetadata;
 import com.google.devtools.build.lib.actions.ActionInput;
 import com.google.devtools.build.lib.actions.Artifact;
@@ -64,11 +63,13 @@ import com.google.devtools.build.lib.vfs.PathFragment;
 import com.google.devtools.build.lib.worker.WorkerProtocol.WorkRequest;
 import com.google.devtools.build.lib.worker.WorkerProtocol.WorkResponse;
 import com.google.protobuf.ByteString;
+import com.google.protobuf.UnsafeByteOperations;
 import java.io.IOException;
 import java.io.InterruptedIOException;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -96,6 +97,8 @@ final class WorkerSpawnRunner implements SpawnRunner {
    * branch beats the other in the race.
    */
   private static final AtomicInteger requestIdCounter = new AtomicInteger(1);
+
+  private static final HexFormat HEX_FORMAT = HexFormat.of();
 
   private final Path execRoot;
   private final ExtendedEventHandler reporter;
@@ -237,6 +240,22 @@ final class WorkerSpawnRunner implements SpawnRunner {
     return builder.build();
   }
 
+  /**
+   * Returns the lowercase hex encoding of the given bytes.
+   *
+   * <p>This is called for every input of every work request, so the encoding is written directly
+   * into the array backing the returned {@link ByteString} to avoid intermediate copies.
+   */
+  @VisibleForTesting
+  static ByteString toHex(byte[] bytes) {
+    byte[] hex = new byte[2 * bytes.length];
+    for (int i = 0; i < bytes.length; i++) {
+      hex[2 * i] = (byte) HEX_FORMAT.toHighHexDigit(bytes[i]);
+      hex[2 * i + 1] = (byte) HEX_FORMAT.toLowHexDigit(bytes[i]);
+    }
+    return UnsafeByteOperations.unsafeWrap(hex);
+  }
+
   private WorkRequest createWorkRequest(
       Spawn spawn,
       SpawnExecutionContext context,
@@ -272,7 +291,7 @@ final class WorkerSpawnRunner implements SpawnRunner {
       if (digestBytes == null || digestBytes.length == 0) {
         digest = ByteString.EMPTY;
       } else {
-        digest = ByteString.copyFromUtf8(HashCode.fromBytes(digestBytes).toString());
+        digest = toHex(digestBytes);
       }
 
       requestBuilder
