@@ -56,7 +56,6 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
-import java.util.regex.Pattern;
 import javax.annotation.Nullable;
 
 /** Blaze internal profiler implementation. */
@@ -68,9 +67,11 @@ public final class TraceProfilerServiceImpl implements TraceProfilerService {
 
   private static final Duration ACTION_COUNT_BUCKET_DURATION = Duration.ofMillis(200);
 
+  // The predicates are evaluated for every VFS operation, so they must not allocate. In particular,
+  // a regex-based predicate would allocate a Matcher per call.
   private static final ImmutableMap<String, Predicate<? super String>> DEFAULT_VFS_TYPE_HEURISTICS =
       ImmutableMap.of(
-          "blaze-out", Pattern.compile("/blaze-out/").asPredicate(),
+          "blaze-out", (String path) -> path.contains("/blaze-out/"),
           "source", Predicates.<CharSequence>alwaysTrue());
 
   /**
