@@ -197,13 +197,7 @@ public class DigestUtils {
     return combineUnordered(rhs, lhs);
   }
 
-  /**
-   * Returns the lowercase hex encoding of the given bytes.
-   *
-   * <p>The encoding is written directly into the array backing the returned {@link ByteString},
-   * which avoids the intermediate copies of e.g. {@code
-   * ByteString.copyFromUtf8(HashCode.fromBytes(bytes).toString())}.
-   */
+  /** Returns the lowercase hex encoding of the given bytes. */
   public static ByteString toHexByteString(byte[] bytes) {
     byte[] hex = new byte[2 * bytes.length];
     for (int i = 0; i < bytes.length; i++) {
