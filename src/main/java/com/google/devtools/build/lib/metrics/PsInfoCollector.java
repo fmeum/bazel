@@ -18,7 +18,6 @@ import static com.google.common.collect.ImmutableSetMultimap.toImmutableSetMulti
 import static java.nio.charset.StandardCharsets.UTF_8;
 
 import com.google.common.annotations.VisibleForTesting;
-import com.google.common.base.Splitter;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.ImmutableSetMultimap;
@@ -29,7 +28,6 @@ import java.io.IOException;
 import java.io.InputStreamReader;
 import java.time.Duration;
 import java.time.Instant;
-import java.util.List;
 import java.util.Objects;
 import java.util.function.Function;
 
@@ -121,20 +119,21 @@ public class PsInfoCollector {
       // size in kilobytes.
       String output = null;
       boolean isFirst = true;
+      int[] fieldBounds = new int[6];
       while ((output = psOutput.readLine()) != null) {
         if (isFirst) {
           isFirst = false;
           continue;
         }
-        List<String> line = Splitter.on(" ").trimResults().omitEmptyStrings().splitToList(output);
-        if (line.size() != 3) {
-          logger.atWarning().log("Unexpected length of split line %s %d", output, line.size());
+        int fieldCount = findFieldBounds(output, fieldBounds);
+        if (fieldCount != 3) {
+          logger.atWarning().log("Unexpected length of split line %s %d", output, fieldCount);
           continue;
         }
 
-        long pid = Long.parseLong(line.get(0));
-        long parentPid = Long.parseLong(line.get(1));
-        int memoryInKb = Integer.parseInt(line.get(2));
+        long pid = Long.parseLong(output, fieldBounds[0], fieldBounds[1], 10);
+        long parentPid = Long.parseLong(output, fieldBounds[2], fieldBounds[3], 10);
+        int memoryInKb = Integer.parseInt(output, fieldBounds[4], fieldBounds[5], 10);
 
         psInfos.put(pid, new PsInfo(pid, parentPid, memoryInKb));
       }
@@ -144,6 +143,33 @@ public class PsInfoCollector {
 
     // In rare cases a PID might get reused while `ps` is scanning `/proc`. Avoid a crash.
     return psInfos.buildKeepingLast();
+  }
+
+  /**
+   * Stores the start and end indices of the first {@code bounds.length / 2} whitespace-separated
+   * fields of {@code line} in {@code bounds} and returns the total number of fields.
+   */
+  private static int findFieldBounds(String line, int[] bounds) {
+    int fieldCount = 0;
+    int end = 0;
+    while (true) {
+      int start = end;
+      while (start < line.length() && Character.isWhitespace(line.charAt(start))) {
+        start++;
+      }
+      if (start == line.length()) {
+        return fieldCount;
+      }
+      end = start;
+      while (end < line.length() && !Character.isWhitespace(line.charAt(end))) {
+        end++;
+      }
+      if (2 * fieldCount < bounds.length) {
+        bounds[2 * fieldCount] = start;
+        bounds[2 * fieldCount + 1] = end;
+      }
+      fieldCount++;
+    }
   }
 
   private static Process buildPsProcess() throws IOException {

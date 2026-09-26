@@ -37,17 +37,34 @@ public final class PsInfoCollectorTest {
   @Test
   public void testCollectStats_ignoreSpaces() {
     String psOutput = "    PID  \t  PPID \t  RSS\n   2 1 3216 \t\n  \t 3 1 \t 4096 \t";
-    InputStream psStream = new ByteArrayInputStream(psOutput.getBytes(UTF_8));
-    Process process = mock(Process.class);
-    when(process.getInputStream()).thenReturn(psStream);
 
-    ImmutableMap<Long, PsInfoCollector.PsInfo> pidToPsInfo =
-        PsInfoCollector.collectDataFromPsProcess(process);
+    ImmutableMap<Long, PsInfoCollector.PsInfo> pidToPsInfo = collectDataFromPsOutput(psOutput);
 
     ImmutableMap<Long, PsInfoCollector.PsInfo> expectedPidToPsInfo =
         ImmutableMap.of(
             2L, new PsInfoCollector.PsInfo(2, 1, 3216), 3L, new PsInfoCollector.PsInfo(3, 1, 4096));
     assertThat(pidToPsInfo).isEqualTo(expectedPidToPsInfo);
+  }
+
+  @Test
+  public void testCollectStats_skipsLinesWithUnexpectedFieldCount() {
+    String psOutput = "PID PPID RSS\n2 1 3216\n3 1\n4 1 4096 foo\n\n5 1 1024\n";
+
+    ImmutableMap<Long, PsInfoCollector.PsInfo> pidToPsInfo = collectDataFromPsOutput(psOutput);
+
+    ImmutableMap<Long, PsInfoCollector.PsInfo> expectedPidToPsInfo =
+        ImmutableMap.of(
+            2L, new PsInfoCollector.PsInfo(2, 1, 3216), 5L, new PsInfoCollector.PsInfo(5, 1, 1024));
+    assertThat(pidToPsInfo).isEqualTo(expectedPidToPsInfo);
+  }
+
+  @Test
+  public void testCollectStats_stopsAtInvalidNumber() {
+    String psOutput = "PID PPID RSS\n2 1 3216\n3 1 foo\n4 1 4096\n";
+
+    ImmutableMap<Long, PsInfoCollector.PsInfo> pidToPsInfo = collectDataFromPsOutput(psOutput);
+
+    assertThat(pidToPsInfo).containsExactly(2L, new PsInfoCollector.PsInfo(2, 1, 3216));
   }
 
   @Test
@@ -91,5 +108,13 @@ public final class PsInfoCollectorTest {
     ImmutableMap<Long, Integer> expectedMemoryUsageByPid =
         ImmutableMap.of(1L, 3216 + 1234 + 2345 + 3456, 2L, 4232 + 1001 + 1032, 5L, 40000);
     assertThat(resourceSnapshot.pidToMemoryInKb()).isEqualTo(expectedMemoryUsageByPid);
+  }
+
+  private static ImmutableMap<Long, PsInfoCollector.PsInfo> collectDataFromPsOutput(
+      String psOutput) {
+    InputStream psStream = new ByteArrayInputStream(psOutput.getBytes(UTF_8));
+    Process process = mock(Process.class);
+    when(process.getInputStream()).thenReturn(psStream);
+    return PsInfoCollector.collectDataFromPsProcess(process);
   }
 }
