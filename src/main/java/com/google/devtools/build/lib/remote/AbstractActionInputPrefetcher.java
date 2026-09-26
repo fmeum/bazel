@@ -456,10 +456,8 @@ public abstract class AbstractActionInputPrefetcher implements ActionInputPrefet
         return immediateVoidFuture();
       }
 
-      // Fast path for inputs that are regular files already present locally and have no symlinks
-      // to plant, which is the case for most inputs of local actions. Since canDownloadFile only
-      // returns true for them if they are the outputs of rewound actions, there is nothing to do
-      // and this avoids computing the absolute paths of all such inputs.
+      // Regular files that are already present locally and have no symlinks to plant only need to
+      // be prefetched if they are outputs of rewound actions.
       if (!metadata.isRemote()
           && metadata.getType() == FileStateType.REGULAR_FILE
           && metadata.getResolvedPath() == null
