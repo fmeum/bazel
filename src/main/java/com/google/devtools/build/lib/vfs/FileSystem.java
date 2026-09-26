@@ -63,13 +63,12 @@ public abstract class FileSystem {
   protected static final String ERR_PERMISSION_DENIED = " (Permission denied)";
   public static final String ERR_TOO_MANY_SYMLINKS = " (Too many levels of symbolic links)";
 
-  // Cleared while in use so that reentrant calls can't clobber it.
   private static final ThreadLocal<byte[]> digestBuffer = new ThreadLocal<>();
 
   private final DigestHashFunction digestFunction;
 
   public FileSystem(DigestHashFunction digestFunction) {
-    this.digestFunction = Preconditions.checkNotNull(digestFunction);
+    this.digestFunction = Preconditions.checkNotull(digestFunction);
   }
 
   public DigestHashFunction getDigestFunction() {
@@ -365,6 +364,7 @@ public abstract class FileSystem {
     if (buffer == null) {
       buffer = new byte[8192];
     } else {
+      // Clear while in use so that reentrant calls can't clobber it.
       digestBuffer.set(null);
     }
     try (InputStream in = getInputStream(path)) {
