@@ -19,8 +19,10 @@ import com.google.common.base.Preconditions;
 import com.google.common.io.CountingOutputStream;
 import com.google.devtools.build.lib.analysis.BlazeVersionInfo;
 import com.google.devtools.build.lib.skybridge.ScOnly;
+import com.google.gson.FormattingStyle;
 import com.google.gson.stream.JsonWriter;
 import java.io.BufferedOutputStream;
+import java.io.BufferedWriter;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.io.OutputStreamWriter;
@@ -68,6 +70,12 @@ class JsonTraceFileWriter implements Runnable {
   private static final TaskData POISON_PILL =
       new TaskData(
           /* threadId= */ 0, /* startTimeNanos= */ 0, /* eventType= */ null, "poison pill");
+
+  // Equivalent to JsonWriter#setIndent with the given indent, which would create and validate a
+  // new FormattingStyle on every call.
+  static final FormattingStyle INDENT_2 = FormattingStyle.PRETTY.withIndent("  ");
+  static final FormattingStyle INDENT_4 = FormattingStyle.PRETTY.withIndent("    ");
+  static final FormattingStyle NO_INDENT = FormattingStyle.COMPACT;
 
   /**
    * @param profileStartTimeNanos the monotonic clock reading that every event in the profile is
@@ -276,9 +284,13 @@ class JsonTraceFileWriter implements Runnable {
 
         try (JsonWriter writer =
             new JsonWriter(
-                // Bazel internally stores strings as raw bytes encoded in ISO_8859_1, so we use the
-                // same encoding here to also write out raw bytes.
-                new OutputStreamWriter(targetOutStream, ISO_8859_1))) {
+                // Without buffering, OutputStreamWriter allocates a CharBuffer for each of the many
+                // small writes performed by JsonWriter.
+                new BufferedWriter(
+                    // Bazel internally stores strings as raw bytes encoded in ISO_8859_1, so we use
+                    // the same encoding here to also write out raw bytes.
+                    new OutputStreamWriter(targetOutStream, ISO_8859_1),
+                    Math.min(bufferSize, 8192)))) {
           var startDate = Instant.ofEpochMilli(profileStartEpochMillis);
           writer.beginObject();
           writer.name("otherData");
@@ -332,7 +344,7 @@ class JsonTraceFileWriter implements Runnable {
             }
           }
           receivedPoisonPill = true;
-          writer.setIndent("  ");
+          writer.setFormattingStyle(INDENT_2);
           writer.endArray();
           writer.endObject();
         }
