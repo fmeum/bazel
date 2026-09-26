@@ -13,6 +13,7 @@
 // limitations under the License.
 package com.google.devtools.build.lib.buildtool;
 
+import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.eventbus.Subscribe;
 import com.google.common.flogger.GoogleLogger;
@@ -73,6 +74,7 @@ public final class AnalysisAndExecutionPhaseRunner {
       CommandEnvironment env,
       BuildRequest request,
       BuildOptions buildOptions,
+      ImmutableMap<Label, BuildOptions> topLevelTargetOptions,
       TargetPatternPhaseValue loadingResult,
       ExecutionSetup executionSetupCallback,
       BuildConfigurationsCreated buildConfigurationCreatedCallback,
@@ -104,6 +106,7 @@ public final class AnalysisAndExecutionPhaseRunner {
                 request,
                 loadingResult,
                 buildOptions,
+                topLevelTargetOptions,
                 executionSetupCallback,
                 buildConfigurationCreatedCallback,
                 buildDriverKeyTestContext,
@@ -154,6 +157,7 @@ public final class AnalysisAndExecutionPhaseRunner {
       BuildRequest request,
       TargetPatternPhaseValue loadingResult,
       BuildOptions targetOptions,
+      ImmutableMap<Label, BuildOptions> topLevelTargetOptions,
       ExecutionSetup executionSetupCallback,
       BuildConfigurationsCreated buildConfigurationCreatedCallback,
       BuildDriverKeyTestContext buildDriverKeyTestContext,
@@ -189,6 +193,7 @@ public final class AnalysisAndExecutionPhaseRunner {
             explicitTargetPatterns,
             request.getAspects(),
             request.getAspectsParameters(),
+            topLevelTargetOptions,
             request.getViewOptions(),
             request.getKeepGoing(),
             request.getViewOptions().getSkipIncompatibleExplicitTargets(),
