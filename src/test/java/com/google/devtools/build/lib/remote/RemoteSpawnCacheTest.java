@@ -155,6 +155,12 @@ public class RemoteSpawnCacheTest {
   private RemotePathResolver remotePathResolver;
 
   private static SpawnExecutionContext createSpawnExecutionContext(
+      Spawn spawn, Path execRoot, FakeActionInputFileCache fakeFileCache, FileOutErr outErr) {
+    return createSpawnExecutionContext(
+        spawn, execRoot, fakeFileCache, outErr, /* rewindingEnabled= */ false);
+  }
+
+  private static SpawnExecutionContext createSpawnExecutionContext(
       Spawn spawn,
       Path execRoot,
       FakeActionInputFileCache fakeFileCache,
@@ -363,9 +369,7 @@ public class RemoteSpawnCacheTest {
     reporter.addHandler(eventHandler);
 
     remotePathResolver = RemotePathResolver.createDefault(execRoot);
-    simplePolicy =
-        createSpawnExecutionContext(
-            simpleSpawn, execRoot, fakeFileCache, outErr, /* rewindingEnabled= */ false);
+    simplePolicy = createSpawnExecutionContext(simpleSpawn, execRoot, fakeFileCache, outErr);
 
     fakeFileCache.createScratchInput(
         Iterables.getOnlyElement(simpleSpawn.getInputFiles().flatten()), "xyz");
