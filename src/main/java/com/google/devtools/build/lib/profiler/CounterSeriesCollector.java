@@ -14,10 +14,19 @@
 package com.google.devtools.build.lib.profiler;
 
 import com.google.devtools.build.lib.skybridge.SkybridgeInterface;
+import java.time.Duration;
 import java.util.function.BiConsumer;
 
 /** Interface for collecting counter series */
 @SkybridgeInterface
 public interface CounterSeriesCollector {
   void collect(double deltaNanos, BiConsumer<CounterSeriesTask, Double> consumer);
+
+  /**
+   * Returns the minimum time between two calls to {@link #collect}. The {@code deltaNanos} passed
+   * to {@link #collect} is always the time since the previous call.
+   */
+  default Duration getMinCollectionInterval() {
+    return Duration.ZERO;
+  }
 }

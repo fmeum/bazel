@@ -22,6 +22,7 @@ import com.google.devtools.build.lib.skybridge.ScOnly;
 import com.google.errorprone.annotations.CanIgnoreReturnValue;
 import com.google.errorprone.annotations.concurrent.GuardedBy;
 import java.time.Duration;
+import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -70,6 +71,8 @@ public class ResourceCollector {
 
   /** Thread that does the collection. */
   private class Collector extends Thread {
+    private final Map<CounterSeriesCollector, Duration> lastCollectionTimes =
+        new IdentityHashMap<>();
 
     Collector() {
       super("collect-local-resources");
@@ -92,26 +95,35 @@ public class ResourceCollector {
           } catch (InterruptedException e) {
             break;
           }
-          previousElapsed = collectOnce(startTime, previousElapsed);
+          previousElapsed = collectOnce(startTime, previousElapsed, /* force= */ false);
         }
       } finally {
-        collectOnce(startTime, previousElapsed);
+        collectOnce(startTime, previousElapsed, /* force= */ true);
       }
     }
 
     @CanIgnoreReturnValue
-    private Duration collectOnce(Duration startTime, Duration previousElapsed) {
+    private Duration collectOnce(Duration startTime, Duration previousElapsed, boolean force) {
       Duration nextElapsed = stopwatch.elapsed();
-      double deltaNanos = nextElapsed.minus(previousElapsed).toNanos();
-      if (deltaNanos <= 0) {
+      if (nextElapsed.compareTo(previousElapsed) <= 0) {
         return previousElapsed;
       }
-      Duration finalPreviousElapsed = previousElapsed;
       synchronized (ResourceCollector.this) {
         for (var collector : collectors) {
+          Duration lastElapsed = lastCollectionTimes.get(collector);
+          if (lastElapsed == null) {
+            lastElapsed = previousElapsed;
+            lastCollectionTimes.put(collector, lastElapsed);
+          }
+          Duration delta = nextElapsed.minus(lastElapsed);
+          if (!force && delta.compareTo(collector.getMinCollectionInterval()) < 0) {
+            continue;
+          }
+          lastCollectionTimes.put(collector, nextElapsed);
+          Duration rangeStart = lastElapsed;
           collector.collect(
-              deltaNanos,
-              (type, value) -> addRange(type, startTime, finalPreviousElapsed, nextElapsed, value));
+              delta.toNanos(),
+              (type, value) -> addRange(type, startTime, rangeStart, nextElapsed, value));
         }
       }
       return nextElapsed;

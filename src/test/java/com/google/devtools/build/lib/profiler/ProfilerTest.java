@@ -40,6 +40,7 @@ import java.io.OutputStream;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
 import java.util.UUID;
@@ -47,6 +48,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.BiConsumer;
 import java.util.stream.Collectors;
 import org.junit.After;
 import org.junit.AfterClass;
@@ -399,6 +401,33 @@ public final class ProfilerTest {
     assertThat(collectCount.get()).isAtLeast(1);
     assertThat(events).isNotEmpty();
     assertThat(events.get(0).args()).containsKey("test_metric");
+  }
+
+  @Test
+  public void testResourceCollectorRespectsMinCollectionInterval() throws Exception {
+    List<Double> deltaNanosList = Collections.synchronizedList(new ArrayList<>());
+    CounterSeriesCollector customCollector =
+        new CounterSeriesCollector() {
+          @Override
+          public void collect(double deltaNanos, BiConsumer<CounterSeriesTask, Double> consumer) {
+            deltaNanosList.add(deltaNanos);
+          }
+
+          @Override
+          public Duration getMinCollectionInterval() {
+            return Duration.ofHours(1);
+          }
+        };
+
+    profiler.registerCounterSeriesCollector(customCollector);
+    startUnbuffered(getAllProfilerTasks());
+    // Wait for more than one COLLECT_SLEEP_INTERVAL (200ms).
+    Thread.sleep(500);
+    profiler.stop();
+
+    // The collector is only called on stop, with the time since collection started.
+    assertThat(deltaNanosList).hasSize(1);
+    assertThat(deltaNanosList.get(0)).isGreaterThan((double) Duration.ofMillis(200).toNanos());
   }
 
   @Test

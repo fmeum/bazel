@@ -38,6 +38,7 @@ import com.sun.management.OperatingSystemMXBean;
 import java.io.IOException;
 import java.lang.management.ManagementFactory;
 import java.lang.management.MemoryMXBean;
+import java.time.Duration;
 import java.util.HashMap;
 import java.util.function.BiConsumer;
 import javax.annotation.Nullable;
@@ -181,6 +182,14 @@ public class LocalResourceUsageCollectors {
     private SystemCpuUsageCollector(OperatingSystemMXBean osBean) {
       this.osBean = osBean;
       this.numProcessors = Runtime.getRuntime().availableProcessors();
+    }
+
+    @Override
+    public Duration getMinCollectionInterval() {
+      // In a container, each call reads several cgroup files. Since the returned load is averaged
+      // over the time since the previous call, sampling it more often than the profile's 1s
+      // buckets adds little.
+      return Duration.ofSeconds(1);
     }
 
     @Override
