@@ -288,6 +288,12 @@ public abstract class AbstractActionInputPrefetcher implements ActionInputPrefet
     return false;
   }
 
+  /**
+   * Returns whether the file at the given path with the given metadata should be downloaded.
+   *
+   * <p>Must only return true for regular files with local metadata if {@link #forceRefetch}
+   * returns true for them, as such files are otherwise skipped without calling this method.
+   */
   protected abstract boolean canDownloadFile(Path path, FileArtifactValue metadata)
       throws IOException;
 
@@ -295,7 +301,7 @@ public abstract class AbstractActionInputPrefetcher implements ActionInputPrefet
    * If true, then all previously acquired knowledge of the file system state of this path (e.g. the
    * existence of tree artifact directories or previously downloaded files) must be discarded.
    */
-  protected boolean forceRefetch(Path path) {
+  protected final boolean forceRefetch(Path path) {
     // Caches for download operations and output directory creation need to be disregarded for the
     // outputs of rewound actions as they may have been deleted after they were first created.
     // Compare as fragments since execRoot may be located on a file system overlaying the host file
@@ -444,16 +450,28 @@ public abstract class AbstractActionInputPrefetcher implements ActionInputPrefet
         return immediateVoidFuture();
       }
 
-      Path inputPath =
-          input instanceof Artifact artifact
-              ? artifact.getPath()
-              : execRoot.getRelative(input.getExecPath());
-
       // Metadata may legitimately be missing, e.g. if this is an optional test output.
       FileArtifactValue metadata = metadataSupplier.getMetadata(input);
       if (metadata == null) {
         return immediateVoidFuture();
       }
+
+      // Fast path for inputs that are regular files already present locally and have no symlinks
+      // to plant, which is the case for most inputs of local actions. Since canDownloadFile only
+      // returns true for them if they are the outputs of rewound actions, there is nothing to do
+      // and this avoids computing the absolute paths of all such inputs.
+      if (!metadata.isRemote()
+          && metadata.getType() == FileStateType.REGULAR_FILE
+          && metadata.getResolvedPath() == null
+          && !(input instanceof TreeFileArtifact)
+          && rewoundActionOutputs.isEmpty()) {
+        return immediateVoidFuture();
+      }
+
+      Path inputPath =
+          input instanceof Artifact artifact
+              ? artifact.getPath()
+              : execRoot.getRelative(input.getExecPath());
 
       if (metadata.getType() == FileStateType.DIRECTORY) {
         // Tree artifacts have already been expanded into their children, so this is a source
