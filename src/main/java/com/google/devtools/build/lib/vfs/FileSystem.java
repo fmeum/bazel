@@ -68,7 +68,7 @@ public abstract class FileSystem {
   private final DigestHashFunction digestFunction;
 
   public FileSystem(DigestHashFunction digestFunction) {
-    this.digestFunction = Preconditions.checkNotull(digestFunction);
+    this.digestFunction = Preconditions.checkNotNull(digestFunction);
   }
 
   public DigestHashFunction getDigestFunction() {
