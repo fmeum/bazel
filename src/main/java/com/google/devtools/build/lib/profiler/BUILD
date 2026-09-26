@@ -191,7 +191,7 @@ java_library(
         "//src/main/java/com/google/devtools/build/lib/jni",
         "//src/main/java/com/google/devtools/build/lib/skybridge:sc_only",
         "//src/main/java/com/google/devtools/build/lib/util:os",
-        "//third_party/java/guava:base",
+        "//third_party/java/guava:annotations",
     ],
 )
 

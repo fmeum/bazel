@@ -15,7 +15,7 @@ package com.google.devtools.build.lib.profiler;
 
 import static java.nio.charset.StandardCharsets.UTF_8;
 
-import com.google.common.base.Splitter;
+import com.google.common.annotations.VisibleForTesting;
 import com.google.devtools.build.lib.jni.JniLoader;
 import com.google.devtools.build.lib.profiler.SystemNetworkStatsService.NetIoCounter;
 import com.google.devtools.build.lib.skybridge.ScOnly;
@@ -24,14 +24,11 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Paths;
 import java.util.HashMap;
-import java.util.List;
 import java.util.Map;
 
 /** Utility class for query system network stats. */
 @ScOnly
 public class SystemNetworkStatsServiceImpl implements SystemNetworkStatsService {
-  private static final Splitter SPLITTER = Splitter.on(" ").omitEmptyStrings().trimResults();
-
   static {
     JniLoader.loadJni();
   }
@@ -49,28 +46,56 @@ public class SystemNetworkStatsServiceImpl implements SystemNetworkStatsService 
   }
   private static void getNetIoCountersLinux(Map<String, NetIoCounter> countersMap)
       throws IOException {
-    List<String> lines = Files.readAllLines(Paths.get("/proc/net/dev"), UTF_8);
+    parseProcNetDev(Files.readString(Paths.get("/proc/net/dev"), UTF_8), countersMap);
+  }
 
-    // skip table header (first 2 lines)
-    for (String line : lines.subList(2, lines.size())) {
-      int colonAt = line.indexOf(':');
-      if (colonAt < 0) {
-        continue;
+  @VisibleForTesting
+  static void parseProcNetDev(String content, Map<String, NetIoCounter> countersMap) {
+    // Skip the table header (first 2 lines).
+    int lineStart = 0;
+    for (int i = 0; i < 2 && lineStart < content.length(); i++) {
+      int lineEnd = content.indexOf('\n', lineStart);
+      lineStart = lineEnd < 0 ? content.length() : lineEnd + 1;
+    }
+    long[] fields = new long[10];
+    while (lineStart < content.length()) {
+      int lineEnd = content.indexOf('\n', lineStart);
+      if (lineEnd < 0) {
+        lineEnd = content.length();
       }
-      String name = line.substring(0, colonAt).strip();
-      long[] fields =
-          SPLITTER
-              .splitToStream(line.substring(colonAt + 1))
-              .mapToLong(Long::parseUnsignedLong)
-              .toArray();
-      if (fields.length > 9) {
-        long bytesRecv = fields[0];
-        long packetsRecv = fields[1];
-        long bytesSent = fields[8];
-        long packetsSent = fields[9];
-        countersMap.put(
-            name, NetIoCounterImpl.create(bytesSent, bytesRecv, packetsSent, packetsRecv));
+      int colonAt = content.indexOf(':', lineStart);
+      if (colonAt >= 0 && colonAt < lineEnd) {
+        int fieldCount = 0;
+        int fieldStart = colonAt + 1;
+        while (true) {
+          while (fieldStart < lineEnd && Character.isWhitespace(content.charAt(fieldStart))) {
+            fieldStart++;
+          }
+          if (fieldStart == lineEnd) {
+            break;
+          }
+          int fieldEnd = fieldStart;
+          while (fieldEnd < lineEnd && !Character.isWhitespace(content.charAt(fieldEnd))) {
+            fieldEnd++;
+          }
+          long value = Long.parseUnsignedLong(content, fieldStart, fieldEnd, 10);
+          if (fieldCount < fields.length) {
+            fields[fieldCount] = value;
+          }
+          fieldCount++;
+          fieldStart = fieldEnd;
+        }
+        if (fieldCount > 9) {
+          long bytesRecv = fields[0];
+          long packetsRecv = fields[1];
+          long bytesSent = fields[8];
+          long packetsSent = fields[9];
+          countersMap.put(
+              content.substring(lineStart, colonAt).strip(),
+              NetIoCounterImpl.create(bytesSent, bytesRecv, packetsSent, packetsRecv));
+        }
       }
+      lineStart = lineEnd + 1;
     }
   }
 
