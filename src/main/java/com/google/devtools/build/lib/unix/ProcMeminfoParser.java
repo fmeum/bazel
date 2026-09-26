@@ -28,8 +28,6 @@ public class ProcMeminfoParser {
 
   public static final String FILE = "/proc/meminfo";
 
-  // The raw contents of the file, which are only parsed on lookup: this class is instantiated
-  // frequently (e.g. by the profiler) and callers only look up a few keywords.
   private final byte[] content;
   private final int length;
 
