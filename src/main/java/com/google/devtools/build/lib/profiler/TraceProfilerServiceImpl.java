@@ -67,8 +67,6 @@ public final class TraceProfilerServiceImpl implements TraceProfilerService {
 
   private static final Duration ACTION_COUNT_BUCKET_DURATION = Duration.ofMillis(200);
 
-  // The predicates are evaluated for every VFS operation, so they must not allocate. In particular,
-  // a regex-based predicate would allocate a Matcher per call.
   private static final ImmutableMap<String, Predicate<? super String>> DEFAULT_VFS_TYPE_HEURISTICS =
       ImmutableMap.of(
           "blaze-out", (String path) -> path.contains("/blaze-out/"),
