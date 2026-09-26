@@ -471,9 +471,17 @@ public final class SandboxHelpers {
       Iterable<PathFragment> inputFiles,
       SandboxOutputs outputs) {
     // Add all worker files, input files, and the parent directories.
+    PathFragment lastParent = null;
+    int lastParentSegmentCount = 0;
     for (PathFragment input : inputFiles) {
       inputsToCreate.add(input);
-      dirsToCreate.add(input.getParentDirectory());
+      if (lastParent == null
+          || !input.startsWith(lastParent)
+          || input.segmentCount() != lastParentSegmentCount + 1) {
+        lastParent = input.getParentDirectory();
+        lastParentSegmentCount = lastParent == null ? 0 : lastParent.segmentCount();
+        dirsToCreate.add(lastParent);
+      }
     }
 
     // And all parent directories of output files. Note that we don't add the files themselves --

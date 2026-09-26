@@ -73,6 +73,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
+import java.util.stream.Stream;
 import javax.annotation.Nullable;
 import org.junit.After;
 import org.junit.Before;
@@ -434,6 +435,24 @@ public class SandboxHelpersTest {
 
     assertThat(emptyFile.exists()).isEqualTo(keepEmptyInput);
     assertThat(inputsToCreate).isEmpty();
+  }
+
+  @Test
+  public void populateInputsAndDirsToCreate_addsParentOfEveryInput() {
+    List<PathFragment> inputs =
+        Stream.of("a/b/c", "a/b/d", "a/bc/e", "a/b/f", "x", "y", "a/b", "a/b/c/d", "a/b/g")
+            .map(PathFragment::create)
+            .toList();
+    Set<PathFragment> inputsToCreate = new LinkedHashSet<>();
+    Set<PathFragment> dirsToCreate = new LinkedHashSet<>();
+
+    SandboxHelpers.populateInputsAndDirsToCreate(
+        ImmutableSet.of(), inputsToCreate, dirsToCreate, inputs, SandboxOutputs.getEmptyInstance());
+
+    assertThat(inputsToCreate).containsExactlyElementsIn(inputs);
+    assertThat(dirsToCreate)
+        .containsExactlyElementsIn(
+            inputs.stream().map(PathFragment::getParentDirectory).distinct().toList());
   }
 
   @Test
