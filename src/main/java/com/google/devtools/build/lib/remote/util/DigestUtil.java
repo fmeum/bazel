@@ -177,9 +177,7 @@ public class DigestUtil {
     return hashFn.getHashFunction().hashBytes(data).asBytes();
   }
 
-  /**
-   * Builds a {@link Digest} from a binary hash.
-   */
+  /** Builds a {@link Digest} from a binary hash. */
   public static Digest buildDigest(byte[] hash, long size) {
     Preconditions.checkArgument(hash.length > 0, "A hash must contain at least 1 byte.");
     return Digest.newBuilder()
