@@ -36,13 +36,11 @@ import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.build.lib.vfs.XattrProvider;
 import com.google.protobuf.ByteString;
 import com.google.protobuf.Message;
-import com.google.protobuf.UnsafeByteOperations;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.nio.ByteBuffer;
 import java.util.Arrays;
 import java.util.Comparator;
-import java.util.HexFormat;
 import java.util.List;
 
 /** Utility methods to work with {@link Digest}. */
@@ -50,8 +48,6 @@ public class DigestUtil {
   public static final Comparator<Digest> DIGEST_COMPARATOR =
       comparing(Digest::getHashBytes, ByteString.unsignedLexicographicalComparator())
           .thenComparingLong(Digest::getSizeBytes);
-
-  private static final HexFormat HEX_FORMAT = HexFormat.of();
 
   private final XattrProvider xattrProvider;
   private final DigestHashFunction hashFn;
@@ -186,13 +182,8 @@ public class DigestUtil {
    */
   public static Digest buildDigest(byte[] hash, long size) {
     Preconditions.checkArgument(hash.length > 0, "A hash must contain at least 1 byte.");
-    byte[] hex = new byte[2 * hash.length];
-    for (int i = 0; i < hash.length; i++) {
-      hex[2 * i] = (byte) HEX_FORMAT.toHighHexDigit(hash[i]);
-      hex[2 * i + 1] = (byte) HEX_FORMAT.toLowHexDigit(hash[i]);
-    }
     return Digest.newBuilder()
-        .setHashBytes(UnsafeByteOperations.unsafeWrap(hex))
+        .setHashBytes(DigestUtils.toHexByteString(hash))
         .setSizeBytes(size)
         .build();
   }
