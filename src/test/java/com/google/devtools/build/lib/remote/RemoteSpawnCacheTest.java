@@ -88,7 +88,6 @@ import com.google.devtools.build.lib.remote.CombinedCache.CachedActionResult;
 import com.google.devtools.build.lib.remote.RemoteExecutionService.RemoteActionResult;
 import com.google.devtools.build.lib.remote.common.ActionKey;
 import com.google.devtools.build.lib.remote.common.CacheNotFoundException;
-import com.google.devtools.build.lib.remote.common.LostInputsEvent;
 import com.google.devtools.build.lib.remote.common.RemoteActionExecutionContext;
 import com.google.devtools.build.lib.remote.common.RemoteActionExecutionContext.CachePolicy;
 import com.google.devtools.build.lib.remote.common.RemoteCacheClient;
@@ -313,8 +312,7 @@ public class RemoteSpawnCacheTest {
 
   private RemoteSpawnCache remoteSpawnCacheWithOptions(
       RemoteOptions options, ExecutionOptions executionOptions) {
-    return remoteSpawnCacheWithOptions(
-        options, executionOptions, mock(OutputService.class), Sets.newConcurrentHashSet());
+    return remoteSpawnCacheWithOptions(options, executionOptions, mock(OutputService.class));
   }
 
   private RemoteSpawnCache remoteSpawnCacheWithRewinding(
@@ -322,15 +320,11 @@ public class RemoteSpawnCacheTest {
     return remoteSpawnCacheWithOptions(
         options,
         Options.getDefaults(ExecutionOptions.class),
-        remoteOutputServiceWith(rewoundActionSynchronizer),
-        Sets.newConcurrentHashSet());
+        remoteOutputServiceWith(rewoundActionSynchronizer));
   }
 
   private RemoteSpawnCache remoteSpawnCacheWithOptions(
-      RemoteOptions options,
-      ExecutionOptions executionOptions,
-      OutputService outputService,
-      Set<Digest> knownMissingCasDigests) {
+      RemoteOptions options, ExecutionOptions executionOptions, OutputService outputService) {
     RemoteExecutionService service =
         spy(
             new RemoteExecutionService(
@@ -350,7 +344,7 @@ public class RemoteSpawnCacheTest {
                 /* captureCorruptedOutputsDir= */ null,
                 DUMMY_REMOTE_OUTPUT_CHECKER,
                 outputService,
-                knownMissingCasDigests));
+                Sets.newConcurrentHashSet()));
     return new RemoteSpawnCache(options, /* verboseFailures= */ true, service, digestUtil);
   }
 
@@ -768,32 +762,6 @@ public class RemoteSpawnCacheTest {
     RemoteActionExecutionContext context = getActionResultLookupContext();
     assertThat(context.shouldCheckDiskCacheActionResultIntegrity()).isFalse();
     assertThat(context.getReadCachePolicy()).isEqualTo(CachePolicy.ANY_CACHE);
-  }
-
-  @Test
-  public void lostInputs_onlyTrackedWithoutRewinding() {
-    Digest lostDigest = digestUtil.computeAsUtf8("lost");
-    var event = new LostInputsEvent(ImmutableSet.of(DigestUtil.toString(lostDigest)));
-    Set<Digest> knownMissingWithoutRewinding = Sets.newConcurrentHashSet();
-    Set<Digest> knownMissingWithRewinding = Sets.newConcurrentHashSet();
-
-    remoteSpawnCacheWithOptions(
-            Options.getDefaults(RemoteOptions.class),
-            Options.getDefaults(ExecutionOptions.class),
-            mock(OutputService.class),
-            knownMissingWithoutRewinding)
-        .getRemoteExecutionService()
-        .onLostInputs(event);
-    remoteSpawnCacheWithOptions(
-            Options.getDefaults(RemoteOptions.class),
-            Options.getDefaults(ExecutionOptions.class),
-            remoteOutputServiceWith(newRewoundActionSynchronizer()),
-            knownMissingWithRewinding)
-        .getRemoteExecutionService()
-        .onLostInputs(event);
-
-    assertThat(knownMissingWithoutRewinding).containsExactly(lostDigest);
-    assertThat(knownMissingWithRewinding).isEmpty();
   }
 
   @Test

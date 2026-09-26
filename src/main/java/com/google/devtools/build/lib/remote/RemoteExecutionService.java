@@ -815,8 +815,8 @@ public class RemoteExecutionService {
 
     // We only add digests to `knownMissingCasDigests` when LostInputsEvent occurs which will cause
     // the build to abort and rewind, so there is no data race here. This allows us to avoid the
-    // check until cache eviction happens. With action rewinding, lost blobs are handled above
-    // instead (see also onLostInputs).
+    // check until cache eviction happens. LostInputsEvent is only posted without action rewinding,
+    // which handles lost blobs above instead.
     if (getRewoundActionSynchronizer() == null && !knownMissingCasDigests.isEmpty()) {
       var metadata =
           result.getOrParseActionResultMetadata(
@@ -2174,14 +2174,6 @@ public class RemoteExecutionService {
 
   @Subscribe
   public void onLostInputs(LostInputsEvent event) {
-    if (getRewoundActionSynchronizer() != null) {
-      // With action rewinding, cached results of rewound actions, which are the ones that need to
-      // recover lost blobs, are handled based on how often they have been rewound (see
-      // acceptsRemoteCachedResult). knownMissingCasDigests is only needed for invocation retries
-      // and for action rewinding without RemoteRewoundActionSynchronizer, e.g. with
-      // BazelOutputService.
-      return;
-    }
     for (String digest : event.missingDigests()) {
       knownMissingCasDigests.add(DigestUtil.fromString(digest));
     }
