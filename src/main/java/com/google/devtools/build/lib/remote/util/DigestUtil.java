@@ -183,11 +183,6 @@ public class DigestUtil {
 
   /**
    * Builds a {@link Digest} from a binary hash.
-   *
-   * <p>The hex encoding of the hash is stored as bytes rather than a {@link String}. This avoids
-   * intermediate copies and, since the hash is a {@code string} field, encoding it as UTF-8 every
-   * time the digest is serialized, which happens frequently when computing Merkle trees. The
-   * {@link String} is created lazily by {@link Digest#getHash()}.
    */
   public static Digest buildDigest(byte[] hash, long size) {
     Preconditions.checkArgument(hash.length > 0, "A hash must contain at least 1 byte.");
