@@ -39,6 +39,7 @@ import com.google.protobuf.Message;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.nio.ByteBuffer;
+import java.security.MessageDigest;
 import java.util.Arrays;
 import java.util.Comparator;
 import java.util.List;
@@ -52,11 +53,13 @@ public class DigestUtil {
   private final XattrProvider xattrProvider;
   private final DigestHashFunction hashFn;
   private final DigestFunction.Value digestFunction;
+  private final ThreadLocal<MessageDigest> messageDigest;
 
   public DigestUtil(XattrProvider xattrProvider, DigestHashFunction hashFn) {
     this.xattrProvider = xattrProvider;
     this.hashFn = hashFn;
     this.digestFunction = getDigestFunctionFromHashFunction(hashFn);
+    this.messageDigest = ThreadLocal.withInitial(hashFn::newMessageDigest);
   }
 
   private static final ImmutableSet<String> DIGEST_FUNCTION_NAMES =
@@ -77,7 +80,7 @@ public class DigestUtil {
   }
 
   public Digest compute(byte[] blob) {
-    return buildDigest(hashFn.getHashFunction().hashBytes(blob).toString(), blob.length);
+    return buildDigest(hash(blob), blob.length);
   }
 
   /**
@@ -174,7 +177,7 @@ public class DigestUtil {
 
   /** Returns the hash of {@code data} in binary. */
   public byte[] hash(byte[] data) {
-    return hashFn.getHashFunction().hashBytes(data).asBytes();
+    return messageDigest.get().digest(data);
   }
 
   public static Digest buildDigest(byte[] hash, long size) {
