@@ -152,10 +152,12 @@ public abstract class ConstraintCollection
    * ConstraintCollection} and {@code other} have different {@link ConstraintValueInfo values}.
    */
   public ImmutableSet<ConstraintSettingInfo> diff(ConstraintCollection other) {
+    // Settings inherited from parent collections must be included, otherwise a value that is only
+    // set on a parent (e.g. via the `parents` attribute of `platform`) is never compared.
     ImmutableSet<ConstraintSettingInfo> constraintsToCheck =
         new ImmutableSet.Builder<ConstraintSettingInfo>()
-            .addAll(this.constraintSettings())
-            .addAll(other.constraintSettings())
+            .addAll(this.allConstraintSettings())
+            .addAll(other.allConstraintSettings())
             .build();
     ImmutableSet.Builder<ConstraintSettingInfo> mismatchSettings = new ImmutableSet.Builder<>();
     for (ConstraintSettingInfo constraintSetting : constraintsToCheck) {
@@ -239,6 +241,18 @@ public abstract class ConstraintCollection
   @Override
   public Sequence<ConstraintSettingInfo> constraintSettings() {
     return StarlarkList.immutableCopyOf(constraints().keySet());
+  }
+
+  /**
+   * Returns the {@link ConstraintSettingInfo settings} set by this collection or any of its
+   * parents, without considering defaults.
+   */
+  private ImmutableSet<ConstraintSettingInfo> allConstraintSettings() {
+    ImmutableSet.Builder<ConstraintSettingInfo> settings = new ImmutableSet.Builder<>();
+    for (ConstraintCollection current = this; current != null; current = current.parent()) {
+      settings.addAll(current.constraints().keySet());
+    }
+    return settings.build();
   }
 
   @Override
