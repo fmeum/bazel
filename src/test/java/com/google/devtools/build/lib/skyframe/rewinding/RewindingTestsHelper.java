@@ -86,6 +86,7 @@ import com.google.devtools.build.lib.testutil.TestUtils;
 import com.google.devtools.build.lib.util.OS;
 import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.build.lib.vfs.PathFragment;
+import com.google.devtools.build.skyframe.InMemoryNodeEntry;
 import com.google.devtools.build.skyframe.NodeEntry.DirtyType;
 import com.google.devtools.build.skyframe.NotifyingHelper;
 import com.google.devtools.build.skyframe.NotifyingHelper.EventType;
@@ -1961,6 +1962,24 @@ public class RewindingTestsHelper {
     assertThat(executedSpawns).hasCount("Mapping foo/mapped_dir (2)", 2);
   }
 
+  /**
+   * Asserts that no action execution node was created in the graph without ever being evaluated.
+   *
+   * <p>Rewinding creates the nodes of a rewind graph that don't exist yet. A key that no SkyFunction
+   * ever requests, such as the {@link ActionLookupData} of an action template, would remain in the
+   * graph as an unevaluated node for the rest of the server's lifetime.
+   */
+  final void assertNoUnevaluatedActionNodes() {
+    for (InMemoryNodeEntry entry :
+        testCase.getSkyframeExecutor().getEvaluator().getInMemoryGraph().getAllNodeEntries()) {
+      if (entry.getKey() instanceof ActionLookupData) {
+        assertWithMessage("Unevaluated action node %s", entry.getKey())
+            .that(entry.isDone())
+            .isTrue();
+      }
+    }
+  }
+
   public final void runActionTemplateExpansionRewound_fileUnderSubtreeArtifactLost()
       throws Exception {
     testCase.addOptions("--experimental_allow_map_directory");
@@ -2030,6 +2049,7 @@ public class RewindingTestsHelper {
     assertThat(executedSpawns).hasCount("Copying file to foo/out_tree/a_subdir", 2);
     assertThat(executedSpawns).hasCount("Copying file to foo/out_tree/b_subdir", precise() ? 1 : 2);
     assertThat(executedSpawns).hasCount("Executing genrule //foo:consumer", 2);
+    assertNoUnevaluatedActionNodes();
   }
 
   /**
@@ -2172,6 +2192,7 @@ public class RewindingTestsHelper {
       assertThat(executedSpawns).hasCount("Mapping foo/mapped_dir " + child, 2);
     }
     assertThat(executedSpawns).hasCount("Executing genrule //foo:losing_consumer", 2);
+    assertNoUnevaluatedActionNodes();
   }
 
   public final void runGeneratedRunfilesRewound_allFilesLost_spawnFailed() throws Exception {
