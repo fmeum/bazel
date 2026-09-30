@@ -90,6 +90,20 @@ public final class SymlinkTreeHelper {
     SymlinkTarget get(T value) throws IOException;
   }
 
+  /**
+   * Returns whether the file system requires the targets of symlinks to regular files to exist
+   * when the symlinks are created.
+   *
+   * <p>This is the case on Windows unless {@code --windows_enable_symlinks} is set: the file
+   * system emulates symlinks to files with copies, which requires the file to be present, and would
+   * otherwise fall back to creating a junction, which can't be used to access a file.
+   */
+  public boolean requiresExistingFileTargets() {
+    return !symlinkTreeRoot
+        .getFileSystem()
+        .supportsSymbolicLinksNatively(symlinkTreeRoot.asFragment());
+  }
+
   /** Creates a symlink tree for a fileset by making VFS calls. */
   public void createFilesetSymlinks(Map<PathFragment, PathFragment> symlinkMap)
       throws ExecException {
@@ -163,7 +177,7 @@ public final class SymlinkTreeHelper {
         Directory<T> parentDir = root.walk(path.getParentDirectory());
         parentDir.addSymlink(path.getBaseName(), value);
       }
-      root.syncTreeRecursively(symlinkTreeRoot, targetFn);
+      root.syncTreeRecursively(symlinkTreeRoot, targetFn, requiresExistingFileTargets());
       createWorkspaceSubdirectory();
     } catch (IOException e) {
       throw new EnvironmentalExecException(e, Code.SYMLINK_TREE_CREATION_IO_EXCEPTION);
@@ -245,7 +259,17 @@ public final class SymlinkTreeHelper {
       return result;
     }
 
-    void syncTreeRecursively(Path at, TargetFunction<T> targetFn) throws IOException {
+    /**
+     * Makes the directory at the given path match this node.
+     *
+     * @param targetFn computes the target of a symlink from its value
+     * @param fileSymlinksAreCopies whether the file system emulates symlinks to regular files with
+     *     copies (see {@link SymlinkTreeHelper#requiresExistingFileTargets}). In this case, an
+     *     existing symlink (or junction) at the path of a file symlink is replaced rather than kept
+     *     as-is, as it may be a junction that was created while the file didn't exist yet.
+     */
+    void syncTreeRecursively(Path at, TargetFunction<T> targetFn, boolean fileSymlinksAreCopies)
+        throws IOException {
       FileStatus stat = at.statIfFound(Symlinks.FOLLOW);
       if (stat == null) {
         at.createDirectoryAndParents();
@@ -277,8 +301,12 @@ public final class SymlinkTreeHelper {
           } else {
             SymlinkTarget target = targetFn.get(value);
             // ensureSymbolicLink will replace a symlink that doesn't have the correct target, but
-            // everything else needs to be deleted first.
-            if (dirent.getType() != Dirent.Type.SYMLINK) {
+            // everything else needs to be deleted first. If symlinks to files are emulated by
+            // copies, an existing symlink to the correct target is a junction created while the
+            // target didn't exist yet (or a symlink from a build with a different setting) and
+            // must also be replaced.
+            if (dirent.getType() != Dirent.Type.SYMLINK
+                || (fileSymlinksAreCopies && target.type() == SymlinkTargetType.FILE)) {
               next.deleteTree();
             }
             FileSystemUtils.ensureSymbolicLink(next, target.path(), target.type());
@@ -288,7 +316,7 @@ public final class SymlinkTreeHelper {
           if (dirent.getType() != Dirent.Type.DIRECTORY) {
             next.deleteTree();
           }
-          nextDir.syncTreeRecursively(at.getChild(basename), targetFn);
+          nextDir.syncTreeRecursively(at.getChild(basename), targetFn, fileSymlinksAreCopies);
         } else {
           at.getChild(basename).deleteTree();
         }
@@ -305,7 +333,9 @@ public final class SymlinkTreeHelper {
         }
       }
       for (Map.Entry<String, Directory<T>> entry : directories.entrySet()) {
-        entry.getValue().syncTreeRecursively(at.getChild(entry.getKey()), targetFn);
+        entry
+            .getValue()
+            .syncTreeRecursively(at.getChild(entry.getKey()), targetFn, fileSymlinksAreCopies);
       }
     }
   }
