@@ -25,11 +25,13 @@ import com.google.devtools.build.lib.actions.ArtifactRoot.RootType;
 import com.google.devtools.build.lib.actions.FileArtifactValue;
 import com.google.devtools.build.lib.actions.FilesetOutputSymlink;
 import com.google.devtools.build.lib.actions.util.ActionsTestUtil;
+import com.google.devtools.build.lib.exec.SymlinkTreeHelper.SymlinkTarget;
 import com.google.devtools.build.lib.vfs.DigestHashFunction;
 import com.google.devtools.build.lib.vfs.FileSystem;
 import com.google.devtools.build.lib.vfs.FileSystemUtils;
 import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.build.lib.vfs.PathFragment;
+import com.google.devtools.build.lib.vfs.SymlinkTargetType;
 import com.google.devtools.build.lib.vfs.inmemoryfs.InMemoryFileSystem;
 import com.google.testing.junit.testparameterinjector.TestParameter;
 import com.google.testing.junit.testparameterinjector.TestParameterInjector;
@@ -138,5 +140,32 @@ public final class SymlinkTreeHelperTest {
     assertThat(treeSymlink.isSymbolicLink()).isTrue();
     assertThat(treeSymlink.readSymbolicLink()).isEqualTo(PathFragment.create("/path/to/target"));
     assertThat(treeMissing.exists()).isFalse();
+  }
+
+  @Test
+  public void getRunfilesTarget_file() throws Exception {
+    Artifact file = ActionsTestUtil.createArtifact(outputRoot, "file");
+
+    assertThat(SymlinkTreeHelper.getRunfilesTarget(file))
+        .isEqualTo(new SymlinkTarget(file.getPath().asFragment(), SymlinkTargetType.FILE));
+  }
+
+  @Test
+  public void getRunfilesTarget_treeArtifact() throws Exception {
+    Artifact tree = ActionsTestUtil.createTreeArtifactWithGeneratingAction(outputRoot, "tree");
+
+    assertThat(SymlinkTreeHelper.getRunfilesTarget(tree))
+        .isEqualTo(new SymlinkTarget(tree.getPath().asFragment(), SymlinkTargetType.DIRECTORY));
+  }
+
+  @Test
+  public void getRunfilesTarget_unresolvedSymlink() throws Exception {
+    Artifact symlink = ActionsTestUtil.createUnresolvedSymlinkArtifact(outputRoot, "symlink");
+    FileSystemUtils.ensureSymbolicLink(symlink.getPath(), "/path/to/target");
+
+    assertThat(SymlinkTreeHelper.getRunfilesTarget(symlink))
+        .isEqualTo(
+            new SymlinkTarget(
+                PathFragment.create("/path/to/target"), SymlinkTargetType.UNSPECIFIED));
   }
 }
