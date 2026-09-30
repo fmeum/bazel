@@ -331,6 +331,9 @@ tasks:
       # The `common:windows` flags in .bazelrc are meant for MSVC and would
       # break the Linux compilers used on the remote executors.
       - "--noenable_platform_specific_config"
+      # .bazelrc inherits PATH from the client into tests, which would leak the
+      # Windows PATH into the tests running on the Linux remote executors.
+      - "--test_env=PATH=/bin:/usr/bin:/usr/local/bin"
     test_targets:
       - "//scripts/..."
       - "//src/java_tools/..."
