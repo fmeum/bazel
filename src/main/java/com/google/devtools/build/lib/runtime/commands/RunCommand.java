@@ -15,6 +15,7 @@
 package com.google.devtools.build.lib.runtime.commands;
 
 import static com.google.common.collect.ImmutableList.toImmutableList;
+import static com.google.common.collect.ImmutableSet.toImmutableSet;
 import static com.google.devtools.build.lib.runtime.Command.BuildPhase.EXECUTES;
 import static java.nio.charset.StandardCharsets.ISO_8859_1;
 
@@ -23,6 +24,7 @@ import com.google.common.base.Preconditions;
 import com.google.common.base.Strings;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
+import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.ImmutableSortedMap;
 import com.google.common.collect.ImmutableSortedSet;
 import com.google.common.collect.Iterables;
@@ -55,10 +57,6 @@ import com.google.devtools.build.lib.buildtool.PathPrettyPrinter;
 import com.google.devtools.build.lib.buildtool.buildevent.ExecRequestEvent;
 import com.google.devtools.build.lib.buildtool.buildevent.RunBuildCompleteEvent;
 import com.google.devtools.build.lib.cmdline.Label;
-import com.google.devtools.build.lib.cmdline.RepositoryMapping;
-import com.google.devtools.build.lib.cmdline.RepositoryName;
-import com.google.devtools.build.lib.cmdline.TargetParsingException;
-import com.google.devtools.build.lib.cmdline.TargetPattern;
 import com.google.devtools.build.lib.events.Event;
 import com.google.devtools.build.lib.events.Reporter;
 import com.google.devtools.build.lib.exec.ExecutionOptions;
@@ -85,7 +83,6 @@ import com.google.devtools.build.lib.server.FailureDetails;
 import com.google.devtools.build.lib.server.FailureDetails.FailureDetail;
 import com.google.devtools.build.lib.server.FailureDetails.Interrupted;
 import com.google.devtools.build.lib.server.FailureDetails.RunCommand.Code;
-import com.google.devtools.build.lib.skyframe.RepositoryMappingValue.RepositoryMappingResolutionException;
 import com.google.devtools.build.lib.util.CommandDescriptionForm;
 import com.google.devtools.build.lib.util.CommandFailureUtils;
 import com.google.devtools.build.lib.util.DetailedExitCode;
@@ -407,24 +404,10 @@ public class RunCommand implements BlazeCommand {
       String targetString,
       @Nullable RunUnder runUnder)
       throws RunCommandException {
-    ImmutableList<String> targetsToBuild;
-    try {
-      // Tests already have an exec dependency on the --run_under target and can
-      // thus avoid an unnecessary build in the target configuration.
-      targetsToBuild =
-          runUnder instanceof LabelRunUnder runUnderLabel
-                  && !isTestRule(env, targetString)
-              ? ImmutableList.of(targetString, runUnderLabel.label().toString())
-              : ImmutableList.of(targetString);
-    } catch (InterruptedException e) {
-      env.getReporter().handle(Event.error("Interrupted"));
-      throw new RunCommandException(
-          BlazeCommandResult.failureDetail(
-              FailureDetail.newBuilder()
-                  .setInterrupted(Interrupted.newBuilder().setCode(Interrupted.Code.INTERRUPTED))
-                  .build()),
-          env.getRuntime().getClock().currentTimeMillis());
-    }
+    ImmutableList<String> targetsToBuild =
+        runUnder instanceof LabelRunUnder runUnderLabel
+            ? ImmutableList.of(targetString, runUnderLabel.label().toString())
+            : ImmutableList.of(targetString);
     BuildRequest request =
         BuildRequest.builder()
             .setCommandName(RunCommand.class.getAnnotation(Command.class).name())
@@ -441,8 +424,7 @@ public class RunCommand implements BlazeCommand {
             .processRequest(
                 request,
                 (Collection<Target> tgts, boolean keepGoing) ->
-                    validateTargets(
-                        env.getReporter(), request.getTargets(), tgts, runUnder, keepGoing),
+                    validateTargets(env, request.getTargets(), tgts, runUnder, keepGoing),
                 options);
     if (!buildResult.getSuccess()) {
       env.getReporter().handle(Event.error("Build failed. Not running target"));
@@ -456,43 +438,22 @@ public class RunCommand implements BlazeCommand {
     return getBuiltTargets(buildResult, env, targetString, runUnder);
   }
 
-  /**
-   * Returns true if {@code targetString} is the label of a test rule or of an alias that resolves
-   * to one.
-   */
-  private static boolean isTestRule(CommandEnvironment env, String targetString)
+  /** Returns true if {@code target} is a test rule or an alias that resolves to one. */
+  private static boolean isTestRule(CommandEnvironment env, Target target)
       throws InterruptedException {
-    if (targetString.startsWith("-")) {
-      // A negative pattern never resolves to a target.
-      return false;
-    }
-    Target target;
-    try {
-      RepositoryMapping mainRepoMapping =
-          env.getSkyframeExecutor().getMainRepoMapping(env.getReporter());
-      TargetPattern pattern =
-          new TargetPattern.Parser(
-                  env.getRelativeWorkingDirectory(), RepositoryName.MAIN, mainRepoMapping)
-              .parse(targetString);
-      if (pattern.getType() != TargetPattern.Type.SINGLE_TARGET) {
+    Set<Label> visitedAliases = new HashSet<>();
+    while (target instanceof Rule rule
+        && rule.getRuleClass().equals("alias")
+        && visitedAliases.add(rule.getLabel())) {
+      if (!(rule.getAttr("actual") instanceof Label actual)) {
+        // The actual target is chosen with select() and thus depends on the configuration.
         return false;
       }
-      target = env.getPackageManager().getTarget(env.getReporter(), pattern.getSingleTargetLabel());
-      Set<Label> visitedAliases = new HashSet<>();
-      while (target instanceof Rule rule
-          && rule.getRuleClass().equals("alias")
-          && visitedAliases.add(rule.getLabel())) {
-        if (!(rule.getAttr("actual") instanceof Label actual)) {
-          // The actual target is chosen with select() and thus depends on the configuration.
-          return false;
-        }
+      try {
         target = env.getPackageManager().getTarget(env.getReporter(), actual);
+      } catch (NoSuchPackageException | NoSuchTargetException e) {
+        return false;
       }
-    } catch (RepositoryMappingResolutionException
-        | TargetParsingException
-        | NoSuchPackageException
-        | NoSuchTargetException e) {
-      return false;
     }
     return TargetUtils.isTestRule(target);
   }
@@ -1114,13 +1075,16 @@ public class RunCommand implements BlazeCommand {
 
   // Make sure we are building exactly 1 binary target.
   // If keepGoing, we'll build all the targets even if they are non-binary.
-  private static void validateTargets(
-      Reporter reporter,
+  private static ImmutableSet<Label> validateTargets(
+      CommandEnvironment env,
       List<String> targetPatternStrings,
       Collection<Target> targets,
       RunUnder runUnder,
       boolean keepGoing)
-      throws LoadingFailedException {
+      throws LoadingFailedException, InterruptedException {
+    Reporter reporter = env.getReporter();
+    ImmutableSet<Label> allLabels =
+        targets.stream().map(Target::getLabel).collect(toImmutableSet());
     Target targetToRun = null;
     Target runUnderTarget = null;
 
@@ -1159,7 +1123,7 @@ public class RunCommand implements BlazeCommand {
               keepGoing,
               Code.TOO_MANY_TARGETS_SPECIFIED);
         }
-        return;
+        return allLabels;
       }
     }
     // Handle target & run_under referring to the same target.
@@ -1168,7 +1132,12 @@ public class RunCommand implements BlazeCommand {
     }
     if (targetToRun == null) {
       warningOrException(reporter, NO_TARGET_MESSAGE, keepGoing, Code.NO_TARGET_SPECIFIED);
+    } else if (runUnderTarget != null && isTestRule(env, targetToRun)) {
+      // Tests already depend on the --run_under target in the correct configuration, so building
+      // it as a top-level target in the target configuration would be redundant.
+      return ImmutableSet.of(targetToRun.getLabel());
     }
+    return allLabels;
   }
 
   /**

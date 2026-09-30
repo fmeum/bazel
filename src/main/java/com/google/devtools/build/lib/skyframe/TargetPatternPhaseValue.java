@@ -17,6 +17,7 @@ import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Preconditions;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
+import com.google.common.collect.Sets;
 import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.concurrent.ThreadSafety.Immutable;
 import com.google.devtools.build.lib.concurrent.ThreadSafety.ThreadSafe;
@@ -99,6 +100,22 @@ public final class TargetPatternPhaseValue implements SkyValue {
 
   public ImmutableSet<Label> getTargetLabels() {
     return targetLabels;
+  }
+
+  /** Returns a copy of this value restricted to the given subset of {@link #getTargetLabels}. */
+  public TargetPatternPhaseValue withTargetLabels(ImmutableSet<Label> labels) {
+    Preconditions.checkArgument(targetLabels.containsAll(labels), "%s not in %s", labels, this);
+    if (labels.equals(targetLabels)) {
+      return this;
+    }
+    return new TargetPatternPhaseValue(
+        labels,
+        testsToRunLabels == null
+            ? null
+            : Sets.intersection(testsToRunLabels, labels).immutableCopy(),
+        nonExpandedLabels,
+        hasError,
+        hasPostExpansionError);
   }
 
   @Nullable

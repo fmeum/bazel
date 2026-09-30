@@ -13,6 +13,8 @@
 // limitations under the License.
 package com.google.devtools.build.lib.buildtool;
 
+import com.google.common.collect.ImmutableSet;
+import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.packages.Target;
 import com.google.devtools.build.lib.pkgcache.LoadingFailedException;
 
@@ -30,8 +32,9 @@ public interface TargetValidator {
    * Implementors should print warnings for invalid targets iff keepGoing.
    *
    * @param targets The targets to build.
+   * @return the labels of the subset of {@code targets} that should actually be built
    * @throws LoadingFailedException if the request is not valid for some reason.
    */
-  void validateTargets(Collection<Target> targets, boolean keepGoing)
-      throws LoadingFailedException;
+  ImmutableSet<Label> validateTargets(Collection<Target> targets, boolean keepGoing)
+      throws LoadingFailedException, InterruptedException;
 }

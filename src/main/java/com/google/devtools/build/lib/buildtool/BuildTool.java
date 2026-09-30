@@ -48,7 +48,9 @@ import com.google.devtools.build.lib.analysis.config.InvalidConfigurationExcepti
 import com.google.devtools.build.lib.analysis.platform.PlatformValue;
 import com.google.devtools.build.lib.buildeventstream.BuildEvent.LocalFile.LocalFileType;
 import com.google.devtools.build.lib.buildeventstream.BuildEventArtifactUploader.UploadContext;
+import com.google.devtools.build.lib.buildeventstream.AbortedEvent;
 import com.google.devtools.build.lib.buildeventstream.BuildEventIdUtil;
+import com.google.devtools.build.lib.buildeventstream.BuildEventStreamProtos.Aborted.AbortReason;
 import com.google.devtools.build.lib.buildeventstream.BuildEventProtocolOptions;
 import com.google.devtools.build.lib.buildtool.AnalysisPhaseRunner.ProjectEvaluationResult;
 import com.google.devtools.build.lib.buildtool.SkyframeMemoryDumper.DisplayMode;
@@ -537,9 +539,19 @@ public class BuildTool {
             keepGoing,
             shouldRunTests);
     if (validator != null) {
-      ImmutableSet<Target> targetLabels =
+      ImmutableSet<Target> targets =
           result.getTargets(reporter, skyframeExecutor.getPackageManager());
-      validator.validateTargets(targetLabels, keepGoing);
+      ImmutableSet<Label> labelsToBuild = validator.validateTargets(targets, keepGoing);
+      for (Label label : Sets.difference(result.getTargetLabels(), labelsToBuild)) {
+        // The label was announced by the loading phase, so BEP consumers expect a completion.
+        reporter.post(
+            new AbortedEvent(
+                BuildEventIdUtil.targetConfigured(label),
+                AbortReason.SKIPPED,
+                String.format("Target %s build was skipped.", label),
+                label));
+      }
+      result = result.withTargetLabels(labelsToBuild);
     }
     return result;
   }
