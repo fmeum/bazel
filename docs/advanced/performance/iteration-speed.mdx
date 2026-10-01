@@ -91,3 +91,21 @@ server was restarted. Either of these should be avoided during iterative use:
 
 To make this condition an error rather than a warning, you can use the
 `--noallow_analysis_cache_discard` flag (introduced in Bazel 6.4.0)
+
+## Diagnosing re-analysis without a warning {#diagnosing-reanalysis}
+
+Bazel can also repeat loading and analysis without discarding the analysis
+cache, in which case no warning is printed. This happens when Skyframe
+invalidates cached values because files changed. Bazel detects file changes by
+metadata (inode and change time) unless the file system provides fast digests,
+so a file that is rewritten with identical contents, for example by a
+`git checkout` that switches branches back and forth, still counts as changed.
+A changed `BUILD`, `.bzl` or `MODULE.bazel` file causes the affected packages to
+be reloaded and every target that depends on them to be re-analyzed.
+
+To see which files Bazel found changed, read the `changed_file_count` and
+`changed_files` fields of `BuildGraphMetrics` in the
+[Build Event Protocol](/remote/bep). The `Analyzed N targets (M packages loaded,
+K targets configured)` line printed at the end of the analysis phase shows how
+much loading and analysis work the command actually did; a fully cached command
+reports 0 for both.

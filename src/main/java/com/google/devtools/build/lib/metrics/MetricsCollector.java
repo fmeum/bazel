@@ -24,6 +24,7 @@ import com.google.common.eventbus.Subscribe;
 import com.google.devtools.build.lib.actions.ActionCompletionEvent;
 import com.google.devtools.build.lib.actions.ActionResultReceivedEvent;
 import com.google.devtools.build.lib.actions.AnalysisGraphStatsEvent;
+import com.google.devtools.build.lib.actions.ChangedFilesMessage;
 import com.google.devtools.build.lib.actions.DynamicStrategyRegistry.DynamicMode;
 import com.google.devtools.build.lib.actions.TotalAndConfiguredTargetOnlyMetric;
 import com.google.devtools.build.lib.actions.cache.PostableActionCacheStats;
@@ -86,6 +87,7 @@ import com.google.devtools.build.lib.skyframe.serialization.analysis.RemoteAnaly
 import com.google.devtools.build.lib.skyframe.serialization.analysis.RemoteAnalysisCachingServicesSupplier;
 import com.google.devtools.build.lib.skyframe.serialization.analysis.proto.TopLevelTargetsMatchStatus;
 import com.google.devtools.build.lib.util.Bucket;
+import com.google.devtools.build.lib.vfs.PathFragment;
 import com.google.devtools.build.lib.worker.WorkerProcessMetrics;
 import com.google.devtools.build.lib.worker.WorkerProcessMetricsCollector;
 import com.google.devtools.build.lib.worker.WorkerProcessStatus;
@@ -221,6 +223,16 @@ class MetricsCollector {
                   + event.getBuildGraphMetrics()));
     }
     buildGraphMetrics.mergeFrom(event.getBuildGraphMetrics());
+  }
+
+  @SuppressWarnings("unused")
+  @Subscribe
+  public synchronized void onChangedFiles(ChangedFilesMessage event) {
+    buildGraphMetrics.setChangedFileCount(event.changedFileCount());
+    event.changedFiles().stream()
+        .map(PathFragment::getPathString)
+        .sorted()
+        .forEach(buildGraphMetrics::addChangedFiles);
   }
 
   @SuppressWarnings("unused")

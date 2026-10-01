@@ -478,12 +478,14 @@ public class MetricsCollectorTest extends BuildIntegrationTestCase {
     buildTarget("//a");
     assertThat(buildMetricsEventListener.event.getBuildMetrics().getBuildGraphMetrics())
         .comparingExpectedFieldsOnly()
-        .comparingExpectedFieldsOnly()
         .isEqualTo(
             BuildGraphMetrics.newBuilder()
                 // Analysis not re-triggered, even of the input file that was changed.
                 .setInputFileConfiguredTargetCount(0)
                 .setPostInvocationSkyframeNodeCount(newGraphSize + 2)
+                // Only the rewritten file itself changed; its symlink did not.
+                .setChangedFileCount(1)
+                .addChangedFiles("b/c.in")
                 .build());
     assertThat(buildMetricsEventListener.event.getBuildMetrics().getArtifactMetrics())
         .ignoringFieldAbsence()

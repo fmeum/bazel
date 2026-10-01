@@ -1285,6 +1285,19 @@ message BuildMetrics {
 
     StarlarkProviderStats starlark_provider_stats = 18;
 
+    // Number of files (source files and files in external repositories, but
+    // not outputs) that Bazel found to have changed since the previous command
+    // on this server. This counts files whose metadata (e.g. inode or ctime)
+    // changed even if their contents did not, such as files rewritten by a git
+    // checkout. Changed BUILD, .bzl and MODULE files cause packages to be
+    // reloaded and their targets to be re-analyzed, so this is the first thing
+    // to look at when a build unexpectedly repeats analysis.
+    int32 changed_file_count = 19;
+    // Paths of the changed files counted above, relative to their root (the
+    // workspace or an external repository) and sorted. Only populated when the
+    // number of changed files is small (currently below 100); otherwise empty.
+    repeated string changed_files = 20;
+
     // Removed due to overlap with EvaluationStat
     reserved 16;
   }
