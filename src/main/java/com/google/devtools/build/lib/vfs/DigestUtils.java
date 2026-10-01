@@ -63,17 +63,22 @@ public class DigestUtils {
    * <p>The metadata lives in the value rather than the key so that a file that changes does not
    * leave a stale entry behind. The change time only moves forward, so a file's old metadata can
    * never be observed again.
+   *
+   * <p>The size guards against the file being rewritten within the granularity of the change time.
+   * Its low 32 bits catch any change of less than 4 GiB, which a change within one tick of the
+   * clock is, and let the fields and the reference to the digest fit the object into 32 bytes with
+   * compact object headers.
    */
   private static final class CachedDigest {
     private final long nodeId;
     private final long changeTime;
-    private final long size;
+    private final int sizeLow32;
     private final byte[] digest;
 
     private CachedDigest(FileStatus status, byte[] digest) throws IOException {
       this.nodeId = status.getNodeId();
       this.changeTime = status.getLastChangeTime();
-      this.size = status.getSize();
+      this.sizeLow32 = (int) status.getSize();
       this.digest = digest;
     }
 
@@ -81,7 +86,7 @@ public class DigestUtils {
     private boolean matches(FileStatus status) throws IOException {
       return nodeId == status.getNodeId()
           && changeTime == status.getLastChangeTime()
-          && size == status.getSize();
+          && sizeLow32 == (int) status.getSize();
     }
   }
 
