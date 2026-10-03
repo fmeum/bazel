@@ -45,6 +45,17 @@ public class RepositoryFunctionException extends SkyFunctionException {
   }
 
   /**
+   * Returns the message of the wrapped exception. The default message of an exception constructed
+   * from a cause is the cause's message prefixed with the cause's class name, which is noise to
+   * users and would end up in every error reported for the repository.
+   */
+  @Override
+  public String getMessage() {
+    String message = getCause().getMessage();
+    return message != null ? message : getCause().toString();
+  }
+
+  /**
    * Encapsulates the exceptions that arise when accessing a repository. Error reporting should ONLY
    * be handled in {@link RepositoryFetchFunction}.
    */

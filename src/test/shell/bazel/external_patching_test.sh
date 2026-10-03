@@ -327,7 +327,7 @@ http_archive(
 EOF
 
   bazel build @ext//... &> $TEST_log 2>&1 && fail "Expected to fail"
-  expect_log "Error downloading \\[.*/remote.patch\\] to"
+  expect_log "Error downloading .*/remote.patch: Checksum was"
   expect_log "but wanted sha256-Yab3Yqr2BlLL8zKHm43MLP2BviEpoGHalX0Dnq538LA="
 }
 

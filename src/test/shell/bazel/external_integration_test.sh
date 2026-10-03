@@ -1170,7 +1170,7 @@ http_archive(
 )
 EOF
   bazel build @repo//... &> $TEST_log 2>&1 && fail "Expected to fail"
-  expect_log "Error downloading \\[http://127.0.0.1:$fileserver_port/repo.zip\\] to"
+  expect_log "Error downloading http://127.0.0.1:$fileserver_port/repo.zip: Checksum was"
   expect_log "but wanted 61a6f762aaf60652cbf332879b8dcc2cfd81be2129a061da957d039eae77f0b0"
 }
 
@@ -1239,7 +1239,7 @@ http_archive(
 )
 EOF
   bazel build @repo//... &> $TEST_log 2>&1 && fail "Expected to fail"
-  expect_log "Error downloading \\[http://127.0.0.1:$fileserver_port/repo.zip\\] to"
+  expect_log "Error downloading http://127.0.0.1:$fileserver_port/repo.zip: Checksum was"
   # Bazel translates the integrity value back to the sha256 checksum.
   expect_log "Checksum was $integrity but wanted sha256-Yab3Yqr2BlLL8zKHm43MLP2BviEpoGHalX0Dnq538LA="
   shutdown_server

@@ -44,6 +44,11 @@ public final class RepositoryFailedEvent implements BuildEvent {
     return repo;
   }
 
+  /** Returns the error message describing why the repository failed. */
+  public String getMessage() {
+    return message;
+  }
+
   @Override
   public BuildEventId getEventId() {
     String strippedRepoName = repo.getName();
