@@ -48,7 +48,7 @@ public final class DirectoryTreeDigestFunction implements SkyFunction {
     Map<String, Pattern> patternCache = new HashMap<>();
     DirectoryTreeDigestValue.Key key = (DirectoryTreeDigestValue.Key) skyKey;
     RootedPath rootedPath = key.rootedPath();
-    if (excludes(rootedPath, key.globBase(), key.excludes(), patternCache)) {
+    if (excludes(key.logicalPath().toString(), key.globBase(), key.excludes(), patternCache)) {
       // The path we are trying to compute a digest for is excluded.
       // This should only happen at the very beginning/root of a tree digest as the subsequent
       // computation of digests for child nodes should be excluded before they are asked to be
@@ -74,7 +74,7 @@ public final class DirectoryTreeDigestFunction implements SkyFunction {
             .map(Dirent::getName)
             .filter(
                 entry -> {
-                  String path = rootedPath.getRootRelativePath().getRelative(entry).toString();
+                  String path = key.logicalPath().getRelative(entry).toString();
                   return !excludes(path, key.globBase(), key.excludes(), patternCache);
                 })
             .sorted()
@@ -162,7 +162,9 @@ public final class DirectoryTreeDigestFunction implements SkyFunction {
                     DirectoryTreeDigestValue.key(
                         /* rootedPath= */ p.getSecond().realRootedPath(p.getFirst()),
                         /* globBase= */ key.globBase(),
-                        /* excludes= */ key.excludes()))
+                        /* excludes= */ key.excludes(),
+                        /* logicalPath= */ key.logicalPath()
+                            .getRelative(p.getFirst().getRootRelativePath().getBaseName())))
             .collect(toImmutableList());
     SkyframeLookupResult result =
         env.getValuesAndExceptions(ImmutableSet.copyOf(dirTreeDigestValueKeys));

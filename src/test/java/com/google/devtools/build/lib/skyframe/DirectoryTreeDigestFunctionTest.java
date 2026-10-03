@@ -250,6 +250,22 @@ public class DirectoryTreeDigestFunctionTest extends FoundationTestCase {
   }
 
   @Test
+  public void symlinkToExcludedDirectory_matchedUnderItsOwnName() throws Exception {
+    scratch.file("dir/ignored/data", "X");
+    scratch.resolve("dir/keep").createSymbolicLink(scratch.resolve("dir/ignored"));
+    ImmutableList<String> excludes = ImmutableList.of("ignored/**");
+    // Like a watched tree in the workspace, the directory lies under a package root, so that the
+    // real path of the symlink's target is matched against the excludes.
+    RootedPath dir =
+        RootedPath.toRootedPath(Root.fromPath(scratch.resolve("")), PathFragment.create("dir"));
+    String oldDigest = getTreeDigest(dir, excludes);
+
+    // keep/data is part of the tree even though the directory it resolves to is excluded.
+    scratch.overwriteFile("dir/ignored/data", ImmutableList.of("Y"));
+    assertThat(getTreeDigest(dir, excludes)).isNotEqualTo(oldDigest);
+  }
+
+  @Test
   public void danglingSymlink() throws Exception {
     scratch.file("dir/a", "a");
     scratch.resolve("dir/b").createSymbolicLink(scratch.resolve("otherdir"));
