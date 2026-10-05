@@ -27,6 +27,8 @@ import com.google.devtools.build.lib.cmdline.StarlarkThreadContext;
 import com.google.devtools.build.lib.events.ExtendedEventHandler;
 import com.google.devtools.build.lib.packages.LabelConverter;
 import com.google.devtools.build.lib.packages.StarlarkNativeModule.ExistingRulesShouldBeNoOp;
+import com.google.devtools.build.lib.skyframe.RepositoryMappingValue;
+import com.google.devtools.build.skyframe.SkyFunction;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import javax.annotation.Nullable;
@@ -71,6 +73,8 @@ public final class ModuleExtensionEvalStarlarkThreadContext extends StarlarkThre
   private final ImmutableMap<String, RepositoryName> repoOverrides;
   private final ExtendedEventHandler eventHandler;
   private final Map<String, RepoRuleCall> deferredRepos = new LinkedHashMap<>();
+  // A worker environment whose lookups block until the value is available.
+  private final SkyFunction.Environment env;
 
   public ModuleExtensionEvalStarlarkThreadContext(
       ModuleExtensionId extensionId,
@@ -78,15 +82,24 @@ public final class ModuleExtensionEvalStarlarkThreadContext extends StarlarkThre
       PackageIdentifier basePackageId,
       RepositoryMapping baseRepoMapping,
       ImmutableMap<String, RepositoryName> repoOverrides,
-      RepositoryMapping mainRepoMapping,
+      SkyFunction.Environment env,
       ExtendedEventHandler eventHandler) {
-    super(() -> mainRepoMapping);
+    this.env = env;
     this.extensionId = extensionId;
     this.repoPrefix = repoPrefix;
     this.basePackageId = basePackageId;
     this.baseRepoMapping = baseRepoMapping;
     this.repoOverrides = repoOverrides;
     this.eventHandler = eventHandler;
+  }
+
+  @Override
+  @Nullable
+  public RepositoryMapping getMainRepoMapping() throws InterruptedException {
+    // Looked up lazily, so only extensions that print a label depend on the main repo mapping.
+    var value =
+        (RepositoryMappingValue) env.getValue(RepositoryMappingValue.key(RepositoryName.MAIN));
+    return value == null ? null : value.repositoryMapping();
   }
 
   /**

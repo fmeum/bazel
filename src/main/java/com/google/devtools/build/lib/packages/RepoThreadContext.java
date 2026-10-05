@@ -40,9 +40,7 @@ public class RepoThreadContext extends StarlarkThreadContext {
     throw Starlark.errorf("%s can only be called from REPO.bazel", what);
   }
 
-  public RepoThreadContext() {
-    super(() -> null);
-  }
+  public RepoThreadContext() {}
 
   public boolean isRepoFunctionCalled() {
     return repoFunctionCalled;

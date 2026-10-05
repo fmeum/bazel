@@ -62,9 +62,7 @@ public final class AspectPropagationPredicate {
   }
 
   private static class AspectPropagationThreadContext extends StarlarkThreadContext {
-    public AspectPropagationThreadContext() {
-      super(null);
-    }
+    public AspectPropagationThreadContext() {}
   }
 
   @Override

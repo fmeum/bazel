@@ -79,7 +79,6 @@ public class ModuleThreadContext extends StarlarkThreadContext {
       ModuleKey key,
       boolean ignoreDevDeps,
       @Nullable ImmutableMap<String, CompiledModuleFile> includeLabelToCompiledModuleFile) {
-    super(/* mainRepoMappingSupplier= */ null);
     module = InterimModule.builder().setKey(key);
     this.ignoreDevDeps = ignoreDevDeps;
     this.builtinModules = builtinModules;

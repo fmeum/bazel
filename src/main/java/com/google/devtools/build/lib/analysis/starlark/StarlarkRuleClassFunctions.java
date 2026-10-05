@@ -1880,7 +1880,9 @@ public class StarlarkRuleClassFunctions implements StarlarkRuleFunctionsApi {
               Label definitionLabel = currentRuleClass.getRuleDefinitionEnvironmentLabel();
               BuiltinRestriction.failIfLabelOutsideAllowlist(
                   definitionLabel,
-                  targetDefinitionContext.getMainRepoMapping(),
+                  // Resolve the allowlist from the perspective of the .bzl file that defined the
+                  // rule, whose repo mapping was captured when the initializer was declared.
+                  currentRuleClass.getLabelConverterForInitializer().getRepositoryMapping(),
                   ALLOWLIST_RULE_EXTENSION_API_EXPERIMENTAL);
             }
             String nativeName = arg.startsWith("_") ? "$" + arg.substring(1) : arg;

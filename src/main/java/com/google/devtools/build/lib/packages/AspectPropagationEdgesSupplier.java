@@ -117,9 +117,7 @@ public sealed interface AspectPropagationEdgesSupplier<T> {
     }
 
     private static final class AspectPropagationEdgesThreadContext extends StarlarkThreadContext {
-      private AspectPropagationEdgesThreadContext() {
-        super(null);
-      }
+      private AspectPropagationEdgesThreadContext() {}
     }
 
     protected StarlarkList<?> runFunction(

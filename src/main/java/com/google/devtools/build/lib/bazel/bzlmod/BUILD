@@ -181,6 +181,8 @@ java_library(
         "YankedVersionsValue.java",
     ],
     deps = [
+        "//src/main/java/com/google/devtools/build/lib/skyframe:repository_mapping_value",
+        "//src/main/java/com/google/devtools/build/skyframe",
         ":common",
         ":exception",
         ":module_extension",

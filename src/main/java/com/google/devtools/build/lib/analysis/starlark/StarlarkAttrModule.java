@@ -181,9 +181,7 @@ public final class StarlarkAttrModule implements StarlarkAttrModuleApi {
   }
 
   private static class MaterializationContext extends StarlarkThreadContext {
-    public MaterializationContext() {
-      super(null);
-    }
+    public MaterializationContext() {}
   }
 
   /** The object available as the {@code ctx} argument of materializers. */

@@ -44,6 +44,7 @@ java_library(
         "ExternalFilesHelper.java",
         "FileStateFunction.java",
         "HighWaterMarkLimiter.java",
+        "LazyMainRepoMapping.java",
         "LoadAspectsFunction.java",
         "LocalRepositoryLookupFunction.java",
         "MacroInstanceFunction.java",
@@ -76,6 +77,7 @@ java_library(
         "TransitiveTargetFunction.java",
     ],
     deps = [
+        "//src/main/java/com/google/devtools/build/lib/supplier",
         ":action_artifact_cycle_reporter",
         ":action_environment_function",
         ":action_execution_inactivity_watchdog",
