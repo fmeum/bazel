@@ -704,7 +704,8 @@ public final class Label
       try {
         mainRepoMapping = threadContext.getMainRepoMapping();
       } catch (InterruptedException e) {
-        // ignore
+        // Fall back to canonical repo names and let the interpreter handle the interrupt.
+        Thread.currentThread().interrupt();
       }
     }
     printer.append(getShorthandDisplayForm(mainRepoMapping));

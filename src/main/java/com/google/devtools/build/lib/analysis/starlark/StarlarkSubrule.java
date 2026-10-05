@@ -137,7 +137,7 @@ public class StarlarkSubrule implements StarlarkExportable, StarlarkCallable, St
     checkExported();
     StarlarkRuleContext ruleContext =
         BazelRuleAnalysisThreadContext.fromOrFail(thread, getName())
-            .getRuleContext()
+            .ruleContext()
             .getStarlarkRuleContext();
     SubruleContext callerSubruleContext = ruleContext.getLockedForSubrule();
     if (callerSubruleContext != null) {

@@ -93,6 +93,11 @@ public class LabelConverter {
     return converted;
   }
 
+  /** Returns the repository mapping used by this converter to resolve apparent repo names. */
+  public RepositoryMapping getRepositoryMapping() {
+    return packageContext.repoMapping();
+  }
+
   @Override
   public String toString() {
     return getBasePackage().toString();

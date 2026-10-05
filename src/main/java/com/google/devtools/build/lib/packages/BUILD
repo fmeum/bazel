@@ -89,6 +89,7 @@ java_library(
         "//src/main/java/com/google/devtools/build/lib:package_loader_access",
     ],
     deps = [
+        "//src/main/java/com/google/devtools/build/lib/supplier",
         ":bzl_visibility",
         ":declared_exec_group",
         ":globber",
