@@ -46,10 +46,10 @@ import net.starlark.java.syntax.Location;
  * A context object that should be stored in a {@link StarlarkThread} for use during module
  * extension evaluation.
  */
-public final class ModuleExtensionEvalStarlarkThreadContext extends StarlarkThreadContext {
+public final class ModuleExtensionEvalStarlarkThreadContext implements StarlarkThreadContext {
   @Override
   public void storeInThread(StarlarkThread thread) {
-    super.storeInThread(thread);
+    StarlarkThreadContext.super.storeInThread(thread);
     // The following is just a hack; see documentation there for an explanation.
     thread.setThreadLocal(ExistingRulesShouldBeNoOp.class, new ExistingRulesShouldBeNoOp());
   }

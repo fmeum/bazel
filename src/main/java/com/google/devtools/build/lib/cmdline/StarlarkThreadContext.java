@@ -31,9 +31,11 @@ import net.starlark.java.eval.StarlarkThread;
  * <p>This object tends to be mutable and should not be accessed simultaneously or reused for more
  * than one Starlark thread.
  */
-public abstract class StarlarkThreadContext {
+public interface StarlarkThreadContext {
   // TODO: decide the extent to which we should enforce that such a context object is available
-  //  anywhere we execute Starlark code in Bazel.
+  //  anywhere we execute Starlark code in Bazel. As of right now (Oct 2026), the only logic here is
+  //  `getMainRepoMapping`, and even that one is not strictly necessary (can return null and things
+  //  will still work).
 
   /**
    * Saves this {@link StarlarkThreadContext} in the specified Starlark thread. Call only once,
@@ -42,12 +44,10 @@ public abstract class StarlarkThreadContext {
    * <p>Users of this class should prefer to use this method instead of calling {@link
    * StarlarkThread#setThreadLocal} directly.
    */
-  public void storeInThread(StarlarkThread thread) {
+  default void storeInThread(StarlarkThread thread) {
     Preconditions.checkState(thread.getThreadLocal(StarlarkThreadContext.class) == null);
     thread.setThreadLocal(StarlarkThreadContext.class, this);
   }
-
-  protected StarlarkThreadContext() {}
 
   /**
    * Returns the repository mapping of the main repository, or null if it isn't available in this
@@ -60,7 +60,7 @@ public abstract class StarlarkThreadContext {
    * actually prints a label.
    */
   @Nullable
-  public RepositoryMapping getMainRepoMapping() throws InterruptedException {
+  default RepositoryMapping getMainRepoMapping() throws InterruptedException {
     return null;
   }
 }

@@ -32,8 +32,8 @@ import net.starlark.java.eval.StarlarkThread;
  * Bazel application data for the Starlark thread that evaluates the top-level code in a .bzl (or
  * .scl) module (i.e. when evaluating that module's global symbols).
  */
-public final class BzlInitThreadContext extends StarlarkThreadContext
-    implements RuleDefinitionEnvironment {
+public final class BzlInitThreadContext
+    implements RuleDefinitionEnvironment, StarlarkThreadContext {
 
   private final Label bzlFile;
 
@@ -66,8 +66,8 @@ public final class BzlInitThreadContext extends StarlarkThreadContext
    * @param fragmentNameToClass a map from configuration fragment name to configuration fragment
    *     class, such as "apple" to AppleConfiguration.class
    * @param mainRepoMappingSupplier a lazy supplier of the repository mapping of the main
-   *     repository, used only to render labels in {@code print()} and {@code fail()} output. Can
-   *     be null, in which case labels are printed with canonical repository names.
+   *     repository, used only to render labels in {@code print()} and {@code fail()} output. Can be
+   *     null, in which case labels are printed with canonical repository names.
    */
   public BzlInitThreadContext(
       Label bzlFile,

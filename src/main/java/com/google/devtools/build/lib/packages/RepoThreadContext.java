@@ -24,7 +24,7 @@ import net.starlark.java.eval.Starlark;
 import net.starlark.java.eval.StarlarkThread;
 
 /** Context object for a Starlark thread evaluating the REPO.bazel file. */
-public class RepoThreadContext extends StarlarkThreadContext {
+public class RepoThreadContext implements StarlarkThreadContext {
   private ImmutableMap<String, Object> packageArgsMap = ImmutableMap.of();
   private boolean repoFunctionCalled = false;
 
@@ -39,8 +39,6 @@ public class RepoThreadContext extends StarlarkThreadContext {
     }
     throw Starlark.errorf("%s can only be called from REPO.bazel", what);
   }
-
-  public RepoThreadContext() {}
 
   public boolean isRepoFunctionCalled() {
     return repoFunctionCalled;
