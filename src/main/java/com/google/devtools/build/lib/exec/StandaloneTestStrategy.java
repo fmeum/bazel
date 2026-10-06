@@ -31,6 +31,7 @@ import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.actions.Artifact.SpecialArtifact;
 import com.google.devtools.build.lib.actions.Artifact.TreeFileArtifact;
 import com.google.devtools.build.lib.actions.ArtifactPathResolver;
+import com.google.devtools.build.lib.actions.BaseSpawn;
 import com.google.devtools.build.lib.actions.EnvironmentalExecException;
 import com.google.devtools.build.lib.actions.ExecException;
 import com.google.devtools.build.lib.actions.ExecutionRequirements;
@@ -42,14 +43,17 @@ import com.google.devtools.build.lib.actions.SpawnMetrics;
 import com.google.devtools.build.lib.actions.SpawnResult;
 import com.google.devtools.build.lib.actions.TestExecException;
 import com.google.devtools.build.lib.analysis.actions.SpawnAction;
+import com.google.devtools.build.lib.analysis.platform.PlatformInfo;
 import com.google.devtools.build.lib.analysis.test.TestAttempt;
 import com.google.devtools.build.lib.analysis.test.TestResult;
 import com.google.devtools.build.lib.analysis.test.TestRunnerAction;
+import com.google.devtools.build.lib.analysis.test.TestRunnerAction.CoverageCollection;
 import com.google.devtools.build.lib.analysis.test.TestRunnerAction.ResolvedPaths;
 import com.google.devtools.build.lib.analysis.test.TestStrategy;
 import com.google.devtools.build.lib.buildeventstream.BuildEventStreamProtos;
 import com.google.devtools.build.lib.buildeventstream.BuildEventStreamProtos.TestResult.ExecutionInfo;
 import com.google.devtools.build.lib.buildeventstream.TestFileNameConstants;
+import com.google.devtools.build.lib.collect.nestedset.NestedSet;
 import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
 import com.google.devtools.build.lib.collect.nestedset.Order;
 import com.google.devtools.build.lib.events.Reporter;
@@ -74,6 +78,7 @@ import java.io.OutputStream;
 import java.util.List;
 import java.util.Map;
 import java.util.TreeMap;
+import javax.annotation.Nullable;
 
 /** Runs TestRunnerAction actions. */
 // TODO(bazel-team): add tests for this strategy.
@@ -497,10 +502,79 @@ public class StandaloneTestStrategy extends TestStrategy {
       ActionExecutionContext actionExecutionContext,
       TestRunnerAction action,
       List<ActionInput> expandedCoverageDir,
+      List<ActionInput> expandedCoverageCollectionDir,
       Path tmpDirRoot) {
     ImmutableList<String> args =
         ImmutableList.of(action.getCollectCoverageScript().getExecutable().getExecPathString());
 
+    Map<String, String> testEnvironment =
+        createCoverageSpawnEnvironment(
+            actionExecutionContext, action, action.getExecutionPlatform(), tmpDirRoot);
+    CoverageCollection coverageCollection = action.getCoverageCollection();
+    if (coverageCollection != null) {
+      testEnvironment.put(
+          "COVERAGE_COLLECTION_DIR", coverageCollection.outputDirectory().getExecPathString());
+    }
+
+    return new SimpleSpawn(
+        action,
+        args,
+        ImmutableMap.copyOf(testEnvironment),
+        action.getExecutionInfo(),
+        SpawnInputs.of(
+            action.getInputs(),
+            ImmutableList.<ActionInput>builderWithExpectedSize(
+                    expandedCoverageDir.size() + expandedCoverageCollectionDir.size() + 1)
+                .addAll(expandedCoverageDir)
+                .addAll(expandedCoverageCollectionDir)
+                .add(action.getCoverageManifest())
+                .build()),
+        /* tools= */ NestedSetBuilder.emptySet(Order.STABLE_ORDER),
+        /* outputs= */ ImmutableSet.of(action.getCoverageData()),
+        /* mandatoryOutputs= */ null,
+        // As in createXmlGeneratingSpawn: the test target's `resources:` entries describe the
+        // test process, not this post-processing step.
+        ResourceSetOrBuilder.ignoringOverrides(SpawnAction.DEFAULT_RESOURCE_SET));
+  }
+
+  private static Spawn createCoverageCollectionSpawn(
+      ActionExecutionContext actionExecutionContext,
+      TestRunnerAction action,
+      CoverageCollection coverageCollection,
+      List<ActionInput> expandedCoverageDir,
+      Path tmpDirRoot) {
+    ImmutableList<String> args =
+        ImmutableList.of(action.getCollectCoverageScript().getExecutable().getExecPathString());
+
+    Map<String, String> testEnvironment =
+        createCoverageSpawnEnvironment(
+            actionExecutionContext, action, coverageCollection.platform(), tmpDirRoot);
+    testEnvironment.put(
+        "COVERAGE_COLLECTION_OUTPUT_DIR",
+        coverageCollection.outputDirectory().getExecPathString());
+
+    return new CoverageCollectionSpawn(
+        action,
+        coverageCollection,
+        args,
+        ImmutableMap.copyOf(testEnvironment),
+        SpawnInputs.of(
+            action.getInputs(),
+            ImmutableList.<ActionInput>builderWithExpectedSize(expandedCoverageDir.size() + 1)
+                .addAll(expandedCoverageDir)
+                .add(action.getCoverageManifest())
+                .build()));
+  }
+
+  /**
+   * Returns the environment of a spawn that runs after the test on the given execution platform to
+   * process the coverage data collected by the test.
+   */
+  private static Map<String, String> createCoverageSpawnEnvironment(
+      ActionExecutionContext actionExecutionContext,
+      TestRunnerAction action,
+      @Nullable PlatformInfo platform,
+      Path tmpDirRoot) {
     Map<String, String> testEnvironment =
         createEnvironment(actionExecutionContext, action, tmpDirRoot);
 
@@ -514,24 +588,60 @@ public class StandaloneTestStrategy extends TestStrategy {
     testEnvironment.remove("RUNFILES_DIR");
     testEnvironment.remove("JAVA_RUNFILES");
     testEnvironment.remove("PYTHON_RUNFILES");
+    action.removeCoverageToolsNotBuiltFor(platform, testEnvironment);
+    return testEnvironment;
+  }
 
-    return new SimpleSpawn(
-        action,
-        args,
-        ImmutableMap.copyOf(testEnvironment),
-        action.getExecutionInfo(),
-        SpawnInputs.of(
-            action.getInputs(),
-            ImmutableList.<ActionInput>builderWithExpectedSize(expandedCoverageDir.size() + 1)
-                .addAll(expandedCoverageDir)
-                .add(action.getCoverageManifest())
-                .build()),
-        /* tools= */ NestedSetBuilder.emptySet(Order.STABLE_ORDER),
-        /* outputs= */ ImmutableSet.of(action.getCoverageData()),
-        /* mandatoryOutputs= */ null,
-        // As in createXmlGeneratingSpawn: the test target's `resources:` entries describe the
-        // test process, not this post-processing step.
-        ResourceSetOrBuilder.ignoringOverrides(SpawnAction.DEFAULT_RESOURCE_SET));
+  /**
+   * A spawn that runs coverage tools on the execution platform they are built for rather than on
+   * that of the test action, see {@link CoverageCollection}.
+   */
+  private static final class CoverageCollectionSpawn extends BaseSpawn {
+    private final CoverageCollection coverageCollection;
+    private final SpawnInputs inputs;
+
+    CoverageCollectionSpawn(
+        TestRunnerAction action,
+        CoverageCollection coverageCollection,
+        ImmutableList<String> arguments,
+        ImmutableMap<String, String> environment,
+        SpawnInputs inputs) {
+      super(
+          arguments,
+          environment,
+          action.getExecutionInfo(),
+          action,
+          // As in createXmlGeneratingSpawn: the test target's `resources:` entries describe the
+          // test process, not this post-processing step.
+          ResourceSetOrBuilder.ignoringOverrides(SpawnAction.DEFAULT_RESOURCE_SET));
+      this.coverageCollection = coverageCollection;
+      this.inputs = inputs;
+    }
+
+    @Override
+    public SpawnInputs getInputFiles() {
+      return inputs;
+    }
+
+    @Override
+    public NestedSet<? extends ActionInput> getToolFiles() {
+      return NestedSetBuilder.emptySet(Order.STABLE_ORDER);
+    }
+
+    @Override
+    public ImmutableList<ActionInput> getOutputFiles() {
+      return ImmutableList.of(coverageCollection.outputDirectory());
+    }
+
+    @Override
+    public PlatformInfo getExecutionPlatform() {
+      return coverageCollection.platform();
+    }
+
+    @Override
+    public ImmutableMap<String, String> getCombinedExecProperties() {
+      return coverageCollection.platform().execProperties();
+    }
   }
 
   private static Map<String, String> createEnvironment(
@@ -783,12 +893,6 @@ public class StandaloneTestStrategy extends TestStrategy {
                 .add(testAction.getCoverageDirectoryTreeArtifact())
                 .build();
 
-        Spawn coveragePostProcessingSpawn =
-            createCoveragePostProcessingSpawn(
-                actionExecutionContext,
-                testAction,
-                ImmutableList.copyOf(expandedCoverageDir),
-                tmpDirRoot);
         SpawnStrategyResolver spawnStrategyResolver =
             actionExecutionContext.getContext(SpawnStrategyResolver.class);
 
@@ -798,24 +902,65 @@ public class StandaloneTestStrategy extends TestStrategy {
         Path out = testRoot.getChild("coverage.log");
         Path err = testRoot.getChild("coverage.err");
         FileOutErr coverageOutErr = new FileOutErr(out, err);
+        FileOutErr coverageCollectionOutErr =
+            new FileOutErr(
+                testRoot.getChild("coverage_collection.log"),
+                testRoot.getChild("coverage_collection.err"));
         ActionExecutionContext coverageActionExecutionContext =
             actionExecutionContext
                 .withFileOutErr(coverageOutErr)
                 .withOutputsAsInputs(coverageSpawnMetadata);
 
         try {
-          spawnStrategyResolver.exec(coveragePostProcessingSpawn, coverageActionExecutionContext);
+          ImmutableSortedSet<TreeFileArtifact> expandedCoverageCollectionDir =
+              ImmutableSortedSet.of();
+          CoverageCollection coverageCollection = testAction.getCoverageCollection();
+          if (coverageCollection != null) {
+            spawnStrategyResolver.exec(
+                createCoverageCollectionSpawn(
+                    actionExecutionContext,
+                    testAction,
+                    coverageCollection,
+                    ImmutableList.copyOf(expandedCoverageDir),
+                    tmpDirRoot),
+                coverageActionExecutionContext.withFileOutErr(coverageCollectionOutErr));
+            var unusedMetadata =
+                actionExecutionContext
+                    .getOutputMetadataStore()
+                    .getOutputMetadata(coverageCollection.outputDirectory());
+            expandedCoverageCollectionDir =
+                actionExecutionContext
+                    .getOutputMetadataStore()
+                    .getTreeArtifactValue((SpecialArtifact) coverageCollection.outputDirectory())
+                    .getChildren();
+            coverageActionExecutionContext =
+                coverageActionExecutionContext.withOutputsAsInputs(
+                    ImmutableSet.<Artifact>builder()
+                        .addAll(expandedCoverageCollectionDir)
+                        .add(coverageCollection.outputDirectory())
+                        .build());
+          }
+          spawnStrategyResolver.exec(
+              createCoveragePostProcessingSpawn(
+                  actionExecutionContext,
+                  testAction,
+                  ImmutableList.copyOf(expandedCoverageDir),
+                  ImmutableList.copyOf(expandedCoverageCollectionDir),
+                  tmpDirRoot),
+              coverageActionExecutionContext);
         } catch (SpawnExecException e) {
           if (e.isCatastrophic()) {
             closeSuppressed(e, streamed);
             closeSuppressed(e, fileOutErr);
             closeSuppressed(e, coverageOutErr);
+            closeSuppressed(e, coverageCollectionOutErr);
             throw e;
           }
           if (!e.getSpawnResult().setupSuccess()) {
             closeSuppressed(e, streamed);
             closeSuppressed(e, fileOutErr);
             closeSuppressed(e, coverageOutErr);
+            closeSuppressed(e, coverageCollectionOutErr);
             // Rethrow as the test could not be run and thus there's no point in retrying.
             throw e;
           }
@@ -823,14 +968,25 @@ public class StandaloneTestStrategy extends TestStrategy {
               .setCachable(e.getSpawnResult().status().isConsideredUserError())
               .setTestPassed(false)
               .setStatus(e.hasTimedOut() ? BlazeTestStatus.TIMEOUT : BlazeTestStatus.FAILED);
+          // The post-processing spawn doesn't run after a failed collection spawn.
+          Path coverageDataPath =
+              actionExecutionContext
+                  .getPathResolver()
+                  .convertPath(testAction.getCoverageData().getPath());
+          if (!coverageDataPath.exists()) {
+            FileSystemUtils.touchFile(coverageDataPath);
+          }
         } catch (ExecException | InterruptedException e) {
           closeSuppressed(e, streamed);
           closeSuppressed(e, fileOutErr);
           closeSuppressed(e, coverageOutErr);
+          closeSuppressed(e, coverageCollectionOutErr);
           throw e;
         }
 
-        // Append all output from the coverage spawn to the test log.
+        // Append all output from the coverage spawns to the test log.
+        coverageCollectionOutErr.close();
+        appendCoverageLog(coverageCollectionOutErr, fileOutErr);
         coverageOutErr.close();
         appendCoverageLog(coverageOutErr, fileOutErr);
       } else {

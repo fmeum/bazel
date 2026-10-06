@@ -718,4 +718,217 @@ function test_starlark_rule_custom_baseline_coverage_with_split_postprocessing()
   do_test_starlark_rule_custom_baseline_coverage
 }
 
+# Prints the value of the "role" exec property of all spawns in the given JSON
+# execution log that have the given environment variable set, optionally to the
+# given value.
+function get_spawn_roles() {
+  awk -v name="$2" -v value="${3:-}" '
+    prev ~ ("\"name\": \"" name "\"") {
+      split($0, parts, "\"")
+      if (value == "" || parts[4] == value) matched = 1
+    }
+    prev ~ /"name": "role"/ { split($0, parts, "\""); role = parts[4] }
+    # Spawns are separated by lines of the form "}{".
+    /^\}/ {
+      if (matched) print role
+      matched = 0; role = ""
+    }
+    { prev = $0 }
+  ' "$1" | sort -u
+}
+
+function test_starlark_rule_coverage_tools_run_on_their_exec_platform() {
+    if is_windows; then
+      echo "Skipping test on Windows: the coverage tools are shell scripts"
+      return
+    fi
+
+    add_platforms "MODULE.bazel"
+
+    # The test runs on test_platform, the build actions of the test rule on
+    # default_exec_platform and those of the test's dependency, which provides
+    # the coverage tool, on tool_exec_platform.
+    mkdir platforms
+    cat <<'EOF' > platforms/BUILD
+package(default_visibility = ["//visibility:public"])
+
+constraint_setting(name = "role")
+
+[
+    (
+        constraint_value(
+            name = role,
+            constraint_setting = ":role",
+        ),
+        platform(
+            name = role + "_platform",
+            constraint_values = [":" + role],
+            exec_properties = {"role": role},
+            parents = ["@platforms//host"],
+        ),
+    )
+    for role in [
+        "default_exec",
+        "tool_exec",
+        "test",
+    ]
+]
+EOF
+
+    # Only allowlisted packages can provide coverage tools.
+    mkdir -p tools/build_defs/cc
+    touch tools/build_defs/cc/BUILD
+    cat <<'EOF' > tools/build_defs/cc/defs.bzl
+def _fake_cc_library_impl(ctx):
+    return [
+        coverage_common.instrumented_files_info(
+            ctx,
+            coverage_environment = {
+                "GENERATE_LLVM_LCOV": "0",
+                "FAKE_GCOV": ctx.executable._gcov.path,
+            },
+            coverage_support_files = [ctx.executable._gcov],
+        ),
+    ]
+
+fake_cc_library = rule(
+    implementation = _fake_cc_library_impl,
+    attrs = {
+        "_gcov": attr.label(
+            default = "//:gcov",
+            executable = True,
+            cfg = "exec",
+        ),
+    },
+)
+EOF
+
+    cat <<'EOF' > rules.bzl
+def _platform_script_impl(ctx):
+    out = ctx.actions.declare_file(ctx.label.name + ".sh")
+    ctx.actions.write(
+        out,
+        ctx.attr.content.replace("{role}", ctx.attr.role),
+        is_executable = True,
+    )
+    return [DefaultInfo(executable = out)]
+
+_platform_script = rule(
+    implementation = _platform_script_impl,
+    attrs = {
+        "content": attr.string(),
+        "role": attr.string(),
+    },
+    executable = True,
+)
+
+def platform_script(name, content):
+    """A script that knows the platform it has been built for."""
+    _platform_script(
+        name = name,
+        content = content,
+        role = select({
+            "//platforms:" + role: role
+            for role in ["default_exec", "tool_exec", "test"]
+        }),
+    )
+
+def _custom_test_impl(ctx):
+    out = ctx.actions.declare_file(ctx.label.name + ".sh")
+    ctx.actions.write(
+        out,
+        """#!/usr/bin/env bash
+echo raw_data_from_test > "$COVERAGE_DIR/raw.txt"
+""",
+        is_executable = True,
+    )
+    return [
+        DefaultInfo(executable = out),
+        coverage_common.instrumented_files_info(ctx, dependency_attributes = ["deps"]),
+    ]
+
+custom_test = rule(
+    implementation = _custom_test_impl,
+    test = True,
+    attrs = {
+        "deps": attr.label_list(),
+        "_lcov_merger": attr.label(
+            default = "//:lcov_merger",
+            executable = True,
+            cfg = config.exec(exec_group = "test"),
+        ),
+        "_collect_cc_coverage": attr.label(
+            default = "//tools:collect_cc_coverage.sh",
+            allow_single_file = True,
+            cfg = config.exec(exec_group = "test"),
+        ),
+    },
+)
+EOF
+
+    cat <<'EOF' > tools/BUILD
+exports_files(["collect_cc_coverage.sh"])
+EOF
+    cat <<'EOF' > tools/collect_cc_coverage.sh
+#!/usr/bin/env bash
+"$FAKE_GCOV" "$COVERAGE_DIR/raw.txt" > "$COVERAGE_DIR/collected.txt"
+EOF
+    chmod +x tools/collect_cc_coverage.sh
+
+    cat <<'EOF' > BUILD
+load("//tools/build_defs/cc:defs.bzl", "fake_cc_library")
+load(":rules.bzl", "custom_test", "platform_script")
+
+platform_script(
+    name = "gcov",
+    content = """#!/usr/bin/env bash
+echo "gcov_built_for_{role} processed $(cat "$1")"
+""",
+)
+
+platform_script(
+    name = "lcov_merger",
+    content = """#!/usr/bin/env bash
+for arg in "$@"; do
+  case "$arg" in
+    --coverage_dir=*) coverage_dir="${arg#--coverage_dir=}" ;;
+    --output_file=*) output_file="${arg#--output_file=}" ;;
+  esac
+done
+cat "$coverage_dir/collected.txt" >> "$output_file"
+echo "lcov_merger_built_for_{role}" >> "$output_file"
+""",
+)
+
+fake_cc_library(
+    name = "lib",
+    exec_compatible_with = ["//platforms:tool_exec"],
+)
+
+custom_test(
+    name = "foo_test",
+    deps = [":lib"],
+)
+EOF
+
+    bazel coverage --test_output=all //:foo_test \
+        --platforms=//platforms:test_platform \
+        --extra_execution_platforms=//platforms:default_exec_platform,//platforms:tool_exec_platform,//platforms:test_platform \
+        --experimental_fetch_all_coverage_outputs \
+        --experimental_split_coverage_postprocessing \
+        --execution_log_json_file=execution.log > $TEST_log \
+        || fail "Coverage run failed but should have succeeded."
+
+    # The test, the coverage tool and the LCOV merger each run on the platform
+    # they have been built for.
+    assert_equals "test" "$(get_spawn_roles execution.log IS_COVERAGE_SPAWN 0)"
+    assert_equals "tool_exec" \
+        "$(get_spawn_roles execution.log COVERAGE_COLLECTION_OUTPUT_DIR)"
+    assert_equals "test" "$(get_spawn_roles execution.log COVERAGE_COLLECTION_DIR)"
+
+    local coverage_file_path="$( get_coverage_file_path_from_test_log )"
+    assert_equals "gcov_built_for_tool_exec processed raw_data_from_test
+lcov_merger_built_for_test" "$(cat $coverage_file_path)"
+}
+
 run_suite "test tests"

@@ -22,6 +22,7 @@ import com.google.devtools.build.lib.analysis.FileProvider;
 import com.google.devtools.build.lib.analysis.RuleContext;
 import com.google.devtools.build.lib.analysis.TransitiveInfoCollection;
 import com.google.devtools.build.lib.analysis.config.BuildConfigurationValue;
+import com.google.devtools.build.lib.analysis.test.InstrumentedFilesInfo.CoverageEnvironmentValue;
 import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.collect.nestedset.NestedSet;
 import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
@@ -118,8 +119,14 @@ public final class InstrumentedFilesCollector {
       instrumentedFilesInfoBuilder.addFromDependency(dep);
     }
 
+    // The tools referenced by the environment are provided by the toolchains of this target and are
+    // thus built for its execution platform.
+    var toolPlatform = ruleContext.getExecutionPlatform();
     // add top-level coverage env last so that it overrides conflicting keys from deps
-    instrumentedFilesInfoBuilder.coverageEnvironmentBuilder.putAll(coverageEnvironment);
+    coverageEnvironment.forEach(
+        (name, value) ->
+            instrumentedFilesInfoBuilder.coverageEnvironmentBuilder.put(
+                name, new CoverageEnvironmentValue(value, toolPlatform)));
 
     // Local sources.
     var localSources = ImmutableSet.<Artifact>builder();
@@ -246,7 +253,7 @@ public final class InstrumentedFilesCollector {
     final NestedSetBuilder<Artifact> metadataFilesBuilder;
     final NestedSetBuilder<Artifact> baselineCoverageArtifactsBuilder;
     final NestedSetBuilder<Artifact> coverageSupportFilesBuilder;
-    final ImmutableMap.Builder<String, String> coverageEnvironmentBuilder;
+    final ImmutableMap.Builder<String, CoverageEnvironmentValue> coverageEnvironmentBuilder;
     final NestedSet<Tuple> reportedToActualSources;
     private NestedSet<Artifact> localSources;
     @Nullable private List<Artifact> localBaselineCoverageArtifacts;

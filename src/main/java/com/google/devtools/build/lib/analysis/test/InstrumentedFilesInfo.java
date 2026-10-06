@@ -14,7 +14,9 @@
 package com.google.devtools.build.lib.analysis.test;
 
 import com.google.common.collect.ImmutableMap;
+import com.google.common.collect.Maps;
 import com.google.devtools.build.lib.actions.Artifact;
+import com.google.devtools.build.lib.analysis.platform.PlatformInfo;
 import com.google.devtools.build.lib.collect.nestedset.Depset;
 import com.google.devtools.build.lib.collect.nestedset.NestedSet;
 import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
@@ -23,6 +25,7 @@ import com.google.devtools.build.lib.packages.BuiltinProvider;
 import com.google.devtools.build.lib.packages.BuiltinRestriction;
 import com.google.devtools.build.lib.packages.NativeInfo;
 import com.google.devtools.build.lib.starlarkbuildapi.test.InstrumentedFilesInfoApi;
+import javax.annotation.Nullable;
 import net.starlark.java.eval.EvalException;
 import net.starlark.java.eval.StarlarkThread;
 import net.starlark.java.eval.Tuple;
@@ -46,15 +49,25 @@ public final class InstrumentedFilesInfo extends NativeInfo implements Instrumen
   private final NestedSet<Artifact> instrumentationMetadataFiles;
   private final NestedSet<Artifact> baselineCoverageArtifacts;
   private final NestedSet<Artifact> coverageSupportFiles;
-  private final ImmutableMap<String, String> coverageEnvironment;
+  private final ImmutableMap<String, CoverageEnvironmentValue> coverageEnvironment;
   private final NestedSet<Tuple> reportedToActualSources;
+
+  /**
+   * The value of an environment variable that needs to be set for tests collecting code coverage.
+   *
+   * @param value the value of the variable
+   * @param toolPlatform the execution platform of the target that specified the variable, which is
+   *     the platform that the coverage tools referenced by the variable have been built for, or
+   *     null if not known
+   */
+  public record CoverageEnvironmentValue(String value, @Nullable PlatformInfo toolPlatform) {}
 
   InstrumentedFilesInfo(
       NestedSet<Artifact> instrumentedFiles,
       NestedSet<Artifact> instrumentationMetadataFiles,
       NestedSet<Artifact> baselineCoverageArtifacts,
       NestedSet<Artifact> coverageSupportFiles,
-      ImmutableMap<String, String> coverageEnvironment,
+      ImmutableMap<String, CoverageEnvironmentValue> coverageEnvironment,
       NestedSet<Tuple> reportedToActualSources) {
     this.instrumentedFiles = instrumentedFiles;
     this.instrumentationMetadataFiles = instrumentationMetadataFiles;
@@ -114,7 +127,7 @@ public final class InstrumentedFilesInfo extends NativeInfo implements Instrumen
   }
 
   /** Environment variables that need to be set for tests collecting code coverage. */
-  public ImmutableMap<String, String> getCoverageEnvironment() {
+  public ImmutableMap<String, CoverageEnvironmentValue> getCoverageEnvironment() {
     return coverageEnvironment;
   }
 
@@ -122,7 +135,8 @@ public final class InstrumentedFilesInfo extends NativeInfo implements Instrumen
   public ImmutableMap<String, String> getCoverageEnvironmentForStarlark(StarlarkThread thread)
       throws EvalException {
     BuiltinRestriction.failIfCalledOutsideDefaultAllowlist(thread);
-    return coverageEnvironment;
+    return ImmutableMap.copyOf(
+        Maps.transformValues(coverageEnvironment, CoverageEnvironmentValue::value));
   }
 
   /**

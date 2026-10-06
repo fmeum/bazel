@@ -45,6 +45,7 @@ import com.google.testing.junit.testparameterinjector.TestParameter;
 import com.google.testing.junit.testparameterinjector.TestParameterInjector;
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -998,6 +999,160 @@ public class TestActionBuilderTest extends BuildViewTestCase {
                 .get(PlatformOptions.class)
                 .getPlatforms())
         .containsExactly(Label.parseCanonicalUnchecked("//:linux"));
+  }
+
+  /**
+   * Sets up a test that depends on a library whose toolchain provides coverage tools. The library
+   * is built on the execution platform for the given OS, whereas the build actions of the test run
+   * on macOS and the test itself runs on Linux.
+   */
+  private void setUpTestWithCoverageTools(String toolOs) throws Exception {
+    // Only allowlisted packages can provide coverage tools.
+    scratch.file("tools/build_defs/cc/fake/BUILD");
+    scratch.file(
+        "tools/build_defs/cc/fake/defs.bzl",
+        """
+        def _fake_cc_library_impl(ctx):
+            return [
+                coverage_common.instrumented_files_info(
+                    ctx,
+                    coverage_environment = {
+                        "GENERATE_LLVM_LCOV": "0",
+                        "COVERAGE_GCOV_PATH": "path/to/gcov",
+                    },
+                ),
+            ]
+
+        fake_cc_library = rule(implementation = _fake_cc_library_impl)
+        """);
+    scratch.file(
+        "some_test.bzl",
+        """
+        def _some_test_impl(ctx):
+            script = ctx.actions.declare_file(ctx.attr.name + ".sh")
+            ctx.actions.write(script, "shell script goes here", is_executable = True)
+            return [
+                DefaultInfo(executable = script),
+                coverage_common.instrumented_files_info(ctx, dependency_attributes = ["deps"]),
+            ]
+
+        some_test = rule(
+            implementation = _some_test_impl,
+            test = True,
+            attrs = {
+                "deps": attr.label_list(),
+                "_collect_cc_coverage": attr.label(
+                    default = "//:collect_cc_coverage.sh",
+                    allow_single_file = True,
+                    cfg = config.exec(exec_group = "test"),
+                ),
+            },
+        )
+        """);
+    scratch.file("collect_cc_coverage.sh");
+    scratch.file(
+        "BUILD",
+        """
+        load("//tools/build_defs/cc/fake:defs.bzl", "fake_cc_library")
+        load(":some_test.bzl", "some_test")
+
+        exports_files(["collect_cc_coverage.sh"])
+
+        [
+            platform(
+                name = os,
+                constraint_values = ["%1$sos:" + os],
+                exec_properties = {"os": os},
+            )
+            for os in ["linux", "macos", "android"]
+        ]
+
+        fake_cc_library(
+            name = "lib",
+            exec_compatible_with = ["%1$sos:%2$s"],
+        )
+
+        some_test(
+            name = "some_test",
+            deps = [":lib"],
+        )
+        """
+            .formatted(TestConstants.CONSTRAINTS_PACKAGE_ROOT, toolOs));
+  }
+
+  private void useCoverageConfiguration(String... extraArgs) throws Exception {
+    useConfiguration(
+        ImmutableList.<String>builder()
+            .add(
+                "--collect_code_coverage",
+                "--%s//tools/test:incompatible_use_default_test_toolchain"
+                    .formatted(TestConstants.TOOLS_REPOSITORY.getCanonicalForm()),
+                "--platforms=//:linux",
+                "--extra_execution_platforms=//:macos,//:android,//:linux")
+            .add(extraArgs)
+            .build()
+            .toArray(new String[0]));
+  }
+
+  /**
+   * Coverage tools provided by a dependency are run on the execution platform of that dependency,
+   * which can differ from that of the test and that of the build actions of the test rule.
+   */
+  @Test
+  public void testCoverageToolsRunOnExecutionPlatformOfProvidingTarget() throws Exception {
+    setUpTestWithCoverageTools("android");
+    useCoverageConfiguration();
+
+    var testAction =
+        (TestRunnerAction) getGeneratingAction(getTestStatusArtifacts("//:some_test").get(0));
+    assertThat(getGeneratingAction(getExecutable("//:some_test")).getExecutionPlatform().label())
+        .isEqualTo(Label.parseCanonicalUnchecked("//:macos"));
+    assertThat(testAction.getExecutionPlatform().label())
+        .isEqualTo(Label.parseCanonicalUnchecked("//:linux"));
+
+    var coverageCollection = testAction.getCoverageCollection();
+    assertThat(coverageCollection.platform().label())
+        .isEqualTo(Label.parseCanonicalUnchecked("//:android"));
+    assertThat(coverageCollection.outputDirectory().isTreeArtifact()).isTrue();
+    assertThat(testAction.getOutputs()).contains(coverageCollection.outputDirectory());
+
+    Map<String, String> env = new HashMap<>();
+    testAction.setupEnvVariables(env);
+    assertThat(env).containsAtLeast("GENERATE_LLVM_LCOV", "0", "COVERAGE_GCOV_PATH", "path/to/gcov");
+    assertThat(env).containsKey("CC_CODE_COVERAGE_SCRIPT");
+
+    Map<String, String> collectionEnv = new HashMap<>(env);
+    testAction.removeCoverageToolsNotBuiltFor(coverageCollection.platform(), collectionEnv);
+    assertThat(collectionEnv).isEqualTo(env);
+
+    Map<String, String> postProcessingEnv = new HashMap<>(env);
+    testAction.removeCoverageToolsNotBuiltFor(
+        testAction.getExecutionPlatform(), postProcessingEnv);
+    assertThat(postProcessingEnv).doesNotContainKey("GENERATE_LLVM_LCOV");
+    assertThat(postProcessingEnv).doesNotContainKey("COVERAGE_GCOV_PATH");
+    assertThat(postProcessingEnv).containsKey("CC_CODE_COVERAGE_SCRIPT");
+  }
+
+  @Test
+  public void testCoverageToolsBuiltForTestPlatformRunInPostProcessingSpawn() throws Exception {
+    setUpTestWithCoverageTools("linux");
+    useCoverageConfiguration();
+
+    var testAction =
+        (TestRunnerAction) getGeneratingAction(getTestStatusArtifacts("//:some_test").get(0));
+    assertThat(testAction.getExecutionPlatform().label())
+        .isEqualTo(Label.parseCanonicalUnchecked("//:linux"));
+    assertThat(testAction.getCoverageCollection()).isNull();
+  }
+
+  @Test
+  public void testCoverageToolsRunByTestSpawnWithoutSplitPostProcessing() throws Exception {
+    setUpTestWithCoverageTools("android");
+    useCoverageConfiguration("--noexperimental_split_coverage_postprocessing");
+
+    var testAction =
+        (TestRunnerAction) getGeneratingAction(getTestStatusArtifacts("//:some_test").get(0));
+    assertThat(testAction.getCoverageCollection()).isNull();
   }
 
   @Test

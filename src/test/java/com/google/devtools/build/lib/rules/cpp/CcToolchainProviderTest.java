@@ -490,15 +490,15 @@ public class CcToolchainProviderTest extends BuildViewTestCase {
             "com/google/devtools/build/lib/analysis/mock/cc_toolchain_config.bzl"));
     useConfiguration("--collect_code_coverage", "--instrumentation_filter=//a[:/]");
 
-    ImmutableMap<String, String> coverageEnv =
+    var coverageEnv =
         getConfiguredTarget("//a:lib")
             .get(InstrumentedFilesInfo.STARLARK_CONSTRUCTOR)
             .getCoverageEnvironment();
 
     assertThat(coverageEnv).containsKey("LLVM_COV");
-    assertThat(coverageEnv.get("LLVM_COV")).isNotEmpty();
+    assertThat(coverageEnv.get("LLVM_COV").value()).isNotEmpty();
     assertThat(coverageEnv).containsKey("LLVM_PROFDATA");
-    assertThat(coverageEnv.get("LLVM_PROFDATA")).isNotEmpty();
+    assertThat(coverageEnv.get("LLVM_PROFDATA").value()).isNotEmpty();
   }
 
   @Test
@@ -547,7 +547,7 @@ public class CcToolchainProviderTest extends BuildViewTestCase {
             "com/google/devtools/build/lib/analysis/mock/cc_toolchain_config.bzl"));
     useConfiguration("--collect_code_coverage", "--instrumentation_filter=//a[:/]");
 
-    ImmutableMap<String, String> coverageEnv =
+    var coverageEnv =
         getConfiguredTarget("//a:lib")
             .get(InstrumentedFilesInfo.STARLARK_CONSTRUCTOR)
             .getCoverageEnvironment();

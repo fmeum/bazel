@@ -40,10 +40,13 @@ import com.google.devtools.build.lib.analysis.TransitiveInfoCollection;
 import com.google.devtools.build.lib.analysis.actions.LazyWriteNestedSetOfTupleAction;
 import com.google.devtools.build.lib.analysis.config.BuildConfigurationValue;
 import com.google.devtools.build.lib.analysis.platform.PlatformConstants;
+import com.google.devtools.build.lib.analysis.platform.PlatformInfo;
 import com.google.devtools.build.lib.analysis.platform.ToolchainTypeInfo;
+import com.google.devtools.build.lib.analysis.test.InstrumentedFilesInfo.CoverageEnvironmentValue;
 import com.google.devtools.build.lib.analysis.test.TestConfiguration.TestOptions.CancelConcurrentTests;
 import com.google.devtools.build.lib.analysis.test.TestProvider.TestParams;
 import com.google.devtools.build.lib.analysis.test.TestProvider.TestParams.CoverageParams;
+import com.google.devtools.build.lib.analysis.test.TestRunnerAction.CoverageCollection;
 import com.google.devtools.build.lib.cmdline.RepositoryMapping;
 import com.google.devtools.build.lib.collect.nestedset.NestedSet;
 import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
@@ -71,6 +74,9 @@ public final class TestActionBuilder {
   // The coverage tool Bazel uses to generate a code coverage report for C++.
   private static final String BAZEL_CC_COVERAGE_TOOL = "BAZEL_CC_COVERAGE_TOOL";
   private static final String GCOV_TOOL = "GCOV";
+  // Set by the C++ toolchain that provides the C++ coverage tools. The script referenced by
+  // CC_CODE_COVERAGE_SCRIPT is only run if this is set.
+  private static final String GENERATE_LLVM_LCOV = "GENERATE_LLVM_LCOV";
   // A file that contains a mapping between the reported source file path and the actual source
   // file path, relative to the workspace directory, if the two values are different. If the
   // reported source file is the same as the actual source path it will not be included in the file.
@@ -273,7 +279,7 @@ public final class TestActionBuilder {
     inputsBuilder.add(testXmlGeneratorExecutable);
 
     FilesToRunProvider collectCoverageScript = null;
-    TreeMap<String, String> coverageTestEnv = new TreeMap<>();
+    TreeMap<String, CoverageEnvironmentValue> coverageTestEnv = new TreeMap<>();
 
     int runsPerTest = getRunsPerTest(ruleContext);
     int shardCount = getShardCount(ruleContext);
@@ -304,7 +310,10 @@ public final class TestActionBuilder {
       if (ruleContext.isAttrDefined("$collect_cc_coverage", LABEL)) {
         Artifact collectCcCoverage = ruleContext.getPrerequisiteArtifact("$collect_cc_coverage");
         inputsBuilder.add(collectCcCoverage);
-        coverageTestEnv.put(CC_CODE_COVERAGE_SCRIPT, collectCcCoverage.getExecPathString());
+        coverageTestEnv.put(
+            CC_CODE_COVERAGE_SCRIPT,
+            new CoverageEnvironmentValue(
+                collectCcCoverage.getExecPathString(), /* toolPlatform= */ null));
       }
 
       if (!instrumentedFiles.getReportedToActualSources().isEmpty()) {
@@ -320,11 +329,14 @@ public final class TestActionBuilder {
         inputsBuilder.add(reportedToActualSourcesArtifact);
         coverageTestEnv.put(
             COVERAGE_REPORTED_TO_ACTUAL_SOURCES_FILE,
-            reportedToActualSourcesArtifact.getExecPathString());
+            new CoverageEnvironmentValue(
+                reportedToActualSourcesArtifact.getExecPathString(), /* toolPlatform= */ null));
       }
 
       // lcov is the default CC coverage tool unless otherwise specified on the command line.
-      coverageTestEnv.put(BAZEL_CC_COVERAGE_TOOL, GCOV_TOOL);
+      coverageTestEnv.put(
+          BAZEL_CC_COVERAGE_TOOL,
+          new CoverageEnvironmentValue(GCOV_TOOL, /* toolPlatform= */ null));
 
       // We don't add this attribute to non-supported test target
       String lcovMergerAttr = null;
@@ -342,7 +354,10 @@ public final class TestActionBuilder {
               lcovMergerAttr,
               "the LCOV merger should be either an executable or a single artifact");
         }
-        coverageTestEnv.put(LCOV_MERGER, lcovFilesToRun.getExecutable().getExecPathString());
+        coverageTestEnv.put(
+            LCOV_MERGER,
+            new CoverageEnvironmentValue(
+                lcovFilesToRun.getExecutable().getExecPathString(), /* toolPlatform= */ null));
         inputsBuilder.addTransitive(lcovFilesToRun.getFilesToRun());
         lcovMergerFilesToRun = lcovFilesToRun.getFilesToRun();
       }
@@ -380,6 +395,12 @@ public final class TestActionBuilder {
         inputsBuilder.add(runUnderExecutable);
       }
     }
+
+    PlatformInfo coverageCollectionPlatform =
+        testConfiguration.splitCoveragePostProcessing()
+                && testConfiguration.fetchAllCoverageOutputs()
+            ? getCoverageCollectionPlatform(coverageTestEnv, actionOwner.getExecutionPlatform())
+            : null;
 
     NestedSet<Artifact> inputs = inputsBuilder.build();
     int shardRuns = (shardCount > 0 ? shardCount : 1);
@@ -428,6 +449,13 @@ public final class TestActionBuilder {
                 ruleContext.getPackageRelativeTreeArtifact(dir.getRelative("_coverage"), root);
           }
         }
+        CoverageCollection coverageCollection =
+            coverageCollectionPlatform != null
+                ? new CoverageCollection(
+                    coverageCollectionPlatform,
+                    ruleContext.getPackageRelativeTreeArtifact(
+                        dir.getRelative("_coverage_collection"), root))
+                : null;
 
         Artifact undeclaredOutputsDir =
             ruleContext.getPackageRelativeTreeArtifact(dir.getRelative("test.outputs"), root);
@@ -466,6 +494,7 @@ public final class TestActionBuilder {
                     : null,
                 cancelConcurrentTests,
                 splitCoveragePostProcessing,
+                coverageCollection,
                 lcovMergerFilesToRun,
                 unrunnableReason);
 
@@ -502,6 +531,28 @@ public final class TestActionBuilder {
         ImmutableList.copyOf(results),
         testOutputs.build(),
         coverageParams);
+  }
+
+  /**
+   * Returns the execution platform that the script referenced by {@code CC_CODE_COVERAGE_SCRIPT}
+   * has to run on, or null if it can run on the execution platform of the test.
+   *
+   * <p>The script runs the coverage tools of the C++ toolchain that enabled it, which are built for
+   * the execution platform of the target that resolved that toolchain.
+   */
+  @Nullable
+  private static PlatformInfo getCoverageCollectionPlatform(
+      TreeMap<String, CoverageEnvironmentValue> coverageTestEnv,
+      @Nullable PlatformInfo testPlatform) {
+    var enabledBy = coverageTestEnv.get(GENERATE_LLVM_LCOV);
+    if (!coverageTestEnv.containsKey(CC_CODE_COVERAGE_SCRIPT)
+        || enabledBy == null
+        || enabledBy.toolPlatform() == null
+        || testPlatform == null
+        || enabledBy.toolPlatform().label().equals(testPlatform.label())) {
+      return null;
+    }
+    return enabledBy.toolPlatform();
   }
 
   private static Artifact getInstrumentedFileManifest(
