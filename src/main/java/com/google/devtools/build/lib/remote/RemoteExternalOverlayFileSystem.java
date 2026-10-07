@@ -34,6 +34,7 @@ import com.google.common.util.concurrent.MoreExecutors;
 import com.google.devtools.build.lib.actions.ActionInputHelper;
 import com.google.devtools.build.lib.actions.ActionInputPrefetcher;
 import com.google.devtools.build.lib.actions.FileArtifactValue;
+import com.google.devtools.build.lib.actions.FileContentsProxy;
 import com.google.devtools.build.lib.cmdline.RepositoryName;
 import com.google.devtools.build.lib.concurrent.TaskDeduplicator;
 import com.google.devtools.build.lib.events.Event;
@@ -69,6 +70,7 @@ import java.nio.channels.SeekableByteChannel;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collection;
 import java.util.HashSet;
 import java.util.LinkedHashSet;
@@ -225,12 +227,13 @@ public final class RemoteExternalOverlayFileSystem extends FileSystem implements
   public boolean injectRemoteRepo(RepositoryName repo, Tree remoteContents, String markerFile)
       throws IOException, InterruptedException {
     var repoDir = externalDirectory.getChild(repo.getName());
-    deleteTree(repoDir);
+    var materializedFiles = deleteAllButMaterializedFiles(repoDir);
     materializedRepos.remove(repo.getName());
     var unused = delete(externalDirectory.getChild(repo.getMarkerFileName()));
     var filesToPrefetch = new LinkedHashSet<PathFragment>();
     var symlinksToPrefetch = new ArrayList<PathFragment>();
     injectRepoContents(repo, remoteContents, filesToPrefetch::add, symlinksToPrefetch::add);
+    keepUnchangedMaterializedFiles(repoDir, materializedFiles);
     addSymlinkTargetsToPrefetch(symlinksToPrefetch, filesToPrefetch);
     try {
       // TODO: This prefetches a large number of small files. Investigate whether BatchReadBlobs
@@ -274,6 +277,133 @@ public final class RemoteExternalOverlayFileSystem extends FileSystem implements
         filesToPrefetch,
         symlinksToPrefetch,
         Instant.now().plus(remoteCacheTtl));
+  }
+
+  /**
+   * Deletes the in-memory contents of the given repo and, unless files have been materialized from
+   * them to the native file system, its native contents. Returns the metadata of those files, keyed
+   * by path.
+   *
+   * <p>The files that are unchanged in the contents that replace the in-memory ones are kept in
+   * place by {@link #keepUnchangedMaterializedFiles}: the nodes that materialized them, e.g. the
+   * completions of top-level targets, are change pruned and wouldn't materialize them again.
+   */
+  private ImmutableMap<PathFragment, FileArtifactValue> deleteAllButMaterializedFiles(
+      PathFragment repoDir) throws IOException {
+    var materializedFiles = ImmutableMap.<PathFragment, FileArtifactValue>builder();
+    var nativeRepoDir = nativeFs.getPath(repoDir);
+    // A native repo directory that is a symlink must not be traversed.
+    if (externalFs.getPath(repoDir).isDirectory(Symlinks.NOFOLLOW)
+        && nativeRepoDir.isDirectory(Symlinks.NOFOLLOW)) {
+      try {
+        collectMaterializedFiles(nativeRepoDir, materializedFiles);
+      } catch (IOException e) {
+        // Keep nothing, e.g. if a directory isn't readable.
+        materializedFiles = ImmutableMap.builder();
+      }
+    }
+    var result = materializedFiles.buildOrThrow();
+    if (result.isEmpty()) {
+      deleteTree(repoDir);
+    } else {
+      externalFs.deleteTree(repoDir);
+    }
+    return result;
+  }
+
+  private void collectMaterializedFiles(
+      Path nativeDir, ImmutableMap.Builder<PathFragment, FileArtifactValue> materializedFiles)
+      throws IOException {
+    for (var dirent : nativeDir.readdir(Symlinks.NOFOLLOW)) {
+      var child = nativeDir.getChild(dirent.getName());
+      switch (dirent.getType()) {
+        case FILE -> {
+          var metadata = getInMemoryFileMetadata(child.asFragment());
+          if (metadata != null
+              && !AbstractActionInputPrefetcher.shouldDownloadFile(child, metadata)) {
+            materializedFiles.put(child.asFragment(), metadata);
+          }
+        }
+        case DIRECTORY -> collectMaterializedFiles(child, materializedFiles);
+        default -> {}
+      }
+    }
+  }
+
+  private void keepUnchangedMaterializedFiles(
+      PathFragment repoDir, ImmutableMap<PathFragment, FileArtifactValue> materializedFiles)
+      throws IOException {
+    if (materializedFiles.isEmpty()) {
+      return;
+    }
+    try {
+      deleteChangedFiles(nativeFs.getPath(repoDir), materializedFiles);
+    } catch (IOException e) {
+      // Delete everything instead, which also handles e.g. directories that aren't writable.
+      nativeFs.deleteTree(repoDir);
+    }
+  }
+
+  /**
+   * Deletes everything below the given directory of the native file system except for the given
+   * materialized files and the symlinks that are unchanged in the current in-memory contents of the
+   * repo.
+   */
+  private void deleteChangedFiles(
+      Path nativeDir, ImmutableMap<PathFragment, FileArtifactValue> materializedFiles)
+      throws IOException {
+    for (var dirent : nativeDir.readdir(Symlinks.NOFOLLOW)) {
+      var child = nativeDir.getChild(dirent.getName());
+      var inMemoryChild = externalFs.getPath(child.asFragment());
+      switch (dirent.getType()) {
+        case FILE -> {
+          var materializedFile = materializedFiles.get(child.asFragment());
+          var metadata = getInMemoryFileMetadata(child.asFragment());
+          if (materializedFile != null
+              && metadata != null
+              && Arrays.equals(materializedFile.getDigest(), metadata.getDigest())) {
+            var contentsProxy = materializedFile.getContentsProxy();
+            // A file whose contents are unchanged may still have become executable or stopped being
+            // executable. It has to be kept in place either way, as its consumers are change
+            // pruned, but with the permissions it would be downloaded with.
+            boolean executable = inMemoryChild.isExecutable();
+            if (child.isExecutable() != executable) {
+              child.chmod(getMaterializationPermissions(executable));
+              // Changing the permissions changes the ctime, which is part of the contents proxy.
+              contentsProxy = FileContentsProxy.create(child.stat());
+            }
+            // Spare the next replacement of the repo from checking the file's digest.
+            metadata.setContentsProxy(contentsProxy);
+            continue;
+          }
+        }
+        case SYMLINK -> {
+          // Some file systems, e.g. on Windows, turn relative symlink targets into absolute ones.
+          var dir = nativeDir.asFragment();
+          if (inMemoryChild.isSymbolicLink()
+              && dir.getRelative(inMemoryChild.readSymbolicLink())
+                  .equals(dir.getRelative(child.readSymbolicLink()))) {
+            continue;
+          }
+        }
+        case DIRECTORY -> {
+          if (inMemoryChild.isDirectory(Symlinks.NOFOLLOW)) {
+            deleteChangedFiles(child, materializedFiles);
+            continue;
+          }
+        }
+        default -> {}
+      }
+      child.deleteTree();
+    }
+  }
+
+  @Nullable
+  private FileArtifactValue getInMemoryFileMetadata(PathFragment path) throws IOException {
+    return externalFs.getPath(path).statIfFound(Symlinks.NOFOLLOW)
+            instanceof RemoteActionFileSystem.RemoteInMemoryFileInfo info
+        ? info.getMetadata()
+        : null;
   }
 
   /**
@@ -558,10 +688,14 @@ public final class RemoteExternalOverlayFileSystem extends FileSystem implements
       // nativeFs. Read externalFs directly so prefetched files preserve the cached executable bit.
       var stat = externalFs.statIfFound(path, /* followSymlinks= */ true);
       if (stat != null && stat.isFile()) {
-        return (stat.getPermissions() & 0100) != 0 ? 0555 : 0444;
+        return getMaterializationPermissions((stat.getPermissions() & 0100) != 0);
       }
     }
     return defaultPermissions;
+  }
+
+  private static int getMaterializationPermissions(boolean executable) {
+    return executable ? 0555 : 0444;
   }
 
   /**

@@ -411,6 +411,93 @@ class RemoteRepoContentsCacheTest(
     self.assertNotIn('JUST FETCHED', '\n'.join(stderr))
     self.assertFalse(os.path.exists(os.path.join(repo_dir, 'BUILD')))
 
+  def testReinjectionKeepsUnchangedMaterializedFiles(self):
+    if self.IsWindows():
+      self.ScratchFile(
+          '.bazelrc',
+          ['startup --windows_enable_symlinks'],
+          mode='a',
+      )
+    self.ScratchFile(
+        'MODULE.bazel',
+        [
+            'repo = use_repo_rule("//:repo.bzl", "repo")',
+            'repo(name = "my_repo")',
+        ],
+    )
+    self.ScratchFile('BUILD.bazel')
+    self.ScratchFile(
+        'repo.bzl',
+        [
+            'def _repo_impl(rctx):',
+            '  version = rctx.getenv("VERSION")',
+            '  rctx.file("unchanged.txt", "unchanged")',
+            '  rctx.symlink("unchanged.txt", "link.txt")',
+            '  rctx.file("script.sh", "echo hi", executable = version == "2")',
+            '  rctx.file("corrupted.txt", "corrupted")',
+            '  rctx.file("changed.txt", "version " + version)',
+            '  rctx.file("BUILD", """',
+            'filegroup(',
+            '    name = "unchanged",',
+            '    srcs = ["unchanged.txt", "link.txt", "script.sh"],',
+            ')',
+            'filegroup(name = "corrupted", srcs = ["corrupted.txt"])',
+            'filegroup(name = "changed", srcs = ["changed.txt"])',
+            '""")',
+            '  print("JUST FETCHED")',
+            '  return rctx.repo_metadata(reproducible=True)',
+            'repo = repository_rule(_repo_impl)',
+        ],
+    )
+
+    repo_dir = self.RepoDir('my_repo')
+    all_targets = [
+        '@my_repo//:unchanged',
+        '@my_repo//:corrupted',
+        '@my_repo//:changed',
+    ]
+
+    # Not cached: fetch both versions of the repo.
+    for version in ['1', '2']:
+      _, _, stderr = self.RunBazel(
+          ['build', '--repo_env=VERSION=' + version] + all_targets
+      )
+      self.assertIn('JUST FETCHED', '\n'.join(stderr))
+
+    # Cached: the files are downloaded as top-level outputs.
+    _, _, stderr = self.RunBazel(
+        ['build', '--repo_env=VERSION=1'] + all_targets
+    )
+    self.assertNotIn('JUST FETCHED', '\n'.join(stderr))
+    script = os.path.join(repo_dir, 'script.sh')
+    if not self.IsWindows():
+      self.assertEqual(os.stat(script).st_mode & 0o111, 0)
+    corrupted_file = os.path.join(repo_dir, 'corrupted.txt')
+    os.chmod(corrupted_file, 0o644)
+    with open(corrupted_file, 'w') as f:
+      f.write('CORRUPTED')
+
+    # Cached: replacing the repo keeps the unchanged files, including the
+    # symlink and the file whose executable bit changed, as their target isn't
+    # completed again. The corrupted and the changed file are deleted.
+    _, _, stderr = self.RunBazel(
+        ['build', '--repo_env=VERSION=2', '@my_repo//:unchanged']
+    )
+    self.assertNotIn('JUST FETCHED', '\n'.join(stderr))
+    for name, contents in [
+        ('unchanged.txt', 'unchanged'),
+        ('link.txt', 'unchanged'),
+        ('script.sh', 'echo hi'),
+    ]:
+      with open(os.path.join(repo_dir, name)) as f:
+        self.assertEqual(f.read(), contents)
+    self.assertTrue(os.path.islink(os.path.join(repo_dir, 'link.txt')))
+    if not self.IsWindows():
+      # The kept file has the permissions it would have been downloaded with.
+      self.assertEqual(os.stat(script).st_mode & 0o777, 0o555)
+    self.assertFalse(os.path.exists(corrupted_file))
+    self.assertFalse(os.path.exists(os.path.join(repo_dir, 'changed.txt')))
+
   def testRecordedInputs_differentValues(self):
     platform_file = self.ScratchFile('platform.txt')
 
@@ -453,14 +540,20 @@ class RemoteRepoContentsCacheTest(
             ),
         ],
     )
+    # The BUILD file differs between platforms, so that it isn't kept on disk
+    # as an unchanged file when the repo is replaced by the cached contents for
+    # the other platform.
     self.ScratchFile(
         'repo.bzl',
         [
             'def _repo_impl(rctx):',
-            '  rctx.file("BUILD", "exports_files([\'data.txt\'])")',
             (
                 '  platform ='
                 ' rctx.read(Label("@platform_dependent_repo//:data.txt"))'
+            ),
+            (
+                '  rctx.file("BUILD",'
+                ' "exports_files([\'data.txt\'])  # " + platform)'
             ),
             '  print("JUST FETCHED ON " + platform)',
             '  rctx.file("data.txt", platform)',
