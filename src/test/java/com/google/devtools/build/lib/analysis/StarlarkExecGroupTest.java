@@ -1152,7 +1152,7 @@ public class StarlarkExecGroupTest extends BuildViewTestCase {
                 command = "touch " + out.path,
                 exec_group = "runtime",
             )
-            return [MyInfo(
+            return [DefaultInfo(files = depset([out])), MyInfo(
                 exec_runtime_name = exec_runtime.name,
                 exec_runtime_tool = exec_runtime.tool,
                 target_runtime_name = target_runtime.name,
