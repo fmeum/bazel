@@ -194,8 +194,9 @@ public class CppCompileAction extends AbstractAction
    * building users of this module. Such users can get to this data through this action's {@link
    * com.google.devtools.build.lib.skyframe.ActionExecutionValue}
    *
-   * <p>This field is populated either based on the discovered headers in {@link #discoverInputs} or
-   * extracted from the action inputs when restoring it from the action cache.
+   * <p>This field is populated either based on the discovered headers in {@link #discoverInputs},
+   * extracted from the action inputs when restoring it from the action cache, or set to all
+   * transitive modules as an upper bound when include scanning is disabled.
    */
   private NestedSet<Artifact> discoveredModules = null;
 
@@ -327,6 +328,7 @@ public class CppCompileAction extends AbstractAction
     this.allowedDerivedInputs = allowedDerivedInputsBuilder.build();
     this.moduleFiles = moduleFiles;
     this.modmapInputFile = modmapInputFile;
+    initializeModulesUpperBoundsIfNotScanningIncludes();
   }
 
   /** Constructor for serialization. */
@@ -386,6 +388,31 @@ public class CppCompileAction extends AbstractAction
     this.builtInIncludeDirectories = builtInIncludeDirectories;
     this.moduleFiles = moduleFiles;
     this.modmapInputFile = modmapInputFile;
+    initializeModulesUpperBoundsIfNotScanningIncludes();
+  }
+
+  /**
+   * Without include scanning, the exact set of modules used by this compilation is unknown, so use
+   * a suitable upper bound: any directly usable module may be used as a top-level module and any
+   * transitive module may be needed as an input.
+   *
+   * <p>With include scanning, these values are computed in {@link #discoverInputs} instead.
+   */
+  private void initializeModulesUpperBoundsIfNotScanningIncludes() {
+    if (shouldScanIncludes || !useHeaderModules) {
+      return;
+    }
+    boolean separate =
+        getPrimaryOutput().equals(ccCompilationContext.getSeparateHeaderModule(usePic));
+    NestedSet<Artifact> topLevelModules = ccCompilationContext.getDirectModules(usePic, separate);
+    this.topLevelModules = topLevelModules;
+    if (getPrimaryOutput().isFileType(CppFileTypes.CPP_MODULE)
+        && !isCpp20ModuleCompilationAction(actionName)) {
+      this.discoveredModules =
+          NestedSetBuilder.fromNestedSet(ccCompilationContext.getTransitiveModules(usePic))
+              .addTransitive(topLevelModules)
+              .build();
+    }
   }
 
   private static ImmutableSet<Artifact> collectOutputs(
@@ -530,6 +557,11 @@ public class CppCompileAction extends AbstractAction
         .addTransitive(ccCompilationContext.getDeclaredIncludeSrcs())
         .addTransitive(additionalPrunableHeaders)
         .build();
+  }
+
+  @VisibleForTesting
+  public NestedSet<Artifact> getAdditionalPrunableHeadersForTesting() {
+    return additionalPrunableHeaders;
   }
 
   private synchronized void setTopLevelModules(NestedSet<Artifact> value) {
@@ -765,8 +797,8 @@ public class CppCompileAction extends AbstractAction
   }
 
   /**
-   * Set by {@link #discoverInputs}. Returns a subset of {@link #getAdditionalInputs} or an empty
-   * {@link NestedSet}, if this is not a compile action producing a C++ module.
+   * Set by {@link #discoverInputs} or, when include scanning is disabled, in the constructor.
+   * Returns an empty {@link NestedSet}, if this is not a compile action producing a C++ module.
    */
   @Override
   public NestedSet<Artifact> getDiscoveredModules() {
@@ -1012,7 +1044,9 @@ public class CppCompileAction extends AbstractAction
     ParamFileInfo paramFileInfo = null;
     if (cppConfiguration().useArgsParamsFile()) {
       paramFileInfo =
-          ParamFileInfo.builder(ParameterFileType.GCC_QUOTED).setUseAlways(true).build();
+          ParamFileInfo.builder(getParameterFileType(featureConfiguration))
+              .setUseAlways(true)
+              .build();
     }
     CommandLineAndParamFileInfo commandLineAndParamFileInfo =
         new CommandLineAndParamFileInfo(commandLine, paramFileInfo);
@@ -1020,6 +1054,12 @@ public class CppCompileAction extends AbstractAction
     Args args = Args.forRegisteredAction(commandLineAndParamFileInfo, directoryInputs);
 
     return StarlarkList.immutableCopyOf(ImmutableList.of(args));
+  }
+
+  static ParameterFileType getParameterFileType(FeatureConfiguration featureConfiguration) {
+    return featureConfiguration.isEnabled(CppRuleClasses.WINDOWS_QUOTING_FOR_PARAM_FILES)
+        ? ParameterFileType.WINDOWS
+        : ParameterFileType.GCC_QUOTED;
   }
 
   @Override
@@ -1228,14 +1268,16 @@ public class CppCompileAction extends AbstractAction
   CcToolchainVariables getOverwrittenVariables() {
     if (useHeaderModules) {
       // TODO(cmita): Avoid keeping state in CppCompileAction.
-      // There are two cases for when this method might be called:
-      // 1. After input discovery, after which toplevelModules is set (in discoverInputs()).
-      // 2. After the action is loaded from the local action cache, leaving topLevelModules null.
-      //
-      // Ideally the same thing would be done in both cases, but as is, we just overestimate modules
-      // in the latter case using the inputs from the action cache.
+      // There are three cases for when this method might be called:
+      // 1. After input discovery, after which topLevelModules is set (in discoverInputs()).
+      // 2. Without include scanning, in which case topLevelModules is set to an upper bound in the
+      //    constructor.
+      // 3. After the action is loaded from the local action cache, leaving topLevelModules null in
+      //    the case of include scanning.
+      // Ideally the same thing would be done in all cases, but as is, we just overestimate modules
+      // in the last case using the inputs from the action cache.
       // Note that this breaks the invariant that Actions are immutable after the analysis phase.
-      NestedSet<Artifact> modules = shouldScanIncludes ? getTopLevelModules() : null;
+      NestedSet<Artifact> modules = getTopLevelModules();
       if (modules != null) {
         return calculateModuleVariable(modules);
       } else {
@@ -1354,6 +1396,7 @@ public class CppCompileAction extends AbstractAction
         compileCommandLine.getEnvironment(PathMapper.NOOP),
         executionInfo,
         getCommandLineKey(),
+        getParameterFileType(featureConfiguration),
         ccCompilationContext.getDeclaredIncludeSrcs(),
         mandatoryInputs,
         mandatorySpawnInputs,
@@ -1372,6 +1415,7 @@ public class CppCompileAction extends AbstractAction
       Map<String, String> environmentVariables,
       Map<String, String> executionInfo,
       byte[] commandLineKey,
+      ParameterFileType parameterFileType,
       NestedSet<Artifact> declaredIncludeSrcs,
       NestedSet<Artifact> mandatoryInputs,
       NestedSet<Artifact> mandatorySpawnInputs,
@@ -1386,6 +1430,7 @@ public class CppCompileAction extends AbstractAction
     fp.addStringMap(environmentVariables);
     fp.addStringMap(executionInfo);
     fp.addBytes(commandLineKey);
+    fp.addString(parameterFileType.toString());
 
     actionKeyContext.addNestedSetToFingerprint(fp, declaredIncludeSrcs);
     fp.addInt(0); // mark the boundary between input types
@@ -1602,8 +1647,7 @@ public class CppCompileAction extends AbstractAction
               paramFilePath,
               paramFileArg,
               compilerOptions,
-              // TODO(b/132888308): Support MSVC, which has its own method of escaping strings.
-              ParameterFileType.GCC_QUOTED);
+              getParameterFileType(featureConfiguration));
       args =
           compileCommandLine.getArgumentsWithParameterFile(pathMapper, paramFileArg, paramFilePath);
     }
@@ -1772,12 +1816,9 @@ public class CppCompileAction extends AbstractAction
           /* tools= */ NestedSetBuilder.emptySet(Order.STABLE_ORDER),
           getOutputs(),
           mandatoryOutputs,
-          () ->
+          (os, inputsSize) ->
               estimateResourceConsumptionLocal(
-                  enabledCppCompileResourcesEstimation(),
-                  getMnemonic(),
-                  OS.getCurrent(),
-                  inputs.flatten().size()),
+                  enabledCppCompileResourcesEstimation(), getMnemonic(), os, inputsSize),
           pathMapper);
     } catch (CommandLineExpansionException e) {
       String message =
@@ -1945,6 +1986,7 @@ public class CppCompileAction extends AbstractAction
               includeScanningHeaderData
                   .setSystemIncludeDirs(getSystemIncludeDirs())
                   .setCmdlineIncludes(getCmdlineIncludes(getCompilerOptions()))
+                  .setIsValidUndeclaredHeader(getValidUndeclaredHeaderPredicate())
                   // Register generated prunable/toolchain headers as declared so the include
                   // scanner can resolve them; it never stats output-directory paths. Keep in sync
                   // with the matching call in discoverInputs above. See

@@ -597,7 +597,9 @@ public class ExecutionTool {
           buildResultListener.getAnalyzedTargets(),
           buildResultListener.getSkippedTargets(),
           buildResultListener.getAnalyzedAspects(),
-          buildResultListener.getTargetRootCauses());
+          buildResultListener.getTargetRootCauses(),
+          buildResultListener.getAspectRootCauses(),
+          buildResultListener.hasSandboxedActionFailures());
     }
 
     if (explanationHandler != null) {
@@ -881,7 +883,7 @@ public class ExecutionTool {
    * An ErrorEventListener implementation that records DEPCHECKER events into a log file, iff the
    * --explain flag is specified during a build.
    */
-  private static class ExplanationHandler implements EventHandler, AutoCloseable {
+  static class ExplanationHandler implements EventHandler, AutoCloseable {
     private final PrintWriter log;
 
     private ExplanationHandler(OutputStream log, String optionsDescription) {
