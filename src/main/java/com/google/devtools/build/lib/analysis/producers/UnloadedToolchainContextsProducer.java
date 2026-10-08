@@ -119,6 +119,7 @@ public final class UnloadedToolchainContextsProducer implements StateMachine {
           keyBuilder
               .toolchainTypes(execGroup.toolchainTypes())
               .execConstraintLabels(execGroup.execCompatibleWith())
+              .useTargetPlatformAsExecutionPlatform(execGroup.useTargetPlatform())
               .build();
       lookupToolchainContext(baseTargetPrerequisitesSupplier, key, entry.getKey(), tasks);
     }

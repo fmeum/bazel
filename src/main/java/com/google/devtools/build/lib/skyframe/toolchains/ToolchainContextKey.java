@@ -37,6 +37,7 @@ public abstract class ToolchainContextKey implements SkyKey {
     return new AutoValue_ToolchainContextKey.Builder()
         .toolchainTypes(ImmutableSet.of())
         .execConstraintLabels(ImmutableSet.of())
+        .useTargetPlatformAsExecutionPlatform(false)
         .debugTarget(false);
   }
 
@@ -58,6 +59,12 @@ public abstract class ToolchainContextKey implements SkyKey {
 
   abstract Optional<Label> forceExecutionPlatform();
 
+  /**
+   * Whether the target platform is the only candidate execution platform, regardless of whether
+   * it is registered as an execution platform.
+   */
+  abstract boolean useTargetPlatformAsExecutionPlatform();
+
   public abstract boolean debugTarget();
 
   /** Builder for {@link ToolchainContextKey}. */
@@ -76,6 +83,8 @@ public abstract class ToolchainContextKey implements SkyKey {
     public abstract Builder debugTarget(boolean flag);
 
     public abstract Builder forceExecutionPlatform(Label execPlatform);
+
+    public abstract Builder useTargetPlatformAsExecutionPlatform(boolean flag);
 
     public final ToolchainContextKey build() {
       return interner.intern(autoBuild());

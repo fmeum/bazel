@@ -2172,7 +2172,10 @@ public class StarlarkRuleClassFunctions implements StarlarkRuleFunctionsApi {
 
   @Override
   public DeclaredExecGroup execGroup(
-      Sequence<?> toolchains, Sequence<?> execCompatibleWith, StarlarkThread thread)
+      Sequence<?> toolchains,
+      Sequence<?> execCompatibleWith,
+      boolean useTargetPlatform,
+      StarlarkThread thread)
       throws EvalException {
     LabelConverter labelConverter = LabelConverter.forBzlEvaluatingThread(thread);
     ImmutableSet<ToolchainTypeRequirement> toolchainTypes =
@@ -2182,6 +2185,7 @@ public class StarlarkRuleClassFunctions implements StarlarkRuleFunctionsApi {
     return DeclaredExecGroup.builder()
         .toolchainTypes(toolchainTypes)
         .execCompatibleWith(constraints)
+        .useTargetPlatform(useTargetPlatform)
         .build();
   }
 

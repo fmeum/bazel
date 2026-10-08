@@ -73,7 +73,10 @@ record PlatformKeys(
       this.targetPlatformLabel = platformConfiguration.getTargetPlatform();
     }
 
-    private PlatformKeys build(ImmutableSet<Label> execConstraintLabels)
+    private PlatformKeys build(
+        ImmutableSet<Label> execConstraintLabels,
+        boolean useTargetPlatformAsExecutionPlatform,
+        Optional<Label> forcedExecutionPlatformLabel)
         throws InterruptedException,
             ToolchainResolutionFunction.ValueMissingException,
             InvalidPlatformException,
@@ -109,9 +112,27 @@ record PlatformKeys(
       }
       this.platformInfos.putAll(updated);
 
+      ImmutableList<ConfiguredTargetKey> candidatePlatformKeys;
+      if (useTargetPlatformAsExecutionPlatform) {
+        // The target platform is the only candidate, even if it isn't registered as an execution
+        // platform.
+        candidatePlatformKeys = ImmutableList.of(resolvedTargetPlatformKey);
+      } else {
+        // If the target platform is forced as the execution platform, e.g. for a toolchain
+        // resolved in an exec group that uses the target platform, it is a candidate even if it
+        // isn't registered as an execution platform. Any other forced execution platform is
+        // registered.
+        if (forcedExecutionPlatformLabel
+            .filter(resolvedTargetPlatformKey.getLabel()::equals)
+            .isPresent()) {
+          this.executionPlatformKeys.add(resolvedTargetPlatformKey);
+        }
+        candidatePlatformKeys = ImmutableList.copyOf(this.executionPlatformKeys);
+      }
+
       // Filter the execution platforms, based on the applied constraints (if any).
       ImmutableList<ConfiguredTargetKey> executionPlatformKeys =
-          filterExecutionPlatforms(execConstraintLabels);
+          filterExecutionPlatforms(candidatePlatformKeys, execConstraintLabels);
 
       return new PlatformKeys(
           resolvedTargetPlatformKey, executionPlatformKeys, ImmutableMap.copyOf(platformInfos));
@@ -192,6 +213,7 @@ record PlatformKeys(
     }
 
     private ImmutableList<ConfiguredTargetKey> filterExecutionPlatforms(
+        ImmutableList<ConfiguredTargetKey> candidatePlatformKeys,
         ImmutableSet<Label> execConstraintLabels)
         throws InterruptedException,
             ToolchainResolutionFunction.ValueMissingException,
@@ -199,7 +221,7 @@ record PlatformKeys(
 
       // Short circuit if not needed.
       if (execConstraintLabels.isEmpty()) {
-        return ImmutableList.copyOf(executionPlatformKeys);
+        return candidatePlatformKeys;
       }
 
       // Filter out execution platforms that don't satisfy the extra constraints.
@@ -220,7 +242,7 @@ record PlatformKeys(
         throw new ToolchainResolutionFunction.ValueMissingException();
       }
 
-      return executionPlatformKeys.stream()
+      return candidatePlatformKeys.stream()
           .filter(key -> filterPlatform(platformInfos.get(key), constraints))
           .collect(toImmutableList());
     }
@@ -241,7 +263,9 @@ record PlatformKeys(
       ToolchainResolutionDebugPrinter debugPrinter,
       BuildConfigurationKey configurationKey,
       PlatformConfiguration platformConfiguration,
-      ImmutableSet<Label> execConstraintLabels)
+      ImmutableSet<Label> execConstraintLabels,
+      boolean useTargetPlatformAsExecutionPlatform,
+      Optional<Label> forcedExecutionPlatformLabel)
       throws InterruptedException,
           ToolchainResolutionFunction.ValueMissingException,
           InvalidConstraintValueException,
@@ -249,7 +273,10 @@ record PlatformKeys(
           InvalidExecutionPlatformLabelException {
 
     return new Builder(environment, debugPrinter, configurationKey, platformConfiguration)
-        .build(execConstraintLabels);
+        .build(
+            execConstraintLabels,
+            useTargetPlatformAsExecutionPlatform,
+            forcedExecutionPlatformLabel);
   }
 
   @Nullable

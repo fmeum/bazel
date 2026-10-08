@@ -1423,6 +1423,73 @@ To debug, rerun with --toolchain_resolution_debug='\\Q@@repo+//toolchain:test_to
   }
 
   @Test
+  public void resolve_useTargetPlatformAsExecutionPlatform() throws Exception {
+    // This should select execution platform linux, toolchain extra_toolchain_linux, since the
+    // target platform is used as the execution platform, even though it isn't registered as an
+    // execution platform.
+    addToolchain(
+        /* packageName= */ "extra",
+        /* toolchainName= */ "extra_toolchain_linux",
+        /* execConstraints= */ ImmutableList.of("//constraints:linux"),
+        /* targetConstraints= */ ImmutableList.of(),
+        /* data= */ "baz");
+    addToolchain(
+        /* packageName= */ "extra",
+        /* toolchainName= */ "extra_toolchain_mac",
+        /* execConstraints= */ ImmutableList.of("//constraints:mac"),
+        /* targetConstraints= */ ImmutableList.of(),
+        /* data= */ "baz");
+    rewriteModuleDotBazel(
+        """
+        register_toolchains("//extra:extra_toolchain_mac", "//extra:extra_toolchain_linux")
+        register_execution_platforms("//platforms:mac")
+        """);
+
+    useConfiguration("--platforms=//platforms:linux", "--host_platform=//platforms:mac");
+    ToolchainContextKey key =
+        ToolchainContextKey.key()
+            .configurationKey(targetConfigKey)
+            .toolchainTypes(testToolchainType)
+            .useTargetPlatformAsExecutionPlatform(true)
+            .build();
+
+    EvaluationResult<UnloadedToolchainContext> result = invokeToolchainResolution(key);
+
+    assertThatEvaluationResult(result).hasNoError();
+    UnloadedToolchainContext unloadedToolchainContext = result.get(key);
+    assertThat(unloadedToolchainContext).isNotNull();
+
+    assertThat(unloadedToolchainContext).hasToolchainType(testToolchainTypeLabel);
+    assertThat(unloadedToolchainContext).hasResolvedToolchain("//extra:extra_toolchain_linux_impl");
+    assertThat(unloadedToolchainContext).hasExecutionPlatform("//platforms:linux");
+    assertThat(unloadedToolchainContext).hasTargetPlatform("//platforms:linux");
+  }
+
+  @Test
+  public void resolve_useTargetPlatformAsExecutionPlatform_execConstraintsMismatch()
+      throws Exception {
+    rewriteModuleDotBazel(
+        """
+        register_execution_platforms("//platforms:mac")
+        """);
+
+    useConfiguration("--platforms=//platforms:linux", "--host_platform=//platforms:mac");
+    ToolchainContextKey key =
+        ToolchainContextKey.key()
+            .configurationKey(targetConfigKey)
+            .execConstraintLabels(Label.parseCanonicalUnchecked("//constraints:mac"))
+            .useTargetPlatformAsExecutionPlatform(true)
+            .build();
+
+    EvaluationResult<UnloadedToolchainContext> result = invokeToolchainResolution(key);
+
+    assertThatEvaluationResult(result).hasNoError();
+    UnloadedToolchainContext unloadedToolchainContext = result.get(key);
+    assertThat(unloadedToolchainContext.errorData()).isNotNull();
+    assertThat(unloadedToolchainContext.errorData().availableExecutionPlatformKeys()).isEmpty();
+  }
+
+  @Test
   public void errorProperlyReportedWhenInvalidConfigurationConfiguration() throws Exception {
     // It would be absolutely insane for a user to have a toolchain w/ a config_setting that reads a
     // config_feature_flag; however, should still test the InvalidConfigurationException codepath.

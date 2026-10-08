@@ -113,6 +113,49 @@ The following execution groups are predefined:
    the [execution platform section of the Test Encyclopedia](/reference/test-encyclopedia#execution-platform)).
 * `cpp_link`: C++ linking actions.
 
+## Using toolchains on the target platform {#target-platform-toolchains}
+
+Toolchains are usually resolved for an execution platform: the tools they
+provide are built for and run on the machine that executes the rule's actions.
+Some rules instead need a toolchain whose tools become part of their output and
+thus run on the target platform, for example an executable rule that adds an
+interpreter from a toolchain to its runfiles.
+
+For this purpose, an execution group can set `use_target_platform = True`. The
+target platform is then used as the only candidate execution platform of this
+execution group, even if it isn't registered as an execution platform, and its
+toolchains are resolved accordingly:
+
+```python
+# foo.bzl
+def _impl(ctx):
+  # Resolved for the execution platform, for use in actions.
+  build_node = ctx.toolchains["//node:toolchain_type"].nodeinfo
+  # Resolved for the target platform, for use in runfiles.
+  runtime_node = ctx.exec_groups["runtime"].toolchains["//node:toolchain_type"].nodeinfo
+  ...
+
+node_binary = rule(
+    _impl,
+    executable = True,
+    exec_groups = {
+        "runtime": exec_group(
+            toolchains = ["//node:toolchain_type"],
+            use_target_platform = True,
+        ),
+    },
+    toolchains = ["//node:toolchain_type"],
+)
+```
+
+This allows the same toolchains to be used both for build actions and for the
+rule's output, without having to declare separate toolchains with
+`target_compatible_with` constraints for the latter. Dependencies with
+`cfg = config.exec("runtime")` are also built for the target platform.
+
+Note: Actions created for such an execution group run on the target platform
+and use its execution properties.
+
 ## Using execution groups to set execution properties {#using-exec-groups-for-exec-properties}
 
 Execution groups are integrated with the

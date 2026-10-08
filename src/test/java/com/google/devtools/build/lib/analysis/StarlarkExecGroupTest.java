@@ -1045,4 +1045,320 @@ public class StarlarkExecGroupTest extends BuildViewTestCase {
     assertThat(action4.getExecutionPlatform().label())
         .isEqualTo(Label.parseCanonicalUnchecked("//test:macos_arm64"));
   }
+
+  /**
+   * Sets up a toolchain type for a runtime with one toolchain per platform, a registered execution
+   * platform and a target platform that isn't registered as an execution platform. This mimics
+   * cross-compiling an executable that bundles a runtime (e.g. an interpreter) for the target
+   * platform.
+   */
+  private void createRuntimeToolchainsAndPlatforms() throws Exception {
+    scratch.file(
+        "runtime/defs.bzl",
+        """
+        def _runtime_impl(ctx):
+            return [platform_common.ToolchainInfo(name = ctx.label.name, tool = ctx.attr.tool)]
+
+        runtime = rule(
+            implementation = _runtime_impl,
+            attrs = {"tool": attr.label(cfg = "exec")},
+        )
+
+        def _tool_impl(ctx):
+            return []
+
+        tool = rule(implementation = _tool_impl)
+        """);
+    scratch.file(
+        "runtime/BUILD",
+        """
+        load(":defs.bzl", "runtime", "tool")
+
+        toolchain_type(name = "toolchain_type")
+
+        tool(name = "tool")
+
+        runtime(
+            name = "exec_runtime",
+            tool = ":tool",
+        )
+
+        toolchain(
+            name = "exec_runtime_toolchain",
+            exec_compatible_with = ["//platform:exec"],
+            toolchain = ":exec_runtime",
+            toolchain_type = ":toolchain_type",
+        )
+
+        runtime(
+            name = "target_runtime",
+            tool = ":tool",
+        )
+
+        toolchain(
+            name = "target_runtime_toolchain",
+            exec_compatible_with = ["//platform:target"],
+            toolchain = ":target_runtime",
+            toolchain_type = ":toolchain_type",
+        )
+        """);
+    scratch.overwriteFile(
+        "platform/BUILD",
+        """
+        constraint_setting(name = "setting")
+
+        constraint_value(
+            name = "exec",
+            constraint_setting = ":setting",
+        )
+
+        constraint_value(
+            name = "target",
+            constraint_setting = ":setting",
+        )
+
+        platform(
+            name = "exec_platform",
+            constraint_values = [":exec"],
+        )
+
+        platform(
+            name = "target_platform",
+            constraint_values = [":target"],
+            exec_properties = {"target_platform_property": "value"},
+        )
+        """);
+
+    useConfiguration(
+        "--extra_toolchains=//runtime:exec_runtime_toolchain,//runtime:target_runtime_toolchain",
+        "--platforms=//platform:target_platform",
+        "--extra_execution_platforms=//platform:exec_platform");
+  }
+
+  @Test
+  public void testUseTargetPlatform() throws Exception {
+    createRuntimeToolchainsAndPlatforms();
+    scratch.file(
+        "test/defs.bzl",
+        """
+        MyInfo = provider()
+
+        def _impl(ctx):
+            exec_runtime = ctx.toolchains["//runtime:toolchain_type"]
+            target_runtime = ctx.exec_groups["runtime"].toolchains["//runtime:toolchain_type"]
+            out = ctx.actions.declare_file(ctx.label.name + ".out")
+            ctx.actions.run_shell(
+                outputs = [out],
+                command = "touch " + out.path,
+                exec_group = "runtime",
+            )
+            return [MyInfo(
+                exec_runtime_name = exec_runtime.name,
+                exec_runtime_tool = exec_runtime.tool,
+                target_runtime_name = target_runtime.name,
+                target_runtime_tool = target_runtime.tool,
+                runtime_dep = ctx.attr.runtime_dep,
+            )]
+
+        my_binary = rule(
+            implementation = _impl,
+            attrs = {
+                "runtime_dep": attr.label(cfg = config.exec("runtime")),
+            },
+            exec_groups = {
+                "runtime": exec_group(
+                    toolchains = ["//runtime:toolchain_type"],
+                    use_target_platform = True,
+                ),
+            },
+            toolchains = ["//runtime:toolchain_type"],
+        )
+        """);
+    scratch.file(
+        "test/BUILD",
+        """
+        load("//test:defs.bzl", "my_binary")
+
+        my_binary(
+            name = "bin",
+            runtime_dep = "//runtime:tool",
+        )
+        """);
+
+    ConfiguredTarget target = getConfiguredTarget("//test:bin");
+    Provider.Key key =
+        new StarlarkProvider.Key(keyForBuild(Label.parseCanonical("//test:defs.bzl")), "MyInfo");
+    StructImpl info = (StructImpl) target.get(key);
+    Label execPlatform = Label.parseCanonicalUnchecked("//platform:exec_platform");
+    Label targetPlatform = Label.parseCanonicalUnchecked("//platform:target_platform");
+
+    // The default exec group uses a registered execution platform.
+    assertThat(info.getValue("exec_runtime_name")).isEqualTo("exec_runtime");
+    assertThat(
+            getConfiguration((ConfiguredTarget) info.getValue("exec_runtime_tool"))
+                .getFragment(PlatformConfiguration.class)
+                .getTargetPlatform())
+        .isEqualTo(execPlatform);
+
+    // The "runtime" exec group uses the target platform, even though it isn't registered as an
+    // execution platform.
+    assertThat(info.getValue("target_runtime_name")).isEqualTo("target_runtime");
+    assertThat(
+            getConfiguration((ConfiguredTarget) info.getValue("target_runtime_tool"))
+                .getFragment(PlatformConfiguration.class)
+                .getTargetPlatform())
+        .isEqualTo(targetPlatform);
+    assertThat(
+            getConfiguration((ConfiguredTarget) info.getValue("runtime_dep"))
+                .getFragment(PlatformConfiguration.class)
+                .getTargetPlatform())
+        .isEqualTo(targetPlatform);
+
+    Action action = getGeneratingAction(target, "test/bin.out");
+    assertThat(action.getExecutionPlatform().label()).isEqualTo(targetPlatform);
+    assertThat(action.getExecProperties()).containsExactly("target_platform_property", "value");
+  }
+
+  @Test
+  public void testUseTargetPlatform_toolchainRequiringToolchains() throws Exception {
+    createRuntimeToolchainsAndPlatforms();
+    // The runtime toolchain itself requires a toolchain, which has to be resolved for the target
+    // platform as well.
+    scratch.overwriteFile(
+        "runtime/defs.bzl",
+        """
+        def _runtime_impl(ctx):
+            return [platform_common.ToolchainInfo(
+                name = ctx.label.name,
+                tool = ctx.attr.tool,
+                helper = ctx.toolchains["//helper:toolchain_type"].name,
+            )]
+
+        runtime = rule(
+            implementation = _runtime_impl,
+            attrs = {"tool": attr.label(cfg = "exec")},
+            toolchains = ["//helper:toolchain_type"],
+        )
+
+        def _tool_impl(ctx):
+            return []
+
+        tool = rule(implementation = _tool_impl)
+        """);
+    scratch.file(
+        "helper/defs.bzl",
+        """
+        def _impl(ctx):
+            return [platform_common.ToolchainInfo(name = ctx.label.name)]
+
+        helper = rule(implementation = _impl)
+        """);
+    scratch.file(
+        "helper/BUILD",
+        """
+        load(":defs.bzl", "helper")
+
+        toolchain_type(name = "toolchain_type")
+
+        helper(name = "exec_helper")
+
+        toolchain(
+            name = "exec_helper_toolchain",
+            exec_compatible_with = ["//platform:exec"],
+            toolchain = ":exec_helper",
+            toolchain_type = ":toolchain_type",
+        )
+
+        helper(name = "target_helper")
+
+        toolchain(
+            name = "target_helper_toolchain",
+            exec_compatible_with = ["//platform:target"],
+            toolchain = ":target_helper",
+            toolchain_type = ":toolchain_type",
+        )
+        """);
+    useConfiguration(
+        "--extra_toolchains=//runtime:exec_runtime_toolchain,//runtime:target_runtime_toolchain,"
+            + "//helper:exec_helper_toolchain,//helper:target_helper_toolchain",
+        "--platforms=//platform:target_platform",
+        "--extra_execution_platforms=//platform:exec_platform");
+    scratch.file(
+        "test/defs.bzl",
+        """
+        MyInfo = provider()
+
+        def _impl(ctx):
+            target_runtime = ctx.exec_groups["runtime"].toolchains["//runtime:toolchain_type"]
+            return [MyInfo(
+                target_runtime_name = target_runtime.name,
+                target_runtime_helper = target_runtime.helper,
+                target_runtime_tool = target_runtime.tool,
+            )]
+
+        my_binary = rule(
+            implementation = _impl,
+            exec_groups = {
+                "runtime": exec_group(
+                    toolchains = ["//runtime:toolchain_type"],
+                    use_target_platform = True,
+                ),
+            },
+        )
+        """);
+    scratch.file(
+        "test/BUILD",
+        """
+        load("//test:defs.bzl", "my_binary")
+
+        my_binary(name = "bin")
+        """);
+
+    ConfiguredTarget target = getConfiguredTarget("//test:bin");
+    Provider.Key key =
+        new StarlarkProvider.Key(keyForBuild(Label.parseCanonical("//test:defs.bzl")), "MyInfo");
+    StructImpl info = (StructImpl) target.get(key);
+
+    assertThat(info.getValue("target_runtime_name")).isEqualTo("target_runtime");
+    assertThat(info.getValue("target_runtime_helper")).isEqualTo("target_helper");
+    assertThat(
+            getConfiguration((ConfiguredTarget) info.getValue("target_runtime_tool"))
+                .getFragment(PlatformConfiguration.class)
+                .getTargetPlatform())
+        .isEqualTo(Label.parseCanonicalUnchecked("//platform:target_platform"));
+  }
+
+  @Test
+  public void testUseTargetPlatform_incompatibleExecConstraints() throws Exception {
+    createRuntimeToolchainsAndPlatforms();
+    scratch.file(
+        "test/defs.bzl",
+        """
+        def _impl(ctx):
+            return []
+
+        my_binary = rule(
+            implementation = _impl,
+            exec_groups = {
+                "runtime": exec_group(
+                    exec_compatible_with = ["//platform:exec"],
+                    use_target_platform = True,
+                ),
+            },
+        )
+        """);
+    scratch.file(
+        "test/BUILD",
+        """
+        load("//test:defs.bzl", "my_binary")
+
+        my_binary(name = "bin")
+        """);
+
+    reporter.removeHandler(failFastHandler);
+    assertThat(getConfiguredTarget("//test:bin")).isNull();
+    assertContainsEvent(
+        "Unable to find an execution platform for target platform //platform:target_platform"
+            + " from available execution platforms []");
+  }
 }

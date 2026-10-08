@@ -437,6 +437,12 @@ In practice:
 The system libraries must be built for the same target platform as the final
 artifact, while the compiler must be runnable on the execution platform.
 
+If a rule needs a tool provided by a toolchain to run on the target platform
+instead, for example because it adds an interpreter to the runfiles of an
+executable, it can resolve the toolchain in an execution group that
+[uses the target platform](/extending/exec-groups#target-platform-toolchains)
+as its execution platform.
+
 ### Selecting `exec` dependencies
 
 For toolchain config rules, adding a `select()` to an attribute with `cfg = "exec"`

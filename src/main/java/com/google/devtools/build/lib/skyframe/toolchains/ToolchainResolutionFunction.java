@@ -97,7 +97,9 @@ public class ToolchainResolutionFunction implements SkyFunction {
               debugPrinter,
               configuration.getKey(),
               platformConfiguration,
-              key.execConstraintLabels());
+              key.execConstraintLabels(),
+              key.useTargetPlatformAsExecutionPlatform(),
+              key.forceExecutionPlatform());
       if (env.valuesMissing()) {
         return null;
       }

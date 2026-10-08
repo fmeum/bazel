@@ -1114,11 +1114,34 @@ providers. That is, <code>[FooInfo, BarInfo]</code> will automatically be conver
             positional = false,
             defaultValue = "[]",
             doc = "A list of constraints on the execution platform."),
+        @Param(
+            name = "use_target_platform",
+            named = true,
+            positional = false,
+            defaultValue = "False",
+            doc =
+                "If <code>True</code>, the target platform is used as the execution platform of"
+                    + " this execution group instead of one of the registered execution platforms."
+                    + " Toolchains requested by this execution group are resolved as if the"
+                    + " target platform were the only available execution platform. The target"
+                    + " platform does not have to be registered as an execution platform, but"
+                    + " has to satisfy the constraints in <code>exec_compatible_with</code>.<p>This"
+                    + " is useful for toolchains that provide tools or runtimes that become part"
+                    + " of the rule's output and thus run on the target platform, such as an"
+                    + " interpreter that is added to the runfiles of an executable. Tools"
+                    + " obtained from such a toolchain, as well as dependencies with <a"
+                    + " href='../toplevel/config.html#exec'><code>config.exec</code></a> for this"
+                    + " execution group, are built for the target platform rather than for an"
+                    + " execution platform.<p>Actions created for this execution group are"
+                    + " executed on the target platform and thus use its execution properties."),
       },
       useStarlarkThread = true,
       isTypeConstructor = true)
   ExecGroupApi execGroup(
-      Sequence<?> toolchains, Sequence<?> execCompatibleWith, StarlarkThread thread)
+      Sequence<?> toolchains,
+      Sequence<?> execCompatibleWith,
+      boolean useTargetPlatform,
+      StarlarkThread thread)
       throws EvalException;
 
   @StarlarkMethod(

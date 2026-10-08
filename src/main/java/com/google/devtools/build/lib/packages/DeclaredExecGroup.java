@@ -36,6 +36,8 @@ import net.starlark.java.syntax.Identifier;
  *
  * @param toolchainTypesMap Returns the underlying map from label to ToolchainTypeRequirement.
  * @param execCompatibleWith Returns the execution constraints for this exec group.
+ * @param useTargetPlatform Whether the target platform should be used as the only candidate
+ *     execution platform for this exec group instead of the registered execution platforms.
  * @param copyFromDefault Whether this exec group should copy the data from the default exec group
  *     in the same rule.
  */
@@ -43,13 +45,15 @@ import net.starlark.java.syntax.Identifier;
 public record DeclaredExecGroup(
     ImmutableMap<Label, ToolchainTypeRequirement> toolchainTypesMap,
     ImmutableSet<Label> execCompatibleWith,
+    boolean useTargetPlatform,
     boolean copyFromDefault)
     implements ExecGroupApi {
   public DeclaredExecGroup {
     requireNonNull(toolchainTypesMap, "toolchainTypesMap");
     requireNonNull(execCompatibleWith, "execCompatibleWith");
     checkArgument(
-        !copyFromDefault || (toolchainTypesMap.isEmpty() && execCompatibleWith.isEmpty()));
+        !copyFromDefault
+            || (toolchainTypesMap.isEmpty() && execCompatibleWith.isEmpty() && !useTargetPlatform));
   }
 
   // This is intentionally a string that would fail {@code Identifier.isValid} so that
@@ -63,6 +67,7 @@ public record DeclaredExecGroup(
   public static Builder builder() {
     return new AutoBuilder_DeclaredExecGroup_Builder()
         .copyFromDefault(false)
+        .useTargetPlatform(false)
         .toolchainTypes(ImmutableSet.of())
         .execCompatibleWith(ImmutableSet.of());
   }
@@ -171,6 +176,9 @@ public record DeclaredExecGroup(
 
     /** Sets the execution constraints. */
     Builder execCompatibleWith(ImmutableSet<Label> execCompatibleWith);
+
+    /** Sets whether the target platform is used as the execution platform. */
+    Builder useTargetPlatform(boolean useTargetPlatform);
 
     /** Do not call, internal usage only. */
     Builder copyFromDefault(boolean copyFromDefault);
