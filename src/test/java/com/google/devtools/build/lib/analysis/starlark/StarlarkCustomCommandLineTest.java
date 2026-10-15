@@ -49,6 +49,7 @@ import com.google.devtools.build.lib.cmdline.RepositoryMapping;
 import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
 import com.google.devtools.build.lib.collect.nestedset.Order;
 import com.google.devtools.build.lib.exec.util.FakeActionInputFileCache;
+import com.google.devtools.build.lib.packages.semantics.BuildLanguageOptions;
 import com.google.devtools.build.lib.skyframe.TreeArtifactValue;
 import com.google.devtools.build.lib.skyframe.serialization.testutils.RoundTripping;
 import com.google.devtools.build.lib.starlarkbuildapi.FileApi;
@@ -1277,6 +1278,10 @@ public final class StarlarkCustomCommandLineTest {
   }
 
   private static Object execStarlark(String code) throws Exception {
+    return execStarlark(code, /* bzlTransitiveDigest= */ new byte[0]);
+  }
+
+  private static Object execStarlark(String code, byte[] bzlTransitiveDigest) throws Exception {
     try (Mutability mutability = Mutability.create("test")) {
       StarlarkThread thread = StarlarkThread.createTransient(mutability, StarlarkSemantics.DEFAULT);
       return Starlark.execFile(
@@ -1291,10 +1296,168 @@ public final class StarlarkCustomCommandLineTest {
                   RepositoryMapping.EMPTY,
                   "test/label.bzl",
                   /* loads= */ ImmutableList.of(),
-                  /* bzlTransitiveDigest= */ new byte[0],
+                  bzlTransitiveDigest,
                   /* docCommentsMap= */ ImmutableMap.of(),
                   /* unusedDocCommentLines= */ ImmutableList.of())),
           thread);
     }
+  }
+
+  private static final StarlarkSemantics STRUCTURAL_MAP_EACH_KEYS =
+      StarlarkSemantics.builder()
+          .setBool(BuildLanguageOptions.EXPERIMENTAL_STRUCTURAL_MAP_EACH_ACTION_KEYS, true)
+          .build();
+
+  private CommandLine structuralCommandLine(StarlarkFunction mapEach, Object... values) {
+    return new StarlarkCustomCommandLine.Builder(STRUCTURAL_MAP_EACH_KEYS)
+        .add(vectorArg(values).setMapEach(mapEach))
+        .build(/* flagPerLine= */ false, RepositoryMapping.EMPTY);
+  }
+
+  private static String actionKey(CommandLine commandLine) throws Exception {
+    var fingerprint = new Fingerprint();
+    commandLine.addToFingerprint(
+        new ActionKeyContext(),
+        new FakeActionInputFileCache(),
+        CoreOptions.OutputPathsMode.OFF,
+        fingerprint);
+    return fingerprint.hexDigestAndReset();
+  }
+
+  @Test
+  public void structuralMapEachKey_doesNotCallMapEach() throws Exception {
+    StarlarkFunction mapEach =
+        (StarlarkFunction)
+            execStarlark(
+                """
+                def map_each(x):
+                  fail("map_each must not be called")
+                map_each
+                """);
+    CommandLine commandLine = structuralCommandLine(mapEach, artifact1, artifact2);
+
+    assertThat(actionKey(commandLine)).isNotEmpty();
+    assertThrows(CommandLineExpansionException.class, commandLine::arguments);
+  }
+
+  @Test
+  public void structuralMapEachKey_disabled_callsMapEach() throws Exception {
+    StarlarkFunction mapEach =
+        (StarlarkFunction)
+            execStarlark(
+                """
+                def map_each(x):
+                  fail("map_each was called")
+                map_each
+                """);
+    CommandLine commandLine =
+        builder
+            .add(vectorArg(artifact1, artifact2).setMapEach(mapEach))
+            .build(/* flagPerLine= */ false, RepositoryMapping.EMPTY);
+
+    assertThrows(CommandLineExpansionException.class, () -> actionKey(commandLine));
+  }
+
+  @Test
+  public void structuralMapEachKey_dependsOnBzlTransitiveDigest() throws Exception {
+    String code =
+        """
+        def map_each(x):
+          return x.path
+        map_each
+        """;
+    StarlarkFunction mapEach1 = (StarlarkFunction) execStarlark(code, new byte[] {1});
+    StarlarkFunction mapEach2 = (StarlarkFunction) execStarlark(code, new byte[] {1});
+    StarlarkFunction mapEach3 = (StarlarkFunction) execStarlark(code, new byte[] {2});
+
+    assertThat(actionKey(structuralCommandLine(mapEach1, artifact1)))
+        .isEqualTo(actionKey(structuralCommandLine(mapEach2, artifact1)));
+    assertThat(actionKey(structuralCommandLine(mapEach1, artifact1)))
+        .isNotEqualTo(actionKey(structuralCommandLine(mapEach3, artifact1)));
+  }
+
+  @Test
+  public void structuralMapEachKey_dependsOnValues() throws Exception {
+    StarlarkFunction mapEach =
+        (StarlarkFunction)
+            execStarlark(
+                """
+                def map_each(x):
+                  return x.path
+                map_each
+                """);
+
+    assertThat(actionKey(structuralCommandLine(mapEach, artifact1, artifact2)))
+        .isEqualTo(actionKey(structuralCommandLine(mapEach, artifact1, artifact2)));
+    assertThat(actionKey(structuralCommandLine(mapEach, artifact1, artifact2)))
+        .isNotEqualTo(actionKey(structuralCommandLine(mapEach, artifact1, artifact3)));
+    assertThat(actionKey(structuralCommandLine(mapEach, artifact1, artifact2)))
+        .isNotEqualTo(actionKey(structuralCommandLine(mapEach, artifact2, artifact1)));
+    assertThat(actionKey(structuralCommandLine(mapEach, "a", "b")))
+        .isNotEqualTo(actionKey(structuralCommandLine(mapEach, "a", "c")));
+  }
+
+  @Test
+  public void structuralMapEachKey_dependsOnCapturedValues() throws Exception {
+    StarlarkFunction makeMapEach =
+        (StarlarkFunction)
+            execStarlark(
+                """
+                def make_map_each(suffix):
+                  return lambda x: x + suffix
+                make_map_each
+                """);
+    StarlarkFunction foo1;
+    StarlarkFunction foo2;
+    StarlarkFunction bar;
+    try (Mutability mu = Mutability.create("test")) {
+      StarlarkThread thread = StarlarkThread.createTransient(mu, StarlarkSemantics.DEFAULT);
+      foo1 =
+          (StarlarkFunction)
+              Starlark.call(thread, makeMapEach, ImmutableList.of("_foo"), ImmutableMap.of());
+      foo2 =
+          (StarlarkFunction)
+              Starlark.call(thread, makeMapEach, ImmutableList.of("_foo"), ImmutableMap.of());
+      bar =
+          (StarlarkFunction)
+              Starlark.call(thread, makeMapEach, ImmutableList.of("_bar"), ImmutableMap.of());
+    }
+
+    assertThat(actionKey(structuralCommandLine(foo1, "a", "b")))
+        .isEqualTo(actionKey(structuralCommandLine(foo2, "a", "b")));
+    assertThat(actionKey(structuralCommandLine(foo1, "a", "b")))
+        .isNotEqualTo(actionKey(structuralCommandLine(bar, "a", "b")));
+  }
+
+  @Test
+  public void structuralMapEachKey_unsupportedCapturedValue_callsMapEach() throws Exception {
+    StarlarkFunction makeMapEach =
+        (StarlarkFunction)
+            execStarlark(
+                """
+                def make_map_each(callback):
+                  return lambda x: callback(x)
+                make_map_each
+                """);
+    StarlarkFunction failing =
+        (StarlarkFunction)
+            execStarlark(
+                """
+                def failing(x):
+                  fail("map_each was called")
+                failing
+                """);
+    StarlarkFunction mapEach;
+    try (Mutability mu = Mutability.create("test")) {
+      StarlarkThread thread = StarlarkThread.createTransient(mu, StarlarkSemantics.DEFAULT);
+      mapEach =
+          (StarlarkFunction)
+              Starlark.call(thread, makeMapEach, ImmutableList.of(failing), ImmutableMap.of());
+    }
+
+    // Functions can't be fingerprinted structurally, so map_each is evaluated.
+    assertThrows(
+        CommandLineExpansionException.class,
+        () -> actionKey(structuralCommandLine(mapEach, artifact1)));
   }
 }

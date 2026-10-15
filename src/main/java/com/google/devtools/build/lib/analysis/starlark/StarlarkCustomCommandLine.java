@@ -43,6 +43,7 @@ import com.google.devtools.build.lib.cmdline.RepositoryMapping;
 import com.google.devtools.build.lib.cmdline.RepositoryName;
 import com.google.devtools.build.lib.collect.nestedset.NestedSet;
 import com.google.devtools.build.lib.concurrent.BlazeInterners;
+import com.google.devtools.build.lib.packages.semantics.BuildLanguageOptions;
 import com.google.devtools.build.lib.skyframe.TreeArtifactValue;
 import com.google.devtools.build.lib.skyframe.serialization.ObjectCodec.MemoizationEquality;
 import com.google.devtools.build.lib.skyframe.serialization.VisibleForSerialization;
@@ -521,6 +522,26 @@ public class StarlarkCustomCommandLine extends CommandLine {
       // stringification behavior (which excludes custom mapEach functions).
       StarlarkCallable mapEach =
           hasNonGlobalMapEach ? (StarlarkCallable) arguments.get(argi++) : this.mapEach;
+      if (mapEach != null
+          && starlarkSemantics.getBool(
+              BuildLanguageOptions.EXPERIMENTAL_STRUCTURAL_MAP_EACH_ACTION_KEYS)) {
+        Object values;
+        int nextArgi;
+        if (isNestedSet) {
+          values = arguments.get(argi);
+          nextArgi = argi + 1;
+        } else {
+          int count = hasSingleArg ? 1 : (Integer) arguments.get(argi);
+          int start = hasSingleArg ? argi : argi + 1;
+          values = arguments.subList(start, start + count);
+          nextArgi = start + count;
+        }
+        if (StructuralMapEachFingerprint.tryAddToFingerprint(
+            mapEach, values, starlarkSemantics, outputPathsMode, actionKeyContext, fingerprint)) {
+          addOptionsToFingerprint(fingerprint);
+          return nextArgi;
+        }
+      }
       if (isNestedSet) {
         NestedSet<?> values = (NestedSet<?>) arguments.get(argi++);
         if (mapEach != null) {
@@ -587,6 +608,11 @@ public class StarlarkCustomCommandLine extends CommandLine {
           }
         }
       }
+      addOptionsToFingerprint(fingerprint);
+      return argi;
+    }
+
+    private void addOptionsToFingerprint(Fingerprint fingerprint) {
       if (expandDirectories) {
         fingerprint.addUUID(EXPAND_DIRECTORIES_UUID);
       }
@@ -619,7 +645,6 @@ public class StarlarkCustomCommandLine extends CommandLine {
         fingerprint.addUUID(TERMINATE_WITH_UUID);
         fingerprint.addString(terminateWith);
       }
-      return argi;
     }
 
     static final class Builder {

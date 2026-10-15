@@ -190,6 +190,20 @@ public abstract class BuildLanguageOptions extends OptionsBase {
   public abstract boolean getExperimentalEnableFirstClassMacros();
 
   @Option(
+      name = "experimental_structural_map_each_action_keys",
+      defaultValue = "false",
+      documentationCategory = OptionDocumentationCategory.STARLARK_SEMANTICS,
+      effectTags = {OptionEffectTag.LOADING_AND_ANALYSIS, OptionEffectTag.EXECUTION},
+      metadataTags = {OptionMetadataTag.EXPERIMENTAL},
+      help =
+          "If set to true, the action key of an `Args.add_all` or `Args.add_joined` call with a"
+              + " Starlark `map_each` function is computed from the identity of the function (the"
+              + " digest of the .bzl file defining it, its location and captured values) and of"
+              + " the values it is applied to, instead of from the result of calling it on every"
+              + " value. This avoids evaluating Starlark code when checking the action cache.")
+  public abstract boolean getExperimentalStructuralMapEachActionKeys();
+
+  @Option(
       name = "experimental_isolated_extension_usages",
       defaultValue = "false",
       documentationCategory = OptionDocumentationCategory.STARLARK_SEMANTICS,
@@ -855,6 +869,9 @@ public abstract class BuildLanguageOptions extends OptionsBase {
             .setBool(
                 EXPERIMENTAL_ENABLE_FIRST_CLASS_MACROS, getExperimentalEnableFirstClassMacros())
             .setBool(
+                EXPERIMENTAL_STRUCTURAL_MAP_EACH_ACTION_KEYS,
+                getExperimentalStructuralMapEachActionKeys())
+            .setBool(
                 EXPERIMENTAL_ISOLATED_EXTENSION_USAGES, getExperimentalIsolatedExtensionUsages())
             .setBool(INCOMPATIBLE_NO_IMPLICIT_WATCH_LABEL, getIncompatibleNoImplicitWatchLabel())
             .setBool(EXPERIMENTAL_GOOGLE_LEGACY_API, getExperimentalGoogleLegacyApi())
@@ -1048,6 +1065,8 @@ public abstract class BuildLanguageOptions extends OptionsBase {
       "-experimental_single_package_toolchain_binding";
   public static final String EXPERIMENTAL_ENABLE_FIRST_CLASS_MACROS =
       "+experimental_enable_first_class_macros";
+  public static final String EXPERIMENTAL_STRUCTURAL_MAP_EACH_ACTION_KEYS =
+      "-experimental_structural_map_each_action_keys";
 
   /**
    * @deprecated Flag has been graveyarded.

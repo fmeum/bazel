@@ -17,6 +17,8 @@ import com.google.common.base.Joiner;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Maps;
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import javax.annotation.Nullable;
@@ -85,6 +87,19 @@ public final class StarlarkFunction implements StarlarkCallable {
 
   void setGlobalDeclaredType(int progIndex, StarlarkType type) {
     module.setGlobalTypeByIndex(globalIndex[progIndex], type);
+  }
+
+  /**
+   * Returns the current values of the variables of enclosing functions that this function captures,
+   * in a deterministic order. An element is null if the corresponding variable is not yet bound.
+   * The returned list is empty for functions that are not closures.
+   */
+  public List<Object> getFreeVarValues() {
+    Object[] values = new Object[freevars.size()];
+    for (int i = 0; i < values.length; i++) {
+      values[i] = getFreeVar(i).x;
+    }
+    return Collections.unmodifiableList(Arrays.asList(values));
   }
 
   // Gets the value of a global variable, given its index in this function's compiled Program.
