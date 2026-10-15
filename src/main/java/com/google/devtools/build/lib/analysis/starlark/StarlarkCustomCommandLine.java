@@ -547,7 +547,7 @@ public class StarlarkCustomCommandLine extends CommandLine {
             // provider for a given action, if present, cannot change within the lifetime of the
             // fingerprintcache (we call getKey with inputMetadataProvider to check action key, when
             // we are ready to execute the action in case of a cache miss).
-            commandLineItemMapFn.clearInputMetadataProvider();
+            commandLineItemMapFn.release();
           }
         } else {
           fingerprint.addInt(stringificationType.ordinal());
@@ -1196,64 +1196,102 @@ public class StarlarkCustomCommandLine extends CommandLine {
       StarlarkSemantics starlarkSemantics,
       boolean expandDirectories)
       throws CommandLineExpansionException, InterruptedException {
-    try (Mutability mu = Mutability.create("map_each")) {
+    try (MapEachInvoker invoker =
+        new MapEachInvoker(
+            mapFn, loc, inputMetadataProvider, pathMapper, starlarkSemantics, expandDirectories)) {
+      int count = originalValues.size();
+      for (int i = 0; i < count; ++i) {
+        invoker.apply(originalValues.get(i), consumer);
+      }
+    }
+  }
+
+  /**
+   * Calls a {@code map_each} function on individual items, reusing a single {@link StarlarkThread}
+   * across calls.
+   *
+   * <p>Instances are not thread-safe and must be closed after use.
+   */
+  private static final class MapEachInvoker implements AutoCloseable {
+    private final StarlarkCallable mapFn;
+    private final Location loc;
+    private final PathMapper pathMapper;
+    private final boolean bypassDirectoryArtifacts;
+    private final Mutability mu;
+    private final StarlarkThread thread;
+    // Reused for the args to map_each. The first element is overwritten on each call.
+    private final List<Object> args = new ArrayList<>(2);
+
+    MapEachInvoker(
+        StarlarkCallable mapFn,
+        Location loc,
+        @Nullable InputMetadataProvider inputMetadataProvider,
+        PathMapper pathMapper,
+        StarlarkSemantics starlarkSemantics,
+        boolean expandDirectories) {
+      this.mapFn = mapFn;
+      this.loc = loc;
+      this.pathMapper = pathMapper;
+      this.bypassDirectoryArtifacts = expandDirectories && inputMetadataProvider == null;
+      this.mu = Mutability.create("map_each");
       // This computation produces only a String list, which doesn't require reference semantics,
       // so createTransient() is safe.
-      StarlarkThread thread =
-          StarlarkThread.createTransient(mu, pathMapper.storeIn(starlarkSemantics));
+      this.thread = StarlarkThread.createTransient(mu, pathMapper.storeIn(starlarkSemantics));
       // TODO(b/77140311): Error if we issue print statements.
       thread.setPrintHandler((th, msg) -> {});
-      int count = originalValues.size();
-      // We create a list that we reuse for the args to map_each
-      List<Object> args = new ArrayList<>(2);
-      args.add(null); // This will be overwritten each iteration.
+      args.add(null);
       // map_each can accept either each object, or each object + a directory expander.
       if (wantsDirectoryExpander(mapFn)) {
-        DirectoryExpander expander;
-        if (inputMetadataProvider != null) {
-          expander = new FullExpander(inputMetadataProvider);
-        } else {
-          expander = NoopExpander.INSTANCE;
-        }
-        args.add(expander); // This will remain constant each iteration
+        args.add(
+            inputMetadataProvider != null
+                ? new FullExpander(inputMetadataProvider)
+                : NoopExpander.INSTANCE);
       }
-      boolean bypassDirectoryArtifacts = expandDirectories && inputMetadataProvider == null;
-      for (int i = 0; i < count; ++i) {
-        Object item = originalValues.get(i);
-        if (bypassDirectoryArtifacts && VectorArg.isDirectory(item)) {
-          // If inputMetadataProvider == null (e.g. during aquery or analysis-phase fingerprinting)
-          // but expandDirectories is true, directory contents cannot be expanded yet. Avoid
-          // calling map_each on the unexpanded directory artifact (which expects child files) and
-          // emit the mapped directory exec path directly.
-          consumer.accept(pathMapper.getMappedExecPathString((Artifact) item));
-          continue;
-        }
-        args.set(0, item);
-        Object ret = Starlark.call(thread, mapFn, args, /* kwargs= */ ImmutableMap.of());
-        if (ret instanceof String string) {
-          consumer.accept(string);
-        } else if (ret instanceof Sequence<?> sequence) {
-          for (Object val : sequence) {
-            if (!(val instanceof String)) {
-              throw new CommandLineExpansionException(
-                  "Expected map_each to return string, None, or list of strings, "
-                      + "found list containing "
-                      + Starlark.type(val));
-            }
-            consumer.accept((String) val);
+    }
+
+    void apply(Object item, Consumer<String> consumer)
+        throws CommandLineExpansionException, InterruptedException {
+      if (bypassDirectoryArtifacts && VectorArg.isDirectory(item)) {
+        // If inputMetadataProvider == null (e.g. during aquery or analysis-phase fingerprinting)
+        // but expandDirectories is true, directory contents cannot be expanded yet. Avoid
+        // calling map_each on the unexpanded directory artifact (which expects child files) and
+        // emit the mapped directory exec path directly.
+        consumer.accept(pathMapper.getMappedExecPathString((Artifact) item));
+        return;
+      }
+      args.set(0, item);
+      Object ret;
+      try {
+        ret = Starlark.call(thread, mapFn, args, /* kwargs= */ ImmutableMap.of());
+      } catch (EvalException e) {
+        // TODO(adonovan): consider calling a wrapper function to interpose a fake stack
+        // frame that establishes the args.add_all call at loc. Or manipulating the stack
+        // before printing it.
+        throw new CommandLineExpansionException(
+            errorMessage(e.getMessageWithStack(), loc, e.getCause()));
+      }
+      if (ret instanceof String string) {
+        consumer.accept(string);
+      } else if (ret instanceof Sequence<?> sequence) {
+        for (Object val : sequence) {
+          if (!(val instanceof String)) {
+            throw new CommandLineExpansionException(
+                "Expected map_each to return string, None, or list of strings, "
+                    + "found list containing "
+                    + Starlark.type(val));
           }
-        } else if (ret != Starlark.NONE) {
-          throw new CommandLineExpansionException(
-              "Expected map_each to return string, None, or list of strings, found "
-                  + Starlark.type(ret));
+          consumer.accept((String) val);
         }
+      } else if (ret != Starlark.NONE) {
+        throw new CommandLineExpansionException(
+            "Expected map_each to return string, None, or list of strings, found "
+                + Starlark.type(ret));
       }
-    } catch (EvalException e) {
-      // TODO(adonovan): consider calling a wrapper function to interpose a fake stack
-      // frame that establishes the args.add_all call at loc. Or manipulating the stack
-      // before printing it.
-      throw new CommandLineExpansionException(
-          errorMessage(e.getMessageWithStack(), loc, e.getCause()));
+    }
+
+    @Override
+    public void close() {
+      mu.close();
     }
   }
 
@@ -1280,6 +1318,9 @@ public class StarlarkCustomCommandLine extends CommandLine {
 
     @Nullable private InputMetadataProvider inputMetadataProvider;
 
+    // Lazily created on first use and closed by release().
+    @Nullable private MapEachInvoker invoker;
+
     CommandLineItemMapEachAdaptor(
         StarlarkCallable mapFn,
         Location location,
@@ -1300,15 +1341,21 @@ public class StarlarkCustomCommandLine extends CommandLine {
     public void expandToCommandLine(Object object, Consumer<String> args)
         throws CommandLineExpansionException, InterruptedException {
       checkState(inputMetadataProvider != null || !hasInputMetadataProvider);
-      applyMapEach(
-          mapFn,
-          maybeExpandDirectory(object),
-          args,
-          location,
-          inputMetadataProvider,
-          PathMapper.forActionKey(outputPathsMode),
-          starlarkSemantics,
-          expandDirectories);
+      if (invoker == null) {
+        // This method is called once per element of the nested set, so reuse a single thread
+        // instead of creating one per element.
+        invoker =
+            new MapEachInvoker(
+                mapFn,
+                location,
+                inputMetadataProvider,
+                PathMapper.forActionKey(outputPathsMode),
+                starlarkSemantics,
+                expandDirectories);
+      }
+      for (Object item : maybeExpandDirectory(object)) {
+        invoker.apply(item, args);
+      }
     }
 
     private List<Object> maybeExpandDirectory(Object object) throws CommandLineExpansionException {
@@ -1363,15 +1410,20 @@ public class StarlarkCustomCommandLine extends CommandLine {
     }
 
     /**
-     * Clears the input metadata provider in order not to prolong the lifetime of it unnecessarily.
+     * Clears the input metadata provider and the Starlark thread in order not to prolong their
+     * lifetime unnecessarily.
      *
      * <p>Although this operation technically changes this object, it can be called after we add the
-     * object to a {@link HashSet}. Clearing inputMetadataProvider does not affect the result of
-     * {@link #equals} or {@link #hashCode}. Please note that once we call this function, we can no
-     * longer call {@link #expandToCommandLine}.
+     * object to a {@link HashSet}. Clearing these fields does not affect the result of {@link
+     * #equals} or {@link #hashCode}. Please note that once we call this function, we can no longer
+     * call {@link #expandToCommandLine}.
      */
-    void clearInputMetadataProvider() {
+    void release() {
       inputMetadataProvider = null;
+      if (invoker != null) {
+        invoker.close();
+        invoker = null;
+      }
     }
   }
 
