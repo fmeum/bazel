@@ -580,6 +580,15 @@ public abstract class BuildLanguageOptions extends OptionsBase {
   public abstract void setExperimentalDormantDeps(boolean value);
 
   @Option(
+      name = "experimental_depset_filter",
+      defaultValue = "false",
+      documentationCategory = OptionDocumentationCategory.STARLARK_SEMANTICS,
+      effectTags = {OptionEffectTag.BUILD_FILE_SEMANTICS},
+      metadataTags = {OptionMetadataTag.EXPERIMENTAL},
+      help = "If set to true, the depset.filter() method is available.")
+  public abstract boolean getExperimentalDepsetFilter();
+
+  @Option(
       name = "experimental_starlark_type_syntax",
       defaultValue = FlagConstants.DEFAULT_EXPERIMENTAL_STARLARK_TYPE_SYNTAX,
       documentationCategory = OptionDocumentationCategory.STARLARK_SEMANTICS,
@@ -917,6 +926,7 @@ public abstract class BuildLanguageOptions extends OptionsBase {
                 getIncompatibleDisableTargetDefaultProviderFields())
             .setBool(EXPERIMENTAL_RULE_EXTENSION_API, getExperimentalRuleExtensionApi())
             .setBool(EXPERIMENTAL_DORMANT_DEPS, getExperimentalDormantDeps())
+            .setBool(EXPERIMENTAL_DEPSET_FILTER, getExperimentalDepsetFilter())
             .setBool(EXPERIMENTAL_STARLARK_TYPE_SYNTAX, getExperimentalStarlarkTypeSyntax())
             .setBool(
                 StarlarkSemantics.EXPERIMENTAL_STARLARK_STATIC_TYPE_CHECKING,
@@ -1106,6 +1116,7 @@ public abstract class BuildLanguageOptions extends OptionsBase {
   public static final String EXPERIMENTAL_RULE_EXTENSION_API =
       FlagConstants.DEFAULT_EXPERIMENTAL_RULE_EXTENSION_API_NAME;
   public static final String EXPERIMENTAL_DORMANT_DEPS = "-experimental_dormant_deps";
+  public static final String EXPERIMENTAL_DEPSET_FILTER = "-experimental_depset_filter";
 
   public static final String EXPERIMENTAL_STARLARK_TYPE_SYNTAX =
       FlagConstants.EXPERIMENTAL_STARLARK_TYPE_SYNTAX_FLAG_NAME;

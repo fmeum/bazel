@@ -35,6 +35,8 @@ import net.starlark.java.eval.NoneType;
 import net.starlark.java.eval.Printer;
 import net.starlark.java.eval.Sequence;
 import net.starlark.java.eval.Starlark;
+import net.starlark.java.eval.StarlarkCallable;
+import net.starlark.java.eval.StarlarkFunction;
 import net.starlark.java.eval.StarlarkInt;
 import net.starlark.java.eval.StarlarkList;
 import net.starlark.java.eval.StarlarkSemantics;
@@ -384,6 +386,83 @@ public final class Depset implements StarlarkValue, Debug.ValueWithDebugAttribut
       useStarlarkThread = true)
   public StarlarkList<Object> toListForStarlark(StarlarkThread thread) throws EvalException {
     return StarlarkList.copyOf(thread.mutability(), this.toList());
+  }
+
+  @StarlarkMethod(
+      name = "filter",
+      doc =
+          """
+          Returns a depset that contains exactly those elements of this depset for which \
+          <code>function</code> returns <code>True</code>, in the same order.
+
+          <p>Unlike filtering the result of <a href="#to_list"><code>to_list()</code></a>, this \
+          preserves the structure of the depset: parts of the depset that don't lose any \
+          elements are shared with the returned depset rather than copied. \
+          <code>function</code> is called at most once per distinct element.
+
+          <p>If <code>function</code> is declared by a top-level <code>def</code> statement, its \
+          results are reused across calls: filtering a depset whose transitive depsets have \
+          already been filtered with the same function only takes time proportional to the \
+          parts of the depset that are new. Other functions, such as lambdas and nested \
+          functions, can depend on the state of their caller, so each call with them takes time \
+          proportional to the size of the depset's graph.
+
+          <p><code>function</code> must take a single element and return a bool. It should not \
+          have side effects as it may be called fewer times than expected.
+          """,
+      parameters = {
+        @Param(
+            name = "function",
+            allowedTypes = {@ParamType(type = StarlarkCallable.class)},
+            doc = "The function used to select the elements to keep."),
+      },
+      useStarlarkThread = true,
+      enableOnlyWithFlag = BuildLanguageOptions.EXPERIMENTAL_DEPSET_FILTER)
+  public Depset filter(StarlarkCallable function, StarlarkThread thread)
+      throws EvalException, InterruptedException {
+    NestedSet<?> filtered =
+        NestedSetFilter.filter(
+            set,
+            element -> test(function, element, thread),
+            isCacheable(function, thread) ? function : null);
+    // An empty depset is returned unchanged, so elemClass is non-null when rewrapping.
+    return filtered == set ? this : rewrap(elemClass, filtered);
+  }
+
+  private static boolean test(StarlarkCallable function, Object element, StarlarkThread thread)
+      throws EvalException, InterruptedException {
+    Object result = Starlark.positionalOnlyCall(thread, function, element);
+    if (!(result instanceof Boolean keep)) {
+      throw Starlark.errorf(
+          "filter function must return a bool, got %s for element %s",
+          Starlark.type(result), Starlark.reprForErrors(element));
+    }
+    return keep;
+  }
+
+  /**
+   * Returns whether the results of {@code function} can be reused across calls of {@link #filter},
+   * i.e., whether it always returns the same value for equal arguments.
+   *
+   * <p>This is the case for a function declared by a top-level def statement in a fully initialized
+   * module: unlike nested functions and lambdas, it can't capture the state of its caller, and all
+   * global state it can access is frozen. Global variables may only change while the top-level
+   * statements of the module are executing, which can only happen on the current thread.
+   */
+  private static boolean isCacheable(StarlarkCallable function, StarlarkThread thread) {
+    if (!(function instanceof StarlarkFunction fn) || !fn.isGlobal()) {
+      return false;
+    }
+    for (Debug.Frame frame : Debug.getCallStack(thread)) {
+      // The implicit functions holding the top-level statements of a file or a standalone
+      // expression have names such as "<toplevel>" or "<expr>", which aren't valid identifiers.
+      if (frame.getFunction() instanceof StarlarkFunction caller
+          && caller.getModule() == fn.getModule()
+          && caller.getName().startsWith("<")) {
+        return false;
+      }
+    }
+    return true;
   }
 
   /** Create a Depset from the given direct and transitive components. */

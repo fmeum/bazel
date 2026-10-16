@@ -199,6 +199,17 @@ java_test(
 )
 
 java_test(
+    name = "NestedSetFilterTest",
+    srcs = ["NestedSetFilterTest.java"],
+    deps = [
+        "//src/main/java/com/google/devtools/build/lib/collect/nestedset",
+        "//third_party/java/guava:collect",
+        "//third_party/java/junit",
+        "//third_party/java/truth",
+    ],
+)
+
+java_test(
     name = "NestedSetTopologyTest",
     srcs = ["NestedSetTopologyTest.java"],
     deps = [

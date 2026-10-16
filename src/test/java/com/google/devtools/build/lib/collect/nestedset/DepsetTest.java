@@ -14,17 +14,21 @@
 package com.google.devtools.build.lib.collect.nestedset;
 
 import static com.google.common.truth.Truth.assertThat;
+import static com.google.common.truth.Truth.assertWithMessage;
 import static org.junit.Assert.assertThrows;
 
 import com.google.common.collect.ImmutableList;
 import com.google.devtools.build.lib.collect.nestedset.Depset.ElementType;
 import com.google.devtools.build.lib.starlark.util.BazelEvaluationTestCase;
+import java.util.ArrayList;
+import java.util.List;
 import net.starlark.java.eval.Dict;
 import net.starlark.java.eval.Sequence;
 import net.starlark.java.eval.StarlarkCallable;
 import net.starlark.java.eval.StarlarkInt;
 import net.starlark.java.eval.StarlarkIterable;
 import net.starlark.java.eval.StarlarkList;
+import net.starlark.java.eval.StarlarkThread;
 import net.starlark.java.eval.StarlarkValue;
 import net.starlark.java.eval.Tuple;
 import org.junit.Test;
@@ -459,5 +463,149 @@ public final class DepsetTest {
     NestedSetInterner.clear();
     ev.exec("s.add(depset(['a', 'b']))");
     assertThat(ev.eval("len(s)")).isEqualTo(StarlarkInt.of(3));
+  }
+
+  @Test
+  public void testFilterRequiresFlag() throws Exception {
+    ev.new Scenario()
+        .testIfErrorContains(
+            "'depset' value has no field or method 'filter'", "depset([1]).filter(lambda x: True)");
+  }
+
+  @Test
+  public void testFilter() throws Exception {
+    ev.setSemantics("--experimental_depset_filter");
+    ev.exec(
+        "def is_even(x):",
+        "    return x % 2 == 0",
+        "inner = depset([1, 2, 3], order = 'postorder')",
+        "outer = depset(",
+        "    [4, 5],",
+        "    transitive = [inner, depset([6, 7], order = 'postorder')],",
+        "    order = 'postorder',",
+        ")",
+        "filtered = outer.filter(is_even)");
+    Depset filtered = get("filtered");
+    assertThat(filtered.getOrder()).isEqualTo(Order.COMPILE_ORDER);
+    assertThat(filtered.getElementType()).isEqualTo(ElementType.of(StarlarkInt.class));
+    assertThat(filtered.toList())
+        .containsExactly(StarlarkInt.of(2), StarlarkInt.of(6), StarlarkInt.of(4))
+        .inOrder();
+  }
+
+  @Test
+  public void testFilterAgreesWithFilteringToList() throws Exception {
+    ev.setSemantics("--experimental_depset_filter");
+    ev.exec(
+        "def check(order):",
+        "    a = depset([1, 2], order = order)",
+        "    b = depset([3, 2], transitive = [a], order = order)",
+        "    c = depset([4, 5], transitive = [a], order = order)",
+        "    d = depset([6, 1], transitive = [b, c], order = order)",
+        "    keep = lambda x: x not in (2, 5)",
+        "    return d.filter(keep).to_list() == [x for x in d.to_list() if keep(x)]");
+    for (String order : ImmutableList.of("default", "postorder", "preorder", "topological")) {
+      assertWithMessage(order).that(ev.eval("check('" + order + "')")).isEqualTo(true);
+    }
+  }
+
+  @Test
+  public void testFilterWithClosure() throws Exception {
+    ev.setSemantics("--experimental_depset_filter");
+    ev.exec(
+        "def make_filter(excluded):",
+        "    def keep(x):",
+        "        return x not in excluded",
+        "    return keep",
+        "d = depset(['a', 'b', 'c'])",
+        "without_b = d.filter(make_filter(['b']))",
+        "without_c = d.filter(make_filter(['c']))");
+    assertThat(get("without_b").toList()).containsExactly("a", "c").inOrder();
+    assertThat(get("without_c").toList()).containsExactly("a", "b").inOrder();
+  }
+
+  @Test
+  public void testFilterReturnsCanonicalDepsets() throws Exception {
+    ev.setSemantics("--experimental_depset_filter");
+    ev.exec(
+        "d = depset([1, 2], transitive = [depset([3, 4])])",
+        "kept_all = d.filter(lambda x: True)",
+        "kept_none = d.filter(lambda x: False)",
+        "e = depset(order = 'preorder')",
+        "filtered_empty = e.filter(lambda x: fail('not called'))");
+    assertThat(get("kept_all")).isSameInstanceAs(get("d"));
+    assertThat(get("kept_none")).isSameInstanceAs(Order.STABLE_ORDER.emptyDepset());
+    assertThat(get("filtered_empty")).isSameInstanceAs(get("e"));
+  }
+
+  @Test
+  public void testFilterCallsFunctionOncePerDistinctElement() throws Exception {
+    ev.setSemantics("--experimental_depset_filter");
+    ev.exec(
+        "calls = []",
+        "def keep(x):",
+        "    calls.append(x)",
+        "    return x != 'y'",
+        "a = depset(['x', 'y'])",
+        "d = depset(['y', 'z'], transitive = [a, depset(['x'], transitive = [a])])",
+        "filtered = d.filter(keep)");
+    assertThat((List<?>) ev.eval("sorted(calls)")).containsExactly("x", "y", "z").inOrder();
+    assertThat(get("filtered").toList()).containsExactly("x", "z").inOrder();
+  }
+
+  @Test
+  public void testFilterReusesResultsOfTopLevelFunctions() throws Exception {
+    ev.setSemantics("--experimental_depset_filter");
+    StarlarkThread thread = ev.getStarlarkThread();
+    List<String> printed = new ArrayList<>();
+    thread.setPrintHandler((unused, msg) -> printed.add(msg));
+    ev.exec(
+        "def keep(x):",
+        "    print(x)",
+        "    return x != 'b'",
+        "inner = depset(['a', 'b'])",
+        "outer = depset(['c'], transitive = [inner])",
+        "inner.filter(keep)",
+        "inner.filter(keep)");
+    // While the top-level statements of the function's module are executing, its global variables
+    // may still change, so results aren't reused.
+    assertThat(printed).containsExactly("a", "b", "a", "b").inOrder();
+
+    // Simulate calls from a different module after this one has been initialized.
+    StarlarkCallable keep = (StarlarkCallable) ev.lookup("keep");
+    printed.clear();
+    assertThat(get("inner").filter(keep, thread).toList()).containsExactly("a");
+    assertThat(printed).containsExactly("a", "b").inOrder();
+
+    printed.clear();
+    assertThat(get("outer").filter(keep, thread).toList()).containsExactly("a", "c").inOrder();
+    assertThat(printed).containsExactly("c");
+  }
+
+  @Test
+  public void testFilterDoesNotReuseResultsWhileModuleIsInitializing() throws Exception {
+    ev.setSemantics("--experimental_depset_filter");
+    ev.exec(
+        "excluded = ['b']",
+        "def keep(x):",
+        "    return x not in excluded",
+        "d = depset(['a', 'b', 'c'])",
+        "r1 = d.filter(keep)",
+        "excluded.append('c')",
+        "r2 = d.filter(keep)");
+    assertThat(get("r1").toList()).containsExactly("a", "c").inOrder();
+    assertThat(get("r2").toList()).containsExactly("a");
+  }
+
+  @Test
+  public void testFilterErrors() throws Exception {
+    ev.new Scenario("--experimental_depset_filter")
+        .testIfErrorContains(
+            "filter function must return a bool, got int for element 1",
+            "depset([1]).filter(lambda x: x)")
+        .testIfErrorContains("boom", "depset([1]).filter(lambda x: fail('boom'))")
+        .testIfErrorContains(
+            "parameter 'function' got value of type 'int', want 'callable'",
+            "depset([1]).filter(1)");
   }
 }
