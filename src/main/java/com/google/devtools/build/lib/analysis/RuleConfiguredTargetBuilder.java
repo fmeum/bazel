@@ -106,10 +106,7 @@ public final class RuleConfiguredTargetBuilder {
       checkConstraints();
     }
 
-    for (AllowlistChecker allowlistChecker :
-        ruleContext.getRule().getRuleClassObject().getAllowlistCheckers()) {
-      handleAllowlistChecker(allowlistChecker);
-    }
+    checkAllowlists(ruleContext);
     if (ruleContext.getConfiguration().enforceTransitiveVisibility()) {
       // Gather the transitive_visibility from this target's package and deps.
       // If there are any, propagate their union in a TransitiveVisibilityProvider.
@@ -303,8 +300,19 @@ public final class RuleConfiguredTargetBuilder {
     return !ruleContext.getRule().isAnalysisTest();
   }
 
-  /** Actually process */
-  private void handleAllowlistChecker(AllowlistChecker allowlistChecker) {
+  /**
+   * Reports a rule error for every {@link AllowlistChecker} of the rule's class that the rule
+   * doesn't pass.
+   */
+  public static void checkAllowlists(RuleContext ruleContext) {
+    for (AllowlistChecker allowlistChecker :
+        ruleContext.getRule().getRuleClassObject().getAllowlistCheckers()) {
+      handleAllowlistChecker(ruleContext, allowlistChecker);
+    }
+  }
+
+  private static void handleAllowlistChecker(
+      RuleContext ruleContext, AllowlistChecker allowlistChecker) {
     if (allowlistChecker.attributeSetTrigger() != null
         && !ruleContext
             .getRule()

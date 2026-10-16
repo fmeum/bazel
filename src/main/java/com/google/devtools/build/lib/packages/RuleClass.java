@@ -830,7 +830,16 @@ public class RuleClass implements RuleClassData {
 
         allowlistCheckers.addAll(parent.getAllowlistCheckers());
 
-        advertisedProviders.addParent(parent.getAdvertisedProviders());
+        if (parent.getAdvertisedProviders().canHaveAnyProvider()) {
+          // Only Starlark rules extending the native alias rule can have an alias-like parent.
+          Preconditions.checkArgument(
+              starlark && parents.length == 1,
+              "Cannot inherit from alias rules in %s ruleclass",
+              name);
+          advertisedProviders.canHaveAnyProvider();
+        } else {
+          advertisedProviders.addParent(parent.getAdvertisedProviders());
+        }
 
         if (parent.getDefaultImplicitOutputsFunction() != SafeImplicitOutputsFunction.NONE) {
           if (implicitOutputsFunction != SafeImplicitOutputsFunction.NONE) {
@@ -1034,12 +1043,17 @@ public class RuleClass implements RuleClassData {
     }
 
     private void assertStarlarkRuleClassHasImplementationFunction() {
+      // A Starlark rule class extending the native alias rule reuses its native implementation
+      // instead of having an implementation function.
       Preconditions.checkState(
           (type == RuleClassType.NORMAL || type == RuleClassType.TEST)
-              == (configuredTargetFunction != null),
+              == (configuredTargetFunction != null || configuredTargetFactory != null),
           "%s %s",
           type,
           configuredTargetFunction);
+      Preconditions.checkState(
+          configuredTargetFunction == null || configuredTargetFactory == null,
+          "Starlark rule class can't have both an implementation function and a native factory");
     }
 
     private void assertStarlarkRuleClassHasEnvironmentLabel() {
@@ -1198,6 +1212,23 @@ public class RuleClass implements RuleClassData {
     @CanIgnoreReturnValue
     public Builder factory(ConfiguredTargetFactory<?, ?, ?> factory) {
       this.configuredTargetFactory = factory;
+      return this;
+    }
+
+    /**
+     * Makes this Starlark rule class reuse the native implementation of {@code parent}, which must
+     * be its only parent, instead of having a Starlark implementation function.
+     *
+     * <p>This is used for Starlark rules extending the native {@code alias} rule, which only add
+     * an incoming configuration transition (and attributes read by it) but are otherwise analyzed
+     * exactly like {@code alias}.
+     */
+    @CanIgnoreReturnValue
+    public Builder inheritNativeImplementation(RuleClass parent) {
+      Preconditions.checkState(starlark, "Only Starlark rule classes can inherit implementations");
+      Preconditions.checkArgument(!parent.isStarlark(), "%s is not a native rule", parent);
+      this.configuredTargetFactory = Preconditions.checkNotNull(parent.configuredTargetFactory);
+      this.toolchainResolutionMode = parent.toolchainResolutionMode;
       return this;
     }
 

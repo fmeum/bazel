@@ -20,6 +20,7 @@ import static com.google.devtools.build.lib.packages.BuildType.LABEL;
 import com.google.devtools.build.lib.actions.ActionConflictException;
 import com.google.devtools.build.lib.analysis.BaseRuleClasses;
 import com.google.devtools.build.lib.analysis.ConfiguredTarget;
+import com.google.devtools.build.lib.analysis.RuleConfiguredTargetBuilder;
 import com.google.devtools.build.lib.analysis.RuleConfiguredTargetFactory;
 import com.google.devtools.build.lib.analysis.RuleContext;
 import com.google.devtools.build.lib.analysis.RuleDefinition;
@@ -52,6 +53,12 @@ public class Alias implements RuleConfiguredTargetFactory {
               + "https://github.com/bazelbuild/bazel/issues/8622 for details.");
     }
 
+    // Starlark rules extending alias may be subject to allowlists, e.g. for Starlark transitions.
+    RuleConfiguredTargetBuilder.checkAllowlists(ruleContext);
+    if (ruleContext.hasErrors()) {
+      return null;
+    }
+
     return AliasConfiguredTarget.create(ruleContext, actual, ruleContext.getVisibility());
   }
 
@@ -61,8 +68,9 @@ public class Alias implements RuleConfiguredTargetFactory {
   public static class AliasRule implements RuleDefinition {
     @Override
     public RuleClass build(RuleClass.Builder builder, RuleDefinitionEnvironment environment) {
-      // If transitions are added here, AspectFunction should be modified to follow all
-      // configurations along alias chains.
+      // Starlark rules extending alias (via rule(parent = native.alias)) can add an incoming
+      // rule transition. AspectFunction follows the configurations along alias chains, but if
+      // attribute transitions are added to "actual", it should be audited.
       return builder
           /*<!-- #BLAZE_RULE(alias).ATTRIBUTE(actual) -->
           The target this alias refers to. It does not need to be a rule, it can also be an input

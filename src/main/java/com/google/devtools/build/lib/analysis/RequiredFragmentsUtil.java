@@ -103,7 +103,7 @@ public final class RequiredFragmentsUtil {
             ruleClass.getConfigurationFragmentPolicy(),
             configConditions,
             prerequisites);
-    if (!ruleClass.isStarlark()) {
+    if (ruleClass.getConfiguredTargetFunction() == null) {
       ruleClass
           .getConfiguredTargetFactory(RuleConfiguredTargetFactory.class)
           .addRuleImplSpecificRequiredConfigFragments(requiredFragments, attributes, configuration);

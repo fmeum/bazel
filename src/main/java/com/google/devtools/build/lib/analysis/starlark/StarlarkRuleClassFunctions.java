@@ -546,7 +546,7 @@ public class StarlarkRuleClassFunctions implements StarlarkRuleFunctionsApi {
   // TODO(bazel-team): implement attribute copy and other rule properties
   @Override
   public StarlarkRuleFunction rule(
-      StarlarkFunction implementation,
+      Object implementationUnchecked,
       Object testUnchecked,
       Dict<?, ?> attrs,
       Object implicitOutputs,
@@ -576,15 +576,46 @@ public class StarlarkRuleClassFunctions implements StarlarkRuleFunctionsApi {
     final RuleClass parent;
     final boolean executable;
     final boolean test;
+    @Nullable final StarlarkFunction implementation;
 
-    if (parentUnchecked == Starlark.NONE) {
+    if (isNativeAlias(parentUnchecked)) {
+      parent = ((RuleFunction) parentUnchecked).getRuleClass();
+      executable = false;
+      test = false;
+      implementation = null;
+
+      failIf(
+          implementationUnchecked != Starlark.NONE,
+          "implementation must be omitted when extending native.alias: the rule forwards all"
+              + " providers of 'actual'");
+      String unsupported =
+          "%s is not supported when extending native.alias. Only attrs, cfg, doc and initializer"
+              + " may be set.";
+      failIf(testUnchecked != Starlark.UNBOUND, unsupported, "test");
+      failIf(executableUnchecked != Starlark.UNBOUND, unsupported, "executable");
+      failIf(implicitOutputs != Starlark.NONE, unsupported, "implicit_outputs");
+      failIf(outputToGenfiles, unsupported, "output_to_genfiles");
+      failIf(!fragments.isEmpty(), unsupported, "fragments");
+      failIf(!hostFragments.isEmpty(), unsupported, "host_fragments");
+      failIf(starlarkTestable, unsupported, "_skylark_testable");
+      failIf(!toolchains.isEmpty(), unsupported, "toolchains");
+      failIf(!providesArg.isEmpty(), unsupported, "provides");
+      failIf(dependencyResolutionRule, unsupported, "dependency_resolution_rule");
+      failIf(!execCompatibleWith.isEmpty(), unsupported, "exec_compatible_with");
+      failIf(analysisTest, unsupported, "analysis_test");
+      failIf(buildSetting != Starlark.NONE, unsupported, "build_setting");
+      failIf(execGroups != Starlark.NONE, unsupported, "exec_groups");
+      failIf(extendableUnchecked != Starlark.NONE, unsupported, "extendable");
+      failIf(!subrules.isEmpty(), unsupported, "subrules");
+    } else if (parentUnchecked == Starlark.NONE) {
       parent = null;
       executable = executableUnchecked == Starlark.UNBOUND ? false : (Boolean) executableUnchecked;
       test = testUnchecked == Starlark.UNBOUND ? false : (Boolean) testUnchecked;
+      implementation = checkImplementation(implementationUnchecked);
     } else {
       failIf(
           !(parentUnchecked instanceof StarlarkRuleFunction),
-          "Parent needs to be a Starlark rule, was %s",
+          "Parent needs to be a Starlark rule or native.alias, was %s",
           Starlark.type(parentUnchecked));
       // Assuming parent is already exported.
       failIf(
@@ -618,6 +649,7 @@ public class StarlarkRuleClassFunctions implements StarlarkRuleFunctionsApi {
       failIf(starlarkTestable, "_skylark_testable is not supported when extending rules.");
       failIf(analysisTest, "analysis_test is not supported when extending rules.");
       failIf(buildSetting != Starlark.NONE, "build_setting is not supported when extending rules.");
+      implementation = checkImplementation(implementationUnchecked);
     }
 
     LabelConverter labelConverter = LabelConverter.forBzlEvaluatingThread(thread);
@@ -653,6 +685,24 @@ public class StarlarkRuleClassFunctions implements StarlarkRuleFunctionsApi {
         cfg,
         execGroups,
         subrules);
+  }
+
+  /**
+   * Returns true if {@code parent} is the native {@code alias} rule, which can be extended by
+   * Starlark rules to apply an incoming configuration transition.
+   */
+  private static boolean isNativeAlias(Object parent) {
+    // Use the plain string rather than reaching into the Alias class and adding a dependency edge.
+    return parent instanceof RuleFunction ruleFunction
+        && !ruleFunction.getRuleClass().isStarlark()
+        && ruleFunction.getRuleClass().getName().equals("alias");
+  }
+
+  private static StarlarkFunction checkImplementation(Object implementation) throws EvalException {
+    if (implementation == Starlark.NONE) {
+      throw Starlark.errorf("rule() missing 1 required positional argument: implementation");
+    }
+    return (StarlarkFunction) implementation;
   }
 
   @Override
@@ -723,7 +773,7 @@ public class StarlarkRuleClassFunctions implements StarlarkRuleFunctionsApi {
       // Parameters that come from rule().
       @Nullable RuleClass parent,
       @Nullable Object extendableUnchecked,
-      StarlarkFunction implementation,
+      @Nullable StarlarkFunction implementation,
       @Nullable StarlarkFunction initializer,
       boolean test,
       Dict<?, ?> attrs,
@@ -774,6 +824,11 @@ public class StarlarkRuleClassFunctions implements StarlarkRuleFunctionsApi {
 
       // We'll set the name later, pass the empty string for now.
       builder = new RuleClass.Builder("", type, true, parent);
+      if (!parent.isStarlark()) {
+        // The parent is the native alias rule (see rule()), whose implementation is reused as is.
+        builder.inheritNativeImplementation(parent);
+        builder.setExtendable(false);
+      }
     } else {
       // We'll set the name later, pass the empty string for now.
       RuleClass baseParent =

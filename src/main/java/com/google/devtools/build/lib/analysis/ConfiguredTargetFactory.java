@@ -464,7 +464,9 @@ public final class ConfiguredTargetFactory {
 
       final ConfiguredTarget target;
 
-      if (ruleClass.isStarlark()) {
+      // Starlark rule classes extending the native alias rule have no implementation function and
+      // are analyzed by the native factory instead.
+      if (ruleClass.getConfiguredTargetFunction() != null) {
         final Object rawProviders;
         final boolean isDefaultExecutableCreated;
         @Nullable final RequiredConfigFragmentsProvider requiredConfigFragmentsProvider;

@@ -438,12 +438,18 @@ targets defined by any rule finalizer, including this one.
         @Param(
             name = "implementation",
             named = true,
+            allowedTypes = {
+              @ParamType(type = StarlarkFunction.class),
+              @ParamType(type = NoneType.class),
+            },
+            defaultValue = "None",
             doc =
                 "the Starlark function implementing this rule, must have exactly one parameter: <a"
                     + " href=\"../builtins/ctx.html\">ctx</a>. The function is called during the"
                     + " analysis phase for each instance of the rule. It can access the attributes"
                     + " provided by the user. It must create actions to generate all the declared "
-                    + "outputs."),
+                    + "outputs. Required unless <code>parent</code> is"
+                    + " <code>native.alias</code>, in which case it must be omitted."),
         @Param(
             name = "test",
             named = true,
@@ -734,7 +740,18 @@ declared.
                     + " <code>exec_compatible_with</code>, and <code>exec_groups</code> are"
                     + " merged. Legacy or deprecated parameters may not be set. Incoming"
                     + " configuration transition <code>cfg</code> of parent is applied after this"
-                    + " rule's incoming configuration."),
+                    + " rule's incoming configuration."
+                    + "<p>May also be set to <a"
+                    + " href=\"https://bazel.build/reference/be/general#alias\"><code>native.alias"
+                    + "</code></a> to define a rule that behaves exactly like"
+                    + " <code>alias</code> (forwarding all providers of <code>actual</code>,"
+                    + " propagating aspects to it, etc.), but applies the incoming configuration"
+                    + " transition <code>cfg</code> to itself, and thus to <code>actual</code>. In"
+                    + " this case, <code>implementation</code> must be omitted and only"
+                    + " <code>attrs</code> (which can't redefine the attributes of"
+                    + " <code>alias</code>), <code>cfg</code>, <code>doc</code> and"
+                    + " <code>initializer</code> may be set. Such a rule can't be extended"
+                    + " further."),
         @Param(
             name = "extendable",
             named = true,
@@ -762,7 +779,7 @@ declared.
       },
       useStarlarkThread = true)
   StarlarkCallable rule(
-      StarlarkFunction implementation,
+      Object implementation,
       Object testUnchecked,
       Dict<?, ?> attrs,
       Object implicitOutputs,

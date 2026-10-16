@@ -20,6 +20,7 @@ import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Iterables;
 import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.actions.util.ActionsTestUtil;
+import com.google.devtools.build.lib.analysis.AliasProvider;
 import com.google.devtools.build.lib.analysis.AnalysisResult;
 import com.google.devtools.build.lib.analysis.ConfiguredAspect;
 import com.google.devtools.build.lib.analysis.ConfiguredTarget;
@@ -403,6 +404,486 @@ public class AliasTest extends BuildViewTestCase {
             srcs = ["main2.c"],
         )
         """);
+  }
+
+  private void writeTransitionedAliasFiles() throws Exception {
+    writeAllowlistFile();
+    setupMyInfo();
+    scratch.file(
+        "test/transitioned_alias.bzl",
+        """
+        def _transition_impl(settings, attr):
+            return {"//command_line_option:compilation_mode": attr.compilation_mode}
+
+        _compilation_mode_transition = transition(
+            implementation = _transition_impl,
+            inputs = [],
+            outputs = ["//command_line_option:compilation_mode"],
+        )
+
+        transitioned_alias = rule(
+            parent = native.alias,
+            cfg = _compilation_mode_transition,
+            attrs = {
+                "compilation_mode": attr.string(mandatory = True),
+            },
+            doc = "An alias that transitions to the given compilation mode.",
+        )
+        """);
+    scratch.file(
+        "test/rules.bzl",
+        """
+        load("//myinfo:myinfo.bzl", "MyInfo")
+
+        AspectInfo = provider()
+
+        def _aspect_impl(target, ctx):
+            return [AspectInfo(
+                label = target.label,
+                compilation_mode = ctx.var["COMPILATION_MODE"],
+            )]
+
+        my_aspect = aspect(implementation = _aspect_impl)
+
+        def _leaf_impl(ctx):
+            return [MyInfo(
+                label = ctx.label,
+                compilation_mode = ctx.var["COMPILATION_MODE"],
+            )]
+
+        leaf = rule(implementation = _leaf_impl)
+
+        def _consumer_impl(ctx):
+            return [MyInfo(
+                dep = ctx.attr.dep,
+                dep_label = ctx.attr.dep.label,
+                dep_compilation_mode = ctx.attr.dep[MyInfo].compilation_mode,
+                aspect_info = ctx.attr.dep[AspectInfo] if AspectInfo in ctx.attr.dep else None,
+                compilation_mode = ctx.var["COMPILATION_MODE"],
+            )]
+
+        consumer = rule(
+            implementation = _consumer_impl,
+            attrs = {"dep": attr.label()},
+        )
+
+        consumer_with_aspect = rule(
+            implementation = _consumer_impl,
+            attrs = {"dep": attr.label(aspects = [my_aspect])},
+        )
+        """);
+  }
+
+  private StructImpl getMyInfo(ConfiguredTarget target) throws Exception {
+    Provider.Key key =
+        new StarlarkProvider.Key(
+            keyForBuild(Label.parseCanonical("//myinfo:myinfo.bzl")), "MyInfo");
+    return (StructImpl) target.get(key);
+  }
+
+  @Test
+  public void transitionedAlias_forwardsProvidersOfActualInTransitionedConfiguration()
+      throws Exception {
+    writeTransitionedAliasFiles();
+    scratch.file(
+        "test/BUILD",
+        """
+        load(":rules.bzl", "consumer", "leaf")
+        load(":transitioned_alias.bzl", "transitioned_alias")
+
+        leaf(name = "leaf")
+
+        transitioned_alias(
+            name = "dbg_leaf",
+            actual = ":leaf",
+            compilation_mode = "dbg",
+        )
+
+        consumer(
+            name = "consumer",
+            dep = ":dbg_leaf",
+        )
+        """);
+    useConfiguration("--compilation_mode=fastbuild");
+
+    ConfiguredTarget consumer = getConfiguredTarget("//test:consumer");
+    StructImpl consumerInfo = getMyInfo(consumer);
+    assertThat(consumerInfo.getValue("compilation_mode")).isEqualTo("fastbuild");
+    assertThat(consumerInfo.getValue("dep_compilation_mode")).isEqualTo("dbg");
+    assertThat(consumerInfo.getValue("dep_label"))
+        .isEqualTo(Label.parseCanonical("//test:leaf"));
+
+    ConfiguredTarget dep = (ConfiguredTarget) consumerInfo.getValue("dep");
+    assertThat(dep).isInstanceOf(AliasConfiguredTarget.class);
+    assertThat(dep.getProvider(AliasProvider.class).getAliasChain())
+        .containsExactly(Label.parseCanonical("//test:dbg_leaf"));
+    assertThat(dep.getOriginalLabel()).isEqualTo(Label.parseCanonical("//test:dbg_leaf"));
+    assertThat(dep.getActual().getLabel()).isEqualTo(Label.parseCanonical("//test:leaf"));
+    // The alias itself is analyzed in the transitioned configuration, as is the actual target.
+    assertThat(dep.getConfigurationKey()).isNotEqualTo(consumer.getConfigurationKey());
+    assertThat(dep.getConfigurationKey()).isEqualTo(dep.getActual().getConfigurationKey());
+    assertThat(getMyInfo(dep).getValue("compilation_mode")).isEqualTo("dbg");
+  }
+
+  @Test
+  public void transitionedAlias_topLevel() throws Exception {
+    writeTransitionedAliasFiles();
+    scratch.file(
+        "test/BUILD",
+        """
+        load(":rules.bzl", "leaf")
+        load(":transitioned_alias.bzl", "transitioned_alias")
+
+        leaf(name = "leaf")
+
+        transitioned_alias(
+            name = "dbg_leaf",
+            actual = ":leaf",
+            compilation_mode = "dbg",
+        )
+        """);
+    useConfiguration("--compilation_mode=fastbuild");
+
+    ConfiguredTarget alias = getConfiguredTarget("//test:dbg_leaf");
+    assertThat(alias).isInstanceOf(AliasConfiguredTarget.class);
+    assertThat(getMyInfo(alias).getValue("compilation_mode")).isEqualTo("dbg");
+    assertThat(getMyInfo(alias).getValue("label"))
+        .isEqualTo(Label.parseCanonical("//test:leaf"));
+  }
+
+  @Test
+  public void transitionedAlias_selectResolvedInTransitionedConfiguration() throws Exception {
+    writeTransitionedAliasFiles();
+    scratch.file(
+        "test/BUILD",
+        """
+        load(":rules.bzl", "consumer", "leaf")
+        load(":transitioned_alias.bzl", "transitioned_alias")
+
+        config_setting(
+            name = "is_dbg",
+            values = {"compilation_mode": "dbg"},
+        )
+
+        leaf(name = "dbg_only")
+
+        leaf(name = "other")
+
+        transitioned_alias(
+            name = "selecting",
+            actual = select({
+                ":is_dbg": ":dbg_only",
+                "//conditions:default": ":other",
+            }),
+            compilation_mode = "dbg",
+        )
+
+        consumer(
+            name = "consumer",
+            dep = ":selecting",
+        )
+        """);
+    useConfiguration("--compilation_mode=fastbuild");
+
+    StructImpl consumerInfo = getMyInfo(getConfiguredTarget("//test:consumer"));
+    assertThat(consumerInfo.getValue("dep_label"))
+        .isEqualTo(Label.parseCanonical("//test:dbg_only"));
+    assertThat(consumerInfo.getValue("dep_compilation_mode")).isEqualTo("dbg");
+  }
+
+  @Test
+  public void transitionedAlias_chainedWithNativeAliases() throws Exception {
+    writeTransitionedAliasFiles();
+    scratch.file(
+        "test/BUILD",
+        """
+        load(":rules.bzl", "consumer", "leaf")
+        load(":transitioned_alias.bzl", "transitioned_alias")
+
+        leaf(name = "leaf")
+
+        alias(
+            name = "inner_alias",
+            actual = ":leaf",
+        )
+
+        transitioned_alias(
+            name = "dbg_alias",
+            actual = ":inner_alias",
+            compilation_mode = "dbg",
+        )
+
+        alias(
+            name = "outer_alias",
+            actual = ":dbg_alias",
+        )
+
+        consumer(
+            name = "consumer",
+            dep = ":outer_alias",
+        )
+        """);
+    useConfiguration("--compilation_mode=fastbuild");
+
+    StructImpl consumerInfo = getMyInfo(getConfiguredTarget("//test:consumer"));
+    assertThat(consumerInfo.getValue("dep_label")).isEqualTo(Label.parseCanonical("//test:leaf"));
+    assertThat(consumerInfo.getValue("dep_compilation_mode")).isEqualTo("dbg");
+    ConfiguredTarget dep = (ConfiguredTarget) consumerInfo.getValue("dep");
+    assertThat(dep.getProvider(AliasProvider.class).getAliasChain())
+        .containsExactly(
+            Label.parseCanonical("//test:outer_alias"),
+            Label.parseCanonical("//test:dbg_alias"),
+            Label.parseCanonical("//test:inner_alias"))
+        .inOrder();
+  }
+
+  @Test
+  public void transitionedAlias_aspectPropagatesToActualInTransitionedConfiguration()
+      throws Exception {
+    writeTransitionedAliasFiles();
+    scratch.file(
+        "test/BUILD",
+        """
+        load(":rules.bzl", "consumer_with_aspect", "leaf")
+        load(":transitioned_alias.bzl", "transitioned_alias")
+
+        leaf(name = "leaf")
+
+        transitioned_alias(
+            name = "dbg_leaf",
+            actual = ":leaf",
+            compilation_mode = "dbg",
+        )
+
+        consumer_with_aspect(
+            name = "consumer",
+            dep = ":dbg_leaf",
+        )
+        """);
+    useConfiguration("--compilation_mode=fastbuild");
+
+    StructImpl consumerInfo = getMyInfo(getConfiguredTarget("//test:consumer"));
+    StructImpl aspectInfo = (StructImpl) consumerInfo.getValue("aspect_info");
+    assertThat(aspectInfo).isNotNull();
+    assertThat(aspectInfo.getValue("label")).isEqualTo(Label.parseCanonical("//test:leaf"));
+    assertThat(aspectInfo.getValue("compilation_mode")).isEqualTo("dbg");
+  }
+
+  @Test
+  public void transitionedAlias_topLevelAspect() throws Exception {
+    writeTransitionedAliasFiles();
+    scratch.file(
+        "test/BUILD",
+        """
+        load(":rules.bzl", "leaf")
+        load(":transitioned_alias.bzl", "transitioned_alias")
+
+        leaf(name = "leaf")
+
+        transitioned_alias(
+            name = "dbg_leaf",
+            actual = ":leaf",
+            compilation_mode = "dbg",
+        )
+        """);
+    useConfiguration("--compilation_mode=fastbuild");
+
+    AnalysisResult analysisResult =
+        update(
+            ImmutableList.of("//test:dbg_leaf"),
+            ImmutableList.of("//test:rules.bzl%my_aspect"),
+            true,
+            1,
+            true,
+            eventBus);
+    ConfiguredAspect aspect = Iterables.getOnlyElement(analysisResult.getAspectsMap().values());
+    StructImpl aspectInfo =
+        (StructImpl)
+            aspect.get(
+                new StarlarkProvider.Key(
+                    keyForBuild(Label.parseCanonical("//test:rules.bzl")), "AspectInfo"));
+    assertThat(aspectInfo.getValue("label")).isEqualTo(Label.parseCanonical("//test:leaf"));
+    assertThat(aspectInfo.getValue("compilation_mode")).isEqualTo("dbg");
+  }
+
+  @Test
+  public void transitionedAlias_toInputFile() throws Exception {
+    writeTransitionedAliasFiles();
+    scratch.file(
+        "test/BUILD",
+        """
+        load(":transitioned_alias.bzl", "transitioned_alias")
+
+        exports_files(["file.txt"])
+
+        transitioned_alias(
+            name = "dbg_file",
+            actual = "file.txt",
+            compilation_mode = "dbg",
+        )
+
+        filegroup(
+            name = "files",
+            srcs = [":dbg_file"],
+        )
+        """);
+
+    ConfiguredTarget files = getConfiguredTarget("//test:files");
+    assertThat(ActionsTestUtil.baseArtifactNames(getFilesToBuild(files)))
+        .containsExactly("file.txt");
+  }
+
+  @Test
+  public void transitionedAlias_starlarkTransitionAllowlistIsEnforced() throws Exception {
+    writeTransitionedAliasFiles();
+    scratch.overwriteFile(
+        TestConstants.TOOLS_REPOSITORY_SCRATCH
+            + "tools/allowlists/function_transition_allowlist/BUILD",
+        """
+        package_group(
+            name = "function_transition_allowlist",
+            packages = ["//test/..."],
+        )
+        """);
+    scratch.file("test/BUILD");
+    scratch.file(
+        "not_allowlisted/defs.bzl",
+        """
+        def _transition_impl(settings, attr):
+            return {"//command_line_option:compilation_mode": "dbg"}
+
+        _dbg_transition = transition(
+            implementation = _transition_impl,
+            inputs = [],
+            outputs = ["//command_line_option:compilation_mode"],
+        )
+
+        dbg_alias = rule(
+            parent = native.alias,
+            cfg = _dbg_transition,
+        )
+        """);
+    scratch.file(
+        "not_allowlisted/BUILD",
+        """
+        load("//test:rules.bzl", "leaf")
+        load(":defs.bzl", "dbg_alias")
+
+        leaf(name = "leaf")
+
+        dbg_alias(
+            name = "dbg_leaf",
+            actual = ":leaf",
+        )
+        """);
+
+    reporter.removeHandler(failFastHandler);
+    getConfiguredTarget("//not_allowlisted:dbg_leaf");
+    assertContainsEvent("Non-allowlisted use of Starlark transition");
+  }
+
+  @Test
+  public void transitionedAlias_implementationNotAllowed() throws Exception {
+    scratch.file(
+        "test/defs.bzl",
+        """
+        def _impl(ctx):
+            pass
+
+        bad_alias = rule(
+            implementation = _impl,
+            parent = native.alias,
+        )
+        """);
+    scratch.file(
+        "test/BUILD",
+        """
+        load(":defs.bzl", "bad_alias")
+
+        filegroup(name = "files")
+        """);
+
+    reporter.removeHandler(failFastHandler);
+    getConfiguredTarget("//test:files");
+    assertContainsEvent("implementation must be omitted when extending native.alias");
+  }
+
+  @Test
+  public void transitionedAlias_unsupportedParameter() throws Exception {
+    scratch.file(
+        "test/defs.bzl",
+        """
+        bad_alias = rule(
+            parent = native.alias,
+            toolchains = ["//test:toolchain_type"],
+        )
+        """);
+    scratch.file(
+        "test/BUILD",
+        """
+        load(":defs.bzl", "bad_alias")
+
+        filegroup(name = "files")
+        """);
+
+    reporter.removeHandler(failFastHandler);
+    getConfiguredTarget("//test:files");
+    assertContainsEvent(
+        "toolchains is not supported when extending native.alias. Only attrs, cfg, doc and"
+            + " initializer may be set.");
+  }
+
+  @Test
+  public void transitionedAlias_cannotRedefineActual() throws Exception {
+    scratch.file(
+        "test/defs.bzl",
+        """
+        bad_alias = rule(
+            parent = native.alias,
+            attrs = {"actual": attr.label()},
+        )
+        """);
+    scratch.file(
+        "test/BUILD",
+        """
+        load(":defs.bzl", "bad_alias")
+
+        filegroup(name = "files")
+        """);
+
+    reporter.removeHandler(failFastHandler);
+    getConfiguredTarget("//test:files");
+    assertContainsEvent("attribute `actual`: built-in attributes cannot be overridden.");
+  }
+
+  @Test
+  public void transitionedAlias_cannotBeExtended() throws Exception {
+    scratch.file(
+        "test/defs.bzl",
+        """
+        my_alias = rule(
+            parent = native.alias,
+        )
+
+        def _impl(ctx):
+            return ctx.super()
+
+        my_alias_extension = rule(
+            implementation = _impl,
+            parent = my_alias,
+        )
+        """);
+    scratch.file(
+        "test/BUILD",
+        """
+        load(":defs.bzl", "my_alias_extension")
+
+        filegroup(name = "files")
+        """);
+
+    reporter.removeHandler(failFastHandler);
+    getConfiguredTarget("//test:files");
+    assertContainsEvent("The rule 'my_alias' is not extendable.");
   }
 
   @Test

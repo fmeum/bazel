@@ -6507,7 +6507,7 @@ public final class StarlarkRuleClassFunctionsTest extends BuildViewTestCase {
 
         my_library = rule(
             implementation = _impl,
-            parent = native.alias,
+            parent = native.filegroup,
             fragments = ["cc"],
         )
         """);

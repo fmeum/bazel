@@ -546,6 +546,42 @@ drink_rule = rule(
 
 Incoming edge transitions must be 1:1 transitions.
 
+### Transitioning aliases {#transitioning-aliases}
+
+To apply an incoming edge transition to an existing target without wrapping it
+in a custom rule, define a rule that extends the native
+[`alias`](/reference/be/general#alias) rule by setting `rule()`'s `parent`
+parameter to `native.alias`. Such a rule has no implementation function and
+behaves exactly like `alias`: it forwards all providers of `actual`, aspects
+propagate through it to `actual` and it can appear in alias chains. The only
+difference is that it applies the transition given in `cfg` to itself, and thus
+to `actual`, which is also resolved in the transitioned configuration if it
+uses `select()`:
+
+```python
+# example/rules.bzl
+load("example/transitions:transitions.bzl", "hot_chocolate_transition")
+hot_chocolate_alias = rule(
+    parent = native.alias,
+    cfg = hot_chocolate_transition,
+    # Optional additional attributes, e.g. to be read by the transition.
+    attrs = {"sweetness": attr.int()},
+)
+```
+
+```python
+# example/BUILD
+load(":rules.bzl", "hot_chocolate_alias")
+hot_chocolate_alias(
+    name = "sweet_drink",
+    actual = ":drink",
+    sweetness = 3,
+)
+```
+
+Besides `parent` and `cfg`, only `attrs` (which can't redefine attributes of
+`alias`), `doc` and `initializer` may be set.
+
 ### Outgoing edge transitions {#outgoing-edge-transitions}
 
 Outgoing edge transitions are activated by attaching a `transition` object
