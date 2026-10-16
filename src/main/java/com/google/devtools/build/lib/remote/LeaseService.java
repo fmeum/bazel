@@ -112,8 +112,7 @@ public class LeaseService {
   }
 
   private boolean isRemoteTree(TreeArtifactValue treeArtifactValue) {
-    return treeArtifactValue.getChildValues().values().stream()
-            .anyMatch(FileArtifactValue::isRemote)
+    return treeArtifactValue.anyChildValueMatches(FileArtifactValue::isRemote)
         || treeArtifactValue
             .getArchivedRepresentation()
             .map(ar -> ar.archivedFileValue().isRemote())

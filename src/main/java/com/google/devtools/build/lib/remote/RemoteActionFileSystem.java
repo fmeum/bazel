@@ -24,7 +24,6 @@ import static com.google.devtools.build.lib.remote.util.Futures.getFromFuture;
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSortedSet;
-import com.google.common.collect.Iterables;
 import com.google.common.util.concurrent.ListenableFuture;
 import com.google.devtools.build.lib.actions.Action;
 import com.google.devtools.build.lib.actions.ActionExecutionException;
@@ -198,10 +197,10 @@ public class RemoteActionFileSystem extends FileSystem implements PathCanonicali
 
     private void ensureCached(PathFragment execPath) {
       TreeArtifactValue treeMetadata = inputArtifactData.getEnclosingTreeMetadata(execPath);
-      if (treeMetadata == null || treeMetadata.getChildren().isEmpty()) {
+      if (treeMetadata == null || !treeMetadata.hasChildren()) {
         return;
       }
-      SpecialArtifact parent = Iterables.getFirst(treeMetadata.getChildren(), null).getParent();
+      SpecialArtifact parent = treeMetadata.getFirstChild().getParent();
       if (!cachedTrees.contains(parent)) {
         insertTree(treeMetadata);
         cachedTrees.add(parent);

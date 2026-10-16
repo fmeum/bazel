@@ -892,10 +892,10 @@ public final class MerkleTreeComputer {
       BlobPolicy blobPolicy) {
     // A tree artifact contains either only tool inputs or only non-tool inputs.
     boolean isTool =
-        !treeArtifactValue.getChildren().isEmpty()
+        treeArtifactValue.hasChildren()
             && isToolInput.test(
                 mappedExecPath.getRelative(
-                    treeArtifactValue.getChildren().first().getParentRelativePath()));
+                    treeArtifactValue.getFirstChild().getParentRelativePath()));
     // mappedExecPath and isToolInput must not be used below as they aren't part of the cache key -
     // use isTool instead.
     return computeIfAbsent(

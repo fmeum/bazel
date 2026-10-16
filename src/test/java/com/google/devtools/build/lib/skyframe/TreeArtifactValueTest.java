@@ -379,6 +379,63 @@ public final class TreeArtifactValueTest {
   }
 
   @Test
+  public void childAccessors() {
+    SpecialArtifact parent = createTreeArtifact("bin/tree");
+    // "a-c" sorts before "a/b" in exec path order.
+    TreeFileArtifact child1 = TreeFileArtifact.createTreeOutput(parent, "a/b");
+    TreeFileArtifact child2 = TreeFileArtifact.createTreeOutput(parent, "a-c");
+    TreeFileArtifact child3 = TreeFileArtifact.createTreeOutput(parent, "a/d/e");
+    TreeFileArtifact nonChild = TreeFileArtifact.createTreeOutput(parent, "a/d");
+    FileArtifactValue metadata1 = metadataWithId(1);
+    FileArtifactValue metadata2 = metadataWithId(2);
+    FileArtifactValue metadata3 = metadataWithId(3);
+
+    TreeArtifactValue tree =
+        TreeArtifactValue.newBuilder(parent)
+            .putChild(child1, metadata1)
+            .putChild(child2, metadata2)
+            .putChild(child3, metadata3)
+            .build();
+
+    assertThat(tree.hasChildren()).isTrue();
+    assertThat(tree.getChildCount()).isEqualTo(3);
+    assertThat(tree.getFirstChild()).isEqualTo(child2);
+    assertThat(tree.getChildValue(child1)).isEqualTo(metadata1);
+    assertThat(tree.getChildValue(child3)).isEqualTo(metadata3);
+    assertThat(tree.getChildValue(nonChild)).isNull();
+    assertThat(tree.findChildValueByExecPath(child2.getExecPath())).isEqualTo(metadata2);
+    assertThat(tree.findChildValueByExecPath(nonChild.getExecPath())).isNull();
+    assertThat(tree.findChildValueByExecPath(parent.getExecPath())).isNull();
+    List<Map.Entry<PathFragment, FileArtifactValue>> visited = new ArrayList<>();
+    tree.forEachChild((path, metadata) -> visited.add(Maps.immutableEntry(path, metadata)));
+    assertThat(visited)
+        .containsExactly(
+            Maps.immutableEntry(PathFragment.create("a-c"), metadata2),
+            Maps.immutableEntry(PathFragment.create("a/b"), metadata1),
+            Maps.immutableEntry(PathFragment.create("a/d/e"), metadata3))
+        .inOrder();
+    assertThat(tree.anyChildValueMatches(metadata3::equals)).isTrue();
+    assertThat(tree.anyChildValueMatches(metadata -> false)).isFalse();
+  }
+
+  @Test
+  public void childAccessors_empty() {
+    SpecialArtifact parent = createTreeArtifact("bin/tree");
+    TreeArtifactValue tree = TreeArtifactValue.empty();
+
+    assertThat(tree.hasChildren()).isFalse();
+    assertThat(tree.getChildCount()).isEqualTo(0);
+    assertThat(tree.getFirstChild()).isNull();
+    assertThat(tree.getChildValue(TreeFileArtifact.createTreeOutput(parent, "a"))).isNull();
+    assertThat(tree.findChildValueByExecPath(PathFragment.create("bin/tree/a"))).isNull();
+    tree.forEachChild(
+        (path, metadata) -> {
+          throw new AssertionError(path);
+        });
+    assertThat(tree.anyChildValueMatches(metadata -> true)).isFalse();
+  }
+
+  @Test
   public void visitTree_visitsEachChild() throws Exception {
     Path treeDir = scratch.dir("tree");
     scratch.file("tree/file1");

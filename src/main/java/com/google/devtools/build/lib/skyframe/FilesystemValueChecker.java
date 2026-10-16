@@ -13,7 +13,6 @@
 // limitations under the License.
 package com.google.devtools.build.lib.skyframe;
 
-import static com.google.common.collect.ImmutableSet.toImmutableSet;
 import static java.util.concurrent.TimeUnit.MINUTES;
 import static java.util.stream.Collectors.groupingByConcurrent;
 
@@ -502,17 +501,16 @@ public class FilesystemValueChecker {
       return false;
     }
 
-    var lastKnownLocalChildren =
-        value.getChildValues().entrySet().stream()
-            .filter(
-                entry -> {
-                  var metadata = entry.getValue();
-                  // For remote metadata, a non-null contents proxy indicates that the file has
-                  // been materialized in the local filesystem.
-                  return !metadata.isRemote() || metadata.getContentsProxy() != null;
-                })
-            .map(entry -> entry.getKey().getParentRelativePath())
-            .collect(toImmutableSet());
+    var lastKnownLocalChildrenBuilder = ImmutableSet.<PathFragment>builder();
+    value.forEachChild(
+        (parentRelativePath, metadata) -> {
+          // For remote metadata, a non-null contents proxy indicates that the file has been
+          // materialized in the local filesystem.
+          if (!metadata.isRemote() || metadata.getContentsProxy() != null) {
+            lastKnownLocalChildrenBuilder.add(parentRelativePath);
+          }
+        });
+    var lastKnownLocalChildren = lastKnownLocalChildrenBuilder.build();
 
     return !currentLocalChildren.equals(lastKnownLocalChildren);
   }

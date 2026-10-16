@@ -63,7 +63,7 @@ public interface MetadataConsumerForMetrics {
       size.addAndGet(totalChildBytes);
       if (totalChildBytes > 0) {
         // Skip omitted/missing tree artifacts: they will throw here.
-        count.addAndGet(treeArtifactValue.getChildren().size());
+        count.addAndGet(treeArtifactValue.getChildCount());
       }
     }
 

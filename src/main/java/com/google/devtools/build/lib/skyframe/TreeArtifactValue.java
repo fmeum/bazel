@@ -62,6 +62,7 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.ForkJoinPool;
 import java.util.function.BiConsumer;
+import java.util.function.Predicate;
 import javax.annotation.Nullable;
 
 /**
@@ -377,6 +378,65 @@ public class TreeArtifactValue implements HasDigest, SkyValue {
     return childData;
   }
 
+  /** Returns whether this tree artifact has at least one child. */
+  public boolean hasChildren() {
+    return !childData.isEmpty();
+  }
+
+  /** Returns the number of children of this tree artifact. */
+  public int getChildCount() {
+    return childData.size();
+  }
+
+  /**
+   * Returns the first child of this tree artifact in exec path order, or {@code null} if it has no
+   * children.
+   */
+  @Nullable
+  public TreeFileArtifact getFirstChild() {
+    return childData.isEmpty() ? null : childData.firstKey();
+  }
+
+  /**
+   * Returns the metadata of the child with the same exec path as the given one, or {@code null} if
+   * there is no such child.
+   */
+  @Nullable
+  public FileArtifactValue getChildValue(TreeFileArtifact child) {
+    return childData.get(child);
+  }
+
+  /**
+   * Returns the metadata of the child with the given exec path or {@code null} if no such child is
+   * present.
+   */
+  @Nullable
+  public FileArtifactValue findChildValueByExecPath(PathFragment execPath) {
+    Map.Entry<TreeFileArtifact, FileArtifactValue> entry = findChildEntryByExecPath(execPath);
+    return entry != null ? entry.getValue() : null;
+  }
+
+  /**
+   * Calls {@code consumer} with the {@linkplain TreeFileArtifact#getParentRelativePath
+   * parent-relative path} and the metadata of every child, in exec path order.
+   *
+   * <p>Prefer this over {@link #getChildValues} when the {@link TreeFileArtifact}s themselves are
+   * not needed.
+   */
+  public void forEachChild(BiConsumer<PathFragment, FileArtifactValue> consumer) {
+    childData.forEach((child, metadata) -> consumer.accept(child.getParentRelativePath(), metadata));
+  }
+
+  /** Returns whether the metadata of at least one child satisfies the given predicate. */
+  public boolean anyChildValueMatches(Predicate<? super FileArtifactValue> predicate) {
+    for (FileArtifactValue metadata : childData.values()) {
+      if (predicate.test(metadata)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   /** Returns an entry for child with given exec path or null if no such child is present. */
   @SuppressWarnings("unchecked")
   @Nullable
@@ -451,6 +511,41 @@ public class TreeArtifactValue implements HasDigest, SkyValue {
 
       @Override
       public ImmutableSortedMap<TreeFileArtifact, FileArtifactValue> getChildValues() {
+        throw new UnsupportedOperationException(toString());
+      }
+
+      @Override
+      public boolean hasChildren() {
+        throw new UnsupportedOperationException(toString());
+      }
+
+      @Override
+      public int getChildCount() {
+        throw new UnsupportedOperationException(toString());
+      }
+
+      @Override
+      public TreeFileArtifact getFirstChild() {
+        throw new UnsupportedOperationException(toString());
+      }
+
+      @Override
+      public FileArtifactValue getChildValue(TreeFileArtifact child) {
+        throw new UnsupportedOperationException(toString());
+      }
+
+      @Override
+      public FileArtifactValue findChildValueByExecPath(PathFragment execPath) {
+        throw new UnsupportedOperationException(toString());
+      }
+
+      @Override
+      public void forEachChild(BiConsumer<PathFragment, FileArtifactValue> consumer) {
+        throw new UnsupportedOperationException(toString());
+      }
+
+      @Override
+      public boolean anyChildValueMatches(Predicate<? super FileArtifactValue> predicate) {
         throw new UnsupportedOperationException(toString());
       }
 

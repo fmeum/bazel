@@ -205,7 +205,7 @@ public final class RecursiveFilesystemTraversalFunction implements SkyFunction {
       }
       if (rootInfo.type.isDirectory() && rootInfo.metadata instanceof TreeArtifactValue value) {
         ImmutableList.Builder<RecursiveFilesystemTraversalValue> traversalValues =
-            ImmutableList.builderWithExpectedSize(value.getChildValues().size());
+            ImmutableList.builderWithExpectedSize(value.getChildCount());
         for (Map.Entry<TreeFileArtifact, FileArtifactValue> entry :
             value.getChildValues().entrySet()) {
           RootedPath path =

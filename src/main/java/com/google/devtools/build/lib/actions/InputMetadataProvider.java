@@ -141,7 +141,7 @@ public interface InputMetadataProvider {
         }
       } else if (artifact.isTreeArtifact()) {
         TreeArtifactValue treeArtifactValue = inputMetadataProvider.getTreeMetadata(artifact);
-        if (treeArtifactValue == null || treeArtifactValue.getChildren().isEmpty()) {
+        if (treeArtifactValue == null || !treeArtifactValue.hasChildren()) {
           emptyTreeArtifacts.add(artifact);
         } else {
           result.addAll(treeArtifactValue.getChildren());

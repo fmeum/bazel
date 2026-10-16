@@ -99,7 +99,7 @@ public final class SpawnInputExpander {
             expandArchivedTreeArtifacts ? null : treeArtifactValue.getArchivedArtifact();
         if (archivedTreeArtifact != null) {
           addMapping(inputMap, mapForRunfiles(pathMapper, root, location), archivedTreeArtifact);
-        } else if (treeArtifactValue.getChildren().isEmpty()) {
+        } else if (!treeArtifactValue.hasChildren()) {
           addMapping(inputMap, mapForRunfiles(pathMapper, root, location), artifact);
         } else {
           for (TreeFileArtifact input : treeArtifactValue.getChildren()) {

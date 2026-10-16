@@ -212,9 +212,8 @@ final class ActionOutputMetadataStore implements OutputMetadataStore {
 
     if (artifact.isChildOfDeclaredDirectory()) {
       TreeArtifactValue tree = getTreeArtifactValue(artifact.getParent());
-      FileArtifactValue value =
-          tree.getChildValues().getOrDefault(artifact, FileArtifactValue.MISSING_FILE_MARKER);
-      return checkExists(value, artifact);
+      FileArtifactValue value = tree.getChildValue((TreeFileArtifact) artifact);
+      return checkExists(value != null ? value : FileArtifactValue.MISSING_FILE_MARKER, artifact);
     }
 
     FileArtifactValue value = artifactData.get(artifact);

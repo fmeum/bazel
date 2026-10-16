@@ -197,7 +197,7 @@ public final class RemoteImportantOutputHandler implements ImportantOutputHandle
         return;
       }
 
-      var filesToDownload = new ArrayList<TreeFileArtifact>(treeArtifactValue.getChildren().size());
+      var filesToDownload = new ArrayList<TreeFileArtifact>(treeArtifactValue.getChildCount());
       for (var entry : treeArtifactValue.getChildValues().entrySet()) {
         if (remoteOutputChecker.shouldDownloadOutput(entry.getKey(), entry.getValue())) {
           filesToDownload.add(entry.getKey());

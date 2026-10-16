@@ -16,7 +16,6 @@ package com.google.devtools.build.lib.actions.cache;
 
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkState;
-import static com.google.common.collect.ImmutableMap.toImmutableMap;
 import static java.util.Objects.requireNonNull;
 
 import com.google.common.base.MoreObjects;
@@ -259,13 +258,14 @@ public interface ActionCache {
        * children and archived artifact which are remote.
        */
       public static SerializableTreeArtifactValue create(TreeArtifactValue treeMetadata) {
-        ImmutableMap<String, FileArtifactValue> childValues =
-            treeMetadata.getChildValues().entrySet().stream()
-                // Only save remote tree file
-                .filter(e -> e.getValue().isRemote())
-                .collect(
-                    toImmutableMap(
-                        e -> e.getKey().getTreeRelativePathString(), Map.Entry::getValue));
+        ImmutableMap.Builder<String, FileArtifactValue> childValues = ImmutableMap.builder();
+        treeMetadata.forEachChild(
+            (parentRelativePath, metadata) -> {
+              // Only save remote tree file
+              if (metadata.isRemote()) {
+                childValues.put(parentRelativePath.getPathString(), metadata);
+              }
+            });
 
         // Only save remote archived artifact
         Optional<FileArtifactValue> archivedFileValue =
@@ -276,7 +276,8 @@ public interface ActionCache {
 
         Optional<PathFragment> resolvedPath = treeMetadata.getResolvedPath();
 
-        return new SerializableTreeArtifactValue(childValues, archivedFileValue, resolvedPath);
+        return new SerializableTreeArtifactValue(
+            childValues.buildOrThrow(), archivedFileValue, resolvedPath);
       }
     }
 
@@ -388,9 +389,9 @@ public interface ActionCache {
         checkArgument(output.isTreeArtifact(), "artifact must be a tree artifact: %s", output);
         String execPath = output.getExecPathString();
         if (saveTreeMetadata) {
-          if (!metadata.getChildValues().isEmpty()
-              && metadata.getChildValues().values().stream()
-                  .allMatch(ProxyFileArtifactValue.class::isInstance)) {
+          if (metadata.hasChildren()
+              && !metadata.anyChildValueMatches(
+                  childValue -> !(childValue instanceof ProxyFileArtifactValue))) {
             proxyOutputs.add(output.getExecPathString());
           } else {
             outputTreeMetadata.put(execPath, SerializableTreeArtifactValue.create(metadata));

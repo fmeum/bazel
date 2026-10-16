@@ -645,7 +645,7 @@ public class CompactSpawnLogContext extends SpawnLogContext {
   private List<ExecLogEntry.File> expandTreeArtifact(
       TreeArtifactValue treeMetadata, Path root, InputMetadataProvider inputMetadataProvider)
       throws IOException {
-    var files = new ArrayList<ExecLogEntry.File>(treeMetadata.getChildren().size());
+    var files = new ArrayList<ExecLogEntry.File>(treeMetadata.getChildCount());
     for (var child : treeMetadata.getChildren()) {
       PathFragment parentRelativePath = child.getParentRelativePath();
       Digest digest =

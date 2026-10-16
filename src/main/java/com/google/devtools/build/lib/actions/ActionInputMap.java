@@ -240,7 +240,7 @@ public final class ActionInputMap implements InputMetadataProvider {
             values[treeIndex] instanceof TreeArtifactValue,
             "Requested tree file artifact under non-tree/omitted tree artifact: %s",
             input);
-        return ((TreeArtifactValue) values[treeIndex]).getChildValues().get(treeFileArtifact);
+        return ((TreeArtifactValue) values[treeIndex]).getChildValue(treeFileArtifact);
       }
     }
     int index = getIndex(input.getExecPath());
@@ -328,8 +328,7 @@ public final class ActionInputMap implements InputMetadataProvider {
       return null;
     }
 
-    Map.Entry<?, FileArtifactValue> entry = tree.findChildEntryByExecPath(execPath);
-    return entry != null ? entry.getValue() : null;
+    return tree.findChildValueByExecPath(execPath);
   }
 
   @Nullable

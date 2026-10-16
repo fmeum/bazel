@@ -92,18 +92,14 @@ public abstract class ActionExecutionValue implements SkyValue {
               artifact);
         });
     treeArtifactData.forEach(
-        (tree, treeValue) -> {
-          treeValue
-              .getChildValues()
-              .forEach(
-                  (child, childValue) ->
-                      // Ignore symlinks to directories, which don't have a digest.
-                      checkArgument(
-                          !childValue.getType().isFile() || childValue.getDigest() != null,
-                          "Missing digest for file %s in tree artifact %s",
-                          child,
-                          tree));
-        });
+        (tree, treeValue) ->
+            checkArgument(
+                // Ignore symlinks to directories, which don't have a digest.
+                !treeValue.anyChildValueMatches(
+                    childValue -> childValue.getType().isFile() && childValue.getDigest() == null),
+                "Missing digest for file in tree artifact %s: %s",
+                tree,
+                treeValue));
 
     if (richArtifactData != null) {
       checkArgument(
@@ -184,7 +180,7 @@ public abstract class ActionExecutionValue implements SkyValue {
     FileArtifactValue result;
     if (artifact.isChildOfDeclaredDirectory()) {
       TreeArtifactValue tree = getTreeArtifactValue(artifact.getParent());
-      result = tree == null ? null : tree.getChildValues().get(artifact);
+      result = tree == null ? null : tree.getChildValue((TreeFileArtifact) artifact);
     } else if (artifact instanceof ArchivedTreeArtifact) {
       TreeArtifactValue tree = getTreeArtifactValue(artifact.getParent());
       ArchivedRepresentation archivedRepresentation =
@@ -296,11 +292,10 @@ public abstract class ActionExecutionValue implements SkyValue {
     SpecialArtifact newParent = (SpecialArtifact) newArtifact;
     TreeArtifactValue.Builder newTree = TreeArtifactValue.newBuilder(newParent);
 
-    for (Map.Entry<TreeFileArtifact, FileArtifactValue> child : tree.getChildValues().entrySet()) {
-      newTree.putChild(
-          TreeFileArtifact.createTreeOutput(newParent, child.getKey().getParentRelativePath()),
-          child.getValue());
-    }
+    tree.forEachChild(
+        (parentRelativePath, metadata) ->
+            newTree.putChild(
+                TreeFileArtifact.createTreeOutput(newParent, parentRelativePath), metadata));
 
     tree.getArchivedRepresentation()
         .ifPresent(

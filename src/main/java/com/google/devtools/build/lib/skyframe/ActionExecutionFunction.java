@@ -43,6 +43,7 @@ import com.google.devtools.build.lib.actions.ActionWithDiscoveredInputsState;
 import com.google.devtools.build.lib.actions.Actions;
 import com.google.devtools.build.lib.actions.AlreadyReportedActionExecutionException;
 import com.google.devtools.build.lib.actions.Artifact;
+import com.google.devtools.build.lib.actions.Artifact.TreeFileArtifact;
 import com.google.devtools.build.lib.actions.ArtifactPathResolver;
 import com.google.devtools.build.lib.actions.DelegatingPairInputMetadataProvider;
 import com.google.devtools.build.lib.actions.DiscoveredInputsEvent;
@@ -1131,7 +1132,7 @@ public class ActionExecutionFunction implements SkyFunction {
       case ActionExecutionValue actionExecutionValue -> {
         if (input.isChildOfDeclaredDirectory()) {
           TreeArtifactValue tree = actionExecutionValue.getTreeArtifactValue(input.getParent());
-          if (tree != null && !tree.getChildValues().containsKey(input)) {
+          if (tree != null && tree.getChildValue((TreeFileArtifact) input) == null) {
             String errorMessage =
                 String.format(
                     "Nondeterministic output tree artifact detected: a previous execution produced"
