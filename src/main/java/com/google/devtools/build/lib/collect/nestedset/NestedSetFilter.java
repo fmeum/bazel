@@ -37,11 +37,12 @@ import javax.annotation.Nullable;
  * is that of the input with the rejected elements removed.
  *
  * <p>If the caller provides a cache key, the filtered version of every node is additionally
- * memoized across calls for as long as both the node and the key are reachable. Filtering a set
- * that extends a previously filtered one then only visits the new nodes, which turns a chain of
- * filters over growing transitive sets from quadratic into linear total work.
+ * memoized across calls until {@link #clearCache} is called or the node or the key becomes
+ * unreachable. Filtering a set that extends a previously filtered one then only visits the new
+ * nodes, which turns a chain of filters over growing transitive sets from quadratic into linear
+ * total work.
  */
-final class NestedSetFilter {
+public final class NestedSetFilter {
 
   /** A predicate on the elements of a nested set that may fail. */
   @FunctionalInterface
@@ -50,26 +51,32 @@ final class NestedSetFilter {
   }
 
   /**
-   * The result of filtering a children array.
-   *
-   * @param children the filtered children ({@link NestedSet#EMPTY_CHILDREN}, a single element or an
-   *     array), or null if they are identical to the original array. Representing the latter case
-   *     by null avoids a strong reference from a cache value to its weak key.
-   * @param depth the depth of the filtered children
+   * The result of filtering a children array that loses no elements. Using a sentinel rather than
+   * the array itself avoids a strong reference from a cache value to its weak key.
    */
-  private record Filtered(@Nullable Object children, int depth) {}
+  private static final Object UNCHANGED = new Object();
 
   /**
-   * For each cache key, maps a children array (by identity) to the result of filtering it.
+   * For each cache key, maps a children array (by identity) to the result of filtering it: either
+   * {@link #UNCHANGED} or the filtered children ({@link NestedSet#EMPTY_CHILDREN}, a single element
+   * or an array).
    *
    * <p>Both levels hold their keys weakly: An entry is dropped once the children array is no longer
    * part of any live nested set or once the cache key becomes unreachable. Values never reference
    * their own key, only (filtered versions of) its successors, so they don't keep it alive.
    */
-  private static final Cache<Object, ConcurrentMap<Object[], Filtered>> cache =
+  private static final Cache<Object, ConcurrentMap<Object[], Object>> cache =
       Caffeine.newBuilder().weakKeys().build();
 
   private NestedSetFilter() {}
+
+  /**
+   * Drops all memoized results. This trades CPU for memory and never affects the results of {@link
+   * #filter}.
+   */
+  public static void clearCache() {
+    cache.invalidateAll();
+  }
 
   /**
    * Returns the subset of {@code set} whose elements satisfy {@code predicate}, preserving order.
@@ -92,28 +99,32 @@ final class NestedSetFilter {
       return predicate.test(element) ? set : set.getOrder().emptySet();
     }
 
-    Map<Object[], Filtered> nodes =
+    Map<Object[], Object> nodes =
         cacheKey == null
             ? new IdentityHashMap<>()
             : cache.get(cacheKey, unused -> new MapMaker().weakKeys().makeMap());
-    Filtered filtered = new Walker<E, X>(predicate, nodes).filter(array);
-    if (filtered.children() == null) {
+    Object filtered = new Walker<E, X>(predicate, nodes).filter(array);
+    if (filtered == UNCHANGED) {
       return set;
     }
-    if (filtered.children() == EMPTY_CHILDREN) {
+    if (filtered == EMPTY_CHILDREN) {
       return set.getOrder().emptySet();
     }
-    return NestedSet.create(set.getOrder(), filtered.depth(), filtered.children());
+    // Filtering never increases the depth, so the depth of the original set is a valid
+    // overapproximation (see NestedSet#getApproxDepth). Tracking the exact depth would cost memory
+    // for every cache entry.
+    return NestedSet.create(
+        set.getOrder(), filtered instanceof Object[] ? set.getApproxDepth() : 1, filtered);
   }
 
   private static final class Walker<E, X extends Exception> {
     private final Predicate<? super E, X> predicate;
-    private final Map<Object[], Filtered> nodes;
+    private final Map<Object[], Object> nodes;
     // Keyed by equality rather than identity since NestedSet deduplicates elements by equality, so
     // equal elements must receive the same verdict.
     private final Map<Object, Boolean> elements = new HashMap<>();
 
-    Walker(Predicate<? super E, X> predicate, Map<Object[], Filtered> nodes) {
+    Walker(Predicate<? super E, X> predicate, Map<Object[], Object> nodes) {
       this.predicate = predicate;
       this.nodes = nodes;
     }
@@ -128,8 +139,9 @@ final class NestedSetFilter {
       return keep;
     }
 
-    private Filtered filter(Object[] array) throws X, InterruptedException {
-      Filtered cached = nodes.get(array);
+    /** Returns {@link #UNCHANGED} or the filtered children of {@code array}. */
+    private Object filter(Object[] array) throws X, InterruptedException {
+      Object cached = nodes.get(array);
       if (cached != null) {
         return cached;
       }
@@ -138,28 +150,21 @@ final class NestedSetFilter {
       // first n members of the result agree with those of array.
       Object[] members = null;
       int n = 0;
-      int maxMemberDepth = 0;
       // Whether a non-leaf member was replaced by a single element or a different array, which may
       // duplicate another member.
       boolean replacedNonLeaf = false;
       for (Object member : array) {
         Object newMember;
-        int memberDepth;
         if (member instanceof Object[] subarray) {
-          Filtered filtered = filter(subarray);
-          if (filtered.children() == null) {
+          Object filtered = filter(subarray);
+          if (filtered == UNCHANGED) {
             newMember = subarray;
           } else {
-            newMember = filtered.children();
+            newMember = filtered;
             replacedNonLeaf = true;
           }
-          memberDepth = filtered.depth();
-        } else if (test(member)) {
-          newMember = member;
-          memberDepth = 1;
         } else {
-          newMember = EMPTY_CHILDREN;
-          memberDepth = 0;
+          newMember = test(member) ? member : EMPTY_CHILDREN;
         }
 
         if (members == null && newMember != member) {
@@ -172,33 +177,28 @@ final class NestedSetFilter {
           members[n] = newMember;
         }
         n++;
-        maxMemberDepth = Math.max(maxMemberDepth, memberDepth);
       }
 
-      Filtered result;
+      Object result;
       if (members == null) {
-        result = new Filtered(null, 1 + maxMemberDepth);
+        result = UNCHANGED;
       } else {
         if (replacedNonLeaf) {
           n = removeDuplicates(members, n);
         }
         result =
             switch (n) {
-              case 0 -> new Filtered(EMPTY_CHILDREN, 0);
-              // Like NestedSet#create, a node with a single successor is replaced by it. Since
-              // removeDuplicates only removes members equal to a remaining one, maxMemberDepth is
-              // still the depth of the sole member.
-              case 1 -> new Filtered(members[0], maxMemberDepth);
+              case 0 -> EMPTY_CHILDREN;
+              // Like NestedSet#create, a node with a single successor is replaced by it.
+              case 1 -> members[0];
               default ->
-                  new Filtered(
-                      NestedSetInterner.intern(
-                          n == members.length ? members : Arrays.copyOf(members, n)),
-                      1 + maxMemberDepth);
+                  NestedSetInterner.intern(
+                      n == members.length ? members : Arrays.copyOf(members, n));
             };
       }
       // Under concurrent filtering with the same cache key, make all callers agree on one result so
       // that the filtered sets share structure.
-      Filtered previous = nodes.putIfAbsent(array, result);
+      Object previous = nodes.putIfAbsent(array, result);
       return previous != null ? previous : result;
     }
 

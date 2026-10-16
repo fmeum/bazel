@@ -20,6 +20,7 @@ import static org.junit.Assert.assertThrows;
 
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
+import com.google.common.collect.Range;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
@@ -64,11 +65,10 @@ public final class NestedSetFilterTest {
                 .inOrder();
             assertWithMessage(context).that(filtered.getOrder()).isEqualTo(order);
             checkStructure(context, filtered.children);
-            if (filtered != set) {
-              assertWithMessage(context)
-                  .that(filtered.getApproxDepth())
-                  .isEqualTo(depth(filtered.children));
-            }
+            // The depth may be overapproximated, but not beyond that of the original set.
+            assertWithMessage(context)
+                .that(filtered.getApproxDepth())
+                .isIn(Range.closed(depth(filtered.children), set.getApproxDepth()));
           }
         }
       }
@@ -244,6 +244,13 @@ public final class NestedSetFilterTest {
 
     calls.clear();
     assertThat(NestedSetFilter.filter(outer, predicate, null).toList())
+        .containsExactly("a", "c")
+        .inOrder();
+    assertThat(calls).containsExactly("a", "b", "c").inOrder();
+
+    NestedSetFilter.clearCache();
+    calls.clear();
+    assertThat(NestedSetFilter.filter(outer, predicate, cacheKey).toList())
         .containsExactly("a", "c")
         .inOrder();
     assertThat(calls).containsExactly("a", "b", "c").inOrder();

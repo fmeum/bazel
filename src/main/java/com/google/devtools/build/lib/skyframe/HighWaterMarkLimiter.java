@@ -20,6 +20,7 @@ import static java.util.concurrent.TimeUnit.SECONDS;
 import com.google.common.eventbus.Subscribe;
 import com.google.common.flogger.GoogleLogger;
 import com.google.devtools.build.lib.cmdline.LabelNameDeduper;
+import com.google.devtools.build.lib.collect.nestedset.NestedSetFilter;
 import com.google.devtools.build.lib.collect.nestedset.NestedSetInterner;
 import com.google.devtools.build.lib.runtime.MemoryPressure.MemoryPressureStats;
 import com.google.devtools.build.lib.runtime.MemoryPressureEvent;
@@ -100,6 +101,7 @@ public final class HighWaterMarkLimiter {
     // pressure, clearing them is definitely a good idea.
     skyframeExecutor.dropUnnecessaryTemporarySkyframeState();
     syscallCache.clear();
+    NestedSetFilter.clearCache();
 
     // These caches trade temporary memory for [non-deterministically hopeful!] retained memory
     // savings. If we're under memory pressure, clearing them could either be a good idea or a bad
