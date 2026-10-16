@@ -116,7 +116,7 @@ public class MerkleTreeComputerTest {
               @Override
               public FileArtifactValue getInputMetadataChecked(ActionInput input)
                   throws InterruptedException {
-                if (input != treeFileArtifact || treeFileMetadataAccessed.getCount() == 0) {
+                if (!input.equals(treeFileArtifact) || treeFileMetadataAccessed.getCount() == 0) {
                   return null;
                 }
                 treeFileMetadataAccessed.countDown();
@@ -230,7 +230,7 @@ public class MerkleTreeComputerTest {
               @Override
               public FileArtifactValue getInputMetadataChecked(ActionInput input)
                   throws InterruptedException {
-                if (input == treeFileArtifact && treeFileMetadataAccessed.getCount() >= 0) {
+                if (input.equals(treeFileArtifact) && treeFileMetadataAccessed.getCount() >= 0) {
                   treeFileMetadataAccessed.countDown();
                   treeFileMetadataContinue.await();
                 }

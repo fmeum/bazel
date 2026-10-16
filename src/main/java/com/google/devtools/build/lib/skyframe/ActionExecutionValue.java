@@ -289,22 +289,7 @@ public abstract class ActionExecutionValue implements SkyValue {
       Artifact newArtifact, TreeArtifactValue tree) {
     checkState(newArtifact.isTreeArtifact(), "Expected tree artifact, got %s", newArtifact);
 
-    SpecialArtifact newParent = (SpecialArtifact) newArtifact;
-    TreeArtifactValue.Builder newTree = TreeArtifactValue.newBuilder(newParent);
-
-    tree.forEachChild(
-        (parentRelativePath, metadata) ->
-            newTree.putChild(
-                TreeFileArtifact.createTreeOutput(newParent, parentRelativePath), metadata));
-
-    tree.getArchivedRepresentation()
-        .ifPresent(
-            archivedRepresentation ->
-                newTree.setArchivedRepresentation(
-                    ArchivedTreeArtifact.createForTree(newParent),
-                    archivedRepresentation.archivedFileValue()));
-
-    return newTree.build();
+    return tree.transformForSharedAction((SpecialArtifact) newArtifact);
   }
 
   /**

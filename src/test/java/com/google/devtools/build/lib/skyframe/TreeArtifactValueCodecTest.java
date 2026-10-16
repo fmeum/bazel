@@ -66,6 +66,13 @@ public class TreeArtifactValueCodecTest extends BuildViewTestBase {
             .putChild(child2, metadata2)
             .build());
 
+    subjects.add(
+        TreeArtifactValue.newBuilder(parent)
+            .putChild(TreeFileArtifact.createTreeOutput(parent, "a/b"), metadata1)
+            .putChild(TreeFileArtifact.createTreeOutput(parent, "a-c"), metadata2)
+            .putChild(TreeFileArtifact.createTreeOutput(parent, "a/d/e"), metadataWithId(4))
+            .build());
+
     ArchivedTreeArtifact archivedTreeArtifact = ArchivedTreeArtifact.createForTree(parent);
     FileArtifactValue archivedArtifactMetadata = metadataWithId(3);
     subjects.add(

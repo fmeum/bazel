@@ -468,7 +468,15 @@ public final class ActionInputMapTest {
     assertThat(map.getInputMetadata(input)).isSameInstanceAs(fileValue);
     assertThat(map.getMetadata(input.getExecPath())).isSameInstanceAs(fileValue);
     assertThat(map.getTreeMetadata(input.getExecPath())).isNull();
-    assertThat(map.getInput(input.getExecPath())).isSameInstanceAs(input);
+    ActionInput actualInput = map.getInput(input.getExecPath());
+    if (input instanceof TreeFileArtifact treeFileArtifact) {
+      // Children of declared directories are recreated on demand.
+      assertThat(actualInput).isEqualTo(input);
+      assertThat(((TreeFileArtifact) actualInput).hasGeneratingActionKey())
+          .isEqualTo(treeFileArtifact.hasGeneratingActionKey());
+    } else {
+      assertThat(actualInput).isSameInstanceAs(input);
+    }
   }
 
   private void assertContainsTree(SpecialArtifact input, TreeArtifactValue treeValue) {

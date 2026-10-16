@@ -19,8 +19,10 @@ import static org.junit.Assert.assertThrows;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.spy;
 
+import com.google.common.base.Strings;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Maps;
+import com.google.devtools.build.lib.actions.ActionLookupData;
 import com.google.devtools.build.lib.actions.Artifact.ArchivedTreeArtifact;
 import com.google.devtools.build.lib.actions.Artifact.SpecialArtifact;
 import com.google.devtools.build.lib.actions.Artifact.SpecialArtifactType;
@@ -31,6 +33,7 @@ import com.google.devtools.build.lib.actions.FileArtifactValue;
 import com.google.devtools.build.lib.actions.util.ActionsTestUtil;
 import com.google.devtools.build.lib.skyframe.TreeArtifactValue.ArchivedRepresentation;
 import com.google.devtools.build.lib.testutil.Scratch;
+import com.google.devtools.build.lib.util.Fingerprint;
 import com.google.devtools.build.lib.vfs.DigestHashFunction;
 import com.google.devtools.build.lib.vfs.Dirent;
 import com.google.devtools.build.lib.vfs.FileStatus;
@@ -46,6 +49,7 @@ import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.TreeMap;
 import javax.annotation.Nullable;
 import org.junit.Test;
 import org.junit.runner.RunWith;
@@ -416,6 +420,202 @@ public final class TreeArtifactValueTest {
         .inOrder();
     assertThat(tree.anyChildValueMatches(metadata3::equals)).isTrue();
     assertThat(tree.anyChildValueMatches(metadata -> false)).isFalse();
+  }
+
+  @Test
+  public void digestMatchesFingerprintOfSortedChildren() {
+    // The digest must not depend on the internal representation of the children so that persisted
+    // action cache entries stay valid.
+    SpecialArtifact parent = createTreeArtifact("bin/tree");
+    Map<TreeFileArtifact, FileArtifactValue> children =
+        new TreeMap<>(TreeArtifactValue.EXEC_PATH_COMPARATOR);
+    TreeArtifactValue.Builder builder = TreeArtifactValue.newBuilder(parent);
+    int id = 0;
+    for (String path : ImmutableList.of("z", "a/d/e", "a-c", "a/b", "a0", "a.txt")) {
+      TreeFileArtifact child = TreeFileArtifact.createTreeOutput(parent, path);
+      FileArtifactValue metadata = metadataWithId(id++);
+      children.put(child, metadata);
+      builder.putChild(child, metadata);
+    }
+
+    TreeArtifactValue tree = builder.build();
+
+    Fingerprint fingerprint = new Fingerprint();
+    children.forEach(
+        (child, metadata) -> {
+          fingerprint.addPath(child.getParentRelativePath());
+          metadata.addTo(fingerprint);
+        });
+    assertThat(tree.getDigest()).isEqualTo(fingerprint.digestAndReset());
+  }
+
+  @Test
+  public void childrenOfDeclaredDirectory(@TestParameter boolean largeDirectory) {
+    SpecialArtifact parent = createTreeArtifact("bin/tree");
+    List<String> paths =
+        new ArrayList<>(
+            List.of("z", "a/d/f", "a/d/e", "a-c", "a/b", "a0", "a.txt", "b/c/d/e/f", "a a"));
+    if (largeDirectory) {
+      // Exceed 64 KiB of names in a single directory to exercise 4-byte offsets.
+      for (int i = 0; i < 300; i++) {
+        paths.add("big/" + Strings.repeat("x", 250) + i);
+      }
+    }
+    Map<TreeFileArtifact, FileArtifactValue> expected =
+        new TreeMap<>(TreeArtifactValue.EXEC_PATH_COMPARATOR);
+    TreeArtifactValue.Builder builder = TreeArtifactValue.newBuilder(parent);
+    int id = 0;
+    for (String path : paths) {
+      TreeFileArtifact child = TreeFileArtifact.createTreeOutput(parent, path);
+      FileArtifactValue metadata = metadataWithId(id++);
+      expected.put(child, metadata);
+      builder.putChild(child, metadata);
+    }
+
+    TreeArtifactValue tree = builder.build();
+
+    assertThat(tree.getChildValues()).containsExactlyEntriesIn(expected).inOrder();
+    assertThat(tree.getChildren()).containsExactlyElementsIn(expected.keySet()).inOrder();
+    for (TreeFileArtifact child : tree.getChildren()) {
+      assertThat(child.getParent()).isSameInstanceAs(parent);
+      assertThat(child.getGeneratingActionKey()).isEqualTo(parent.getGeneratingActionKey());
+    }
+    assertThat(tree.hasChildren()).isTrue();
+    assertThat(tree.getChildCount()).isEqualTo(expected.size());
+    assertThat(tree.getFirstChild()).isEqualTo(expected.keySet().iterator().next());
+    List<PathFragment> visitedPaths = new ArrayList<>();
+    List<FileArtifactValue> visitedMetadata = new ArrayList<>();
+    tree.forEachChild(
+        (path, metadata) -> {
+          visitedPaths.add(path);
+          visitedMetadata.add(metadata);
+        });
+    assertThat(visitedPaths)
+        .containsExactlyElementsIn(
+            expected.keySet().stream().map(TreeFileArtifact::getParentRelativePath).toList())
+        .inOrder();
+    assertThat(visitedMetadata).containsExactlyElementsIn(expected.values()).inOrder();
+    for (Map.Entry<TreeFileArtifact, FileArtifactValue> entry : expected.entrySet()) {
+      TreeFileArtifact child = entry.getKey();
+      assertThat(tree.getChildValue(child)).isSameInstanceAs(entry.getValue());
+      assertThat(tree.findChildValueByExecPath(child.getExecPath()))
+          .isSameInstanceAs(entry.getValue());
+      assertThat(tree.findChildEntryByExecPath(child.getExecPath()))
+          .isEqualTo(Maps.immutableEntry(child, entry.getValue()));
+    }
+    for (String nonChild :
+        List.of("a", "a/d", "a/b/c", "a/d/e/f", "a/x", "b", "b/c", "a.tx", "a.txt0", "zz", "0")) {
+      TreeFileArtifact artifact = TreeFileArtifact.createTreeOutput(parent, nonChild);
+      assertThat(tree.getChildValue(artifact)).isNull();
+      assertThat(tree.findChildValueByExecPath(artifact.getExecPath())).isNull();
+      assertThat(tree.findChildEntryByExecPath(artifact.getExecPath())).isNull();
+    }
+    for (String nonChildExecPath : List.of("bin/tree", "bin/tree2/z", "bin/treez", "bin/z")) {
+      assertThat(tree.findChildValueByExecPath(PathFragment.create(nonChildExecPath))).isNull();
+      assertThat(tree.findChildEntryByExecPath(PathFragment.create(nonChildExecPath))).isNull();
+    }
+    assertThat(tree.anyChildValueMatches(expected.get(expected.keySet().iterator().next())::equals))
+        .isTrue();
+    assertThat(tree.anyChildValueMatches(metadata -> false)).isFalse();
+  }
+
+  @Test
+  public void childrenOfTemplateExpansion() {
+    SpecialArtifact parent = createTreeArtifact("bin/tree");
+    TreeFileArtifact child1 =
+        TreeFileArtifact.createTemplateExpansionOutput(
+            parent, "a/b", ActionsTestUtil.NULL_TEMPLATE_EXPANSION_ARTIFACT_OWNER);
+    TreeFileArtifact child2 =
+        TreeFileArtifact.createTemplateExpansionOutput(
+            parent, "a-c", ActionsTestUtil.NULL_TEMPLATE_EXPANSION_ARTIFACT_OWNER);
+    TreeFileArtifact nonChild =
+        TreeFileArtifact.createTemplateExpansionOutput(
+            parent, "a", ActionsTestUtil.NULL_TEMPLATE_EXPANSION_ARTIFACT_OWNER);
+    FileArtifactValue metadata1 = metadataWithId(1);
+    FileArtifactValue metadata2 = metadataWithId(2);
+
+    TreeArtifactValue tree =
+        TreeArtifactValue.newBuilder(parent)
+            .putChild(child1, metadata1)
+            .putChild(child2, metadata2)
+            .build();
+
+    // The children can't be recreated from the parent, so the original instances are retained.
+    assertThat(tree.getChildren()).containsExactly(child2, child1).inOrder();
+    assertThat(tree.getChildren().first()).isSameInstanceAs(child2);
+    assertThat(tree.getChildren().last()).isSameInstanceAs(child1);
+    assertThat(tree.getFirstChild()).isSameInstanceAs(child2);
+    assertThat(tree.getChildCount()).isEqualTo(2);
+    assertThat(tree.getChildValue(child1)).isSameInstanceAs(metadata1);
+    assertThat(tree.getChildValue(nonChild)).isNull();
+    assertThat(tree.findChildValueByExecPath(child2.getExecPath())).isSameInstanceAs(metadata2);
+    assertThat(tree.getChildPaths())
+        .containsExactly(PathFragment.create("a-c"), PathFragment.create("a/b"))
+        .inOrder();
+  }
+
+  @Test
+  public void childWithNonLatin1Path() {
+    SpecialArtifact parent = createTreeArtifact("bin/tree");
+    TreeFileArtifact child1 = TreeFileArtifact.createTreeOutput(parent, "dir/中文");
+    TreeFileArtifact child2 = TreeFileArtifact.createTreeOutput(parent, "dir/file");
+    FileArtifactValue metadata1 = metadataWithId(1);
+    FileArtifactValue metadata2 = metadataWithId(2);
+
+    TreeArtifactValue tree =
+        TreeArtifactValue.newBuilder(parent)
+            .putChild(child1, metadata1)
+            .putChild(child2, metadata2)
+            .build();
+
+    assertThat(tree.getChildValues())
+        .containsExactly(child2, metadata2, child1, metadata1)
+        .inOrder();
+    assertThat(tree.getChildValue(child1)).isSameInstanceAs(metadata1);
+    assertThat(tree.findChildValueByExecPath(child2.getExecPath())).isSameInstanceAs(metadata2);
+  }
+
+  @Test
+  public void transformForSharedAction(@TestParameter boolean withArchivedRepresentation) {
+    SpecialArtifact parent = createTreeArtifact("bin/tree");
+    SpecialArtifact newParent =
+        SpecialArtifact.create(
+            root,
+            parent.getExecPath(),
+            ActionsTestUtil.YET_ANOTHER_NULL_ARTIFACT_OWNER,
+            SpecialArtifactType.TREE);
+    newParent.setGeneratingActionKey(
+        ActionLookupData.create(ActionsTestUtil.YET_ANOTHER_NULL_ARTIFACT_OWNER, 0));
+    TreeArtifactValue.Builder builder = TreeArtifactValue.newBuilder(parent);
+    TreeArtifactValue.Builder expectedBuilder = TreeArtifactValue.newBuilder(newParent);
+    int id = 0;
+    for (String path : ImmutableList.of("a/b", "a-c", "d")) {
+      FileArtifactValue metadata = metadataWithId(id++);
+      builder.putChild(TreeFileArtifact.createTreeOutput(parent, path), metadata);
+      expectedBuilder.putChild(TreeFileArtifact.createTreeOutput(newParent, path), metadata);
+    }
+    if (withArchivedRepresentation) {
+      FileArtifactValue archivedMetadata = metadataWithId(id);
+      builder.setArchivedRepresentation(createArchivedTreeArtifact(parent), archivedMetadata);
+      expectedBuilder.setArchivedRepresentation(
+          createArchivedTreeArtifact(newParent), archivedMetadata);
+    }
+    TreeArtifactValue tree = builder.build();
+    TreeArtifactValue expected = expectedBuilder.build();
+
+    TreeArtifactValue transformed = tree.transformForSharedAction(newParent);
+
+    assertThat(transformed).isEqualTo(expected);
+    assertThat(transformed).isNotEqualTo(tree);
+    assertThat(transformed.getDigest()).isEqualTo(expected.getDigest());
+    assertThat(transformed.getChildValues()).isEqualTo(expected.getChildValues());
+    assertThat(transformed.getArchivedRepresentation())
+        .isEqualTo(expected.getArchivedRepresentation());
+    assertThat(transformed.getTotalChildBytes()).isEqualTo(expected.getTotalChildBytes());
+    assertThat(transformed.isEntirelyRemote()).isEqualTo(expected.isEntirelyRemote());
+    for (TreeFileArtifact child : transformed.getChildren()) {
+      assertThat(child.getParent()).isSameInstanceAs(newParent);
+    }
   }
 
   @Test

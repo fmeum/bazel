@@ -16,7 +16,6 @@ package com.google.devtools.build.lib.skyframe;
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.base.Preconditions.checkState;
-import static com.google.common.collect.ImmutableSet.toImmutableSet;
 import static java.util.Objects.requireNonNull;
 
 import com.google.common.base.MoreObjects;
@@ -24,9 +23,11 @@ import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.ImmutableSortedMap;
 import com.google.common.collect.ImmutableSortedSet;
+import com.google.common.collect.Maps;
 import com.google.common.io.BaseEncoding;
 import com.google.devtools.build.lib.actions.ActionInput;
 import com.google.devtools.build.lib.actions.ActionInputHelper;
+import com.google.devtools.build.lib.actions.ActionLookupData;
 import com.google.devtools.build.lib.actions.Artifact.ArchivedTreeArtifact;
 import com.google.devtools.build.lib.actions.Artifact.SpecialArtifact;
 import com.google.devtools.build.lib.actions.Artifact.TreeFileArtifact;
@@ -68,6 +69,11 @@ import javax.annotation.Nullable;
 /**
  * Value for TreeArtifacts, which contains a digest and the {@link FileArtifactValue}s of its child
  * {@link TreeFileArtifact}s.
+ *
+ * <p>The children of declared directories are stored in a {@link TreeArtifactDirectory}, from which
+ * their {@link TreeFileArtifact}s are created on demand. This avoids retaining an artifact and its
+ * full exec path for every child, which would otherwise dominate the memory usage of large tree
+ * artifacts.
  */
 @AutoCodec(
     deserializedInterface = DeserializedSkyValue.class,
@@ -81,7 +87,7 @@ public class TreeArtifactValue implements HasDigest, SkyValue {
   /**
    * Comparator based on exec path which works on {@link ActionInput} as opposed to {@link
    * com.google.devtools.build.lib.actions.Artifact}. This way, we can use an {@link ActionInput} to
-   * search {@link #childData}.
+   * search the children.
    */
   @SerializationConstant @VisibleForSerialization
   static final Comparator<ActionInput> EXEC_PATH_COMPARATOR =
@@ -197,13 +203,32 @@ public class TreeArtifactValue implements HasDigest, SkyValue {
       new TreeArtifactValue(
           MetadataDigestUtils.fromMetadata(ImmutableMap.of()),
           EMPTY_MAP,
+          /* parent= */ null,
           0L,
           /* archivedRepresentation= */ null,
           /* resolvedPath= */ null,
           /* entirelyRemote= */ false);
 
   private final byte[] digest;
-  private final ImmutableSortedMap<TreeFileArtifact, FileArtifactValue> childData;
+
+  /**
+   * The children of this tree artifact.
+   *
+   * <p>If {@link #parent} is non-null, this is a {@link TreeArtifactDirectory} and the {@link
+   * TreeFileArtifact}s of the children are {@linkplain TreeFileArtifact#createTreeOutput created}
+   * on demand. See {@link Builder#canRecreate} for when this is possible.
+   *
+   * <p>Otherwise, this is an {@code ImmutableSortedMap<TreeFileArtifact, FileArtifactValue>} sorted
+   * by {@link #EXEC_PATH_COMPARATOR}, which is used for example for the outputs of action template
+   * expansions.
+   */
+  private final Object children;
+
+  /**
+   * The tree artifact described by this value if {@link #children} is a {@link
+   * TreeArtifactDirectory}, null otherwise.
+   */
+  @Nullable private final SpecialArtifact parent;
 
   /**
    * The total size of all regular file children in the lower 63 bits and whether the children are
@@ -216,17 +241,18 @@ public class TreeArtifactValue implements HasDigest, SkyValue {
   private final long totalChildSizeAndEntirelyRemote;
 
   /**
-   * Optional archived representation of the entire tree artifact which can be sent instead of all
-   * the items in the directory.
-   */
-  @Nullable private final ArchivedRepresentation archivedRepresentation;
-
-  /**
-   * Optional resolved path.
+   * The optional {@linkplain #getArchivedRepresentation archived representation} and the optional
+   * {@linkplain #getResolvedPath resolved path}: null if neither is present, an {@link
+   * ArchivedRepresentation} or a {@link PathFragment} if only one of them is present and an {@link
+   * ArchivedRepresentationAndResolvedPath} if both are present.
    *
-   * <p>See {@link FileArtifactValue#getResolvedPath} for semantics.
+   * <p>Both are rarely present, so storing them in a single field keeps this object at 32 bytes
+   * with compact object headers despite the additional {@link #parent} field.
    */
-  @Nullable private final PathFragment resolvedPath;
+  @Nullable private final Object archivedRepresentationOrResolvedPath;
+
+  private record ArchivedRepresentationAndResolvedPath(
+      ArchivedRepresentation archivedRepresentation, PathFragment resolvedPath) {}
 
   /** A FileArtifactValue used to stand in for a TreeArtifactValue. */
   private static final class TreeArtifactCompositeFileArtifactValue extends FileArtifactValue {
@@ -316,28 +342,53 @@ public class TreeArtifactValue implements HasDigest, SkyValue {
   @VisibleForSerialization
   TreeArtifactValue(
       byte[] digest,
-      ImmutableSortedMap<TreeFileArtifact, FileArtifactValue> childData,
+      Object children,
+      @Nullable SpecialArtifact parent,
       long totalChildBytes,
       @Nullable ArchivedRepresentation archivedRepresentation,
       @Nullable PathFragment resolvedPath,
       boolean entirelyRemote) {
     checkArgument(totalChildBytes >= 0, "Negative total child size: %s", totalChildBytes);
+    checkArgument(
+        (parent != null) == (children instanceof TreeArtifactDirectory),
+        "Children must be stored in a TreeArtifactDirectory if and only if the parent is known");
     this.digest = digest;
-    this.childData = childData;
+    this.children = children;
+    this.parent = parent;
     this.totalChildSizeAndEntirelyRemote =
         entirelyRemote ? totalChildBytes | Long.MIN_VALUE : totalChildBytes;
-    this.archivedRepresentation = archivedRepresentation;
-    this.resolvedPath = resolvedPath;
+    if (archivedRepresentation != null && resolvedPath != null) {
+      this.archivedRepresentationOrResolvedPath =
+          new ArchivedRepresentationAndResolvedPath(archivedRepresentation, resolvedPath);
+    } else if (archivedRepresentation != null) {
+      this.archivedRepresentationOrResolvedPath = archivedRepresentation;
+    } else {
+      this.archivedRepresentationOrResolvedPath = resolvedPath;
+    }
+  }
+
+  @SuppressWarnings("unchecked")
+  private ImmutableSortedMap<TreeFileArtifact, FileArtifactValue> childMap() {
+    return (ImmutableSortedMap<TreeFileArtifact, FileArtifactValue>) children;
+  }
+
+  private TreeArtifactDirectory directory() {
+    return (TreeArtifactDirectory) children;
+  }
+
+  private static TreeFileArtifact createChild(SpecialArtifact parent, String parentRelativePath) {
+    return TreeFileArtifact.createTreeOutput(
+        parent, PathFragment.createAlreadyNormalized(parentRelativePath));
   }
 
   public FileArtifactValue getMetadata() {
-    return new TreeArtifactCompositeFileArtifactValue(digest, isEntirelyRemote(), resolvedPath);
+    return new TreeArtifactCompositeFileArtifactValue(digest, isEntirelyRemote(), resolvedPath());
   }
 
   ImmutableSet<PathFragment> getChildPaths() {
-    return childData.keySet().stream()
-        .map(TreeFileArtifact::getParentRelativePath)
-        .collect(toImmutableSet());
+    ImmutableSet.Builder<PathFragment> childPaths = ImmutableSet.builder();
+    forEachChild((parentRelativePath, metadata) -> childPaths.add(parentRelativePath));
+    return childPaths.build();
   }
 
   @Override
@@ -345,8 +396,14 @@ public class TreeArtifactValue implements HasDigest, SkyValue {
     return digest.clone();
   }
 
+  /**
+   * Returns the children of this tree artifact.
+   *
+   * <p>Prefer the other accessors if the {@link TreeFileArtifact}s themselves are not needed, as
+   * they may have to be created on every call.
+   */
   public ImmutableSortedSet<TreeFileArtifact> getChildren() {
-    return childData.keySet();
+    return getChildValues().keySet();
   }
 
   public long getTotalChildBytes() {
@@ -355,7 +412,17 @@ public class TreeArtifactValue implements HasDigest, SkyValue {
 
   /** Returns the archived representation of the tree artifact, if present. */
   public Optional<ArchivedRepresentation> getArchivedRepresentation() {
-    return Optional.ofNullable(archivedRepresentation);
+    return Optional.ofNullable(archivedRepresentation());
+  }
+
+  @Nullable
+  @VisibleForSerialization
+  ArchivedRepresentation archivedRepresentation() {
+    return switch (archivedRepresentationOrResolvedPath) {
+      case ArchivedRepresentation archivedRepresentation -> archivedRepresentation;
+      case ArchivedRepresentationAndResolvedPath both -> both.archivedRepresentation();
+      case null, default -> null;
+    };
   }
 
   /**
@@ -364,28 +431,55 @@ public class TreeArtifactValue implements HasDigest, SkyValue {
    * <p>See {@link FileArtifactValue#getResolvedPath} for semantics.
    */
   public Optional<PathFragment> getResolvedPath() {
-    return Optional.ofNullable(resolvedPath);
+    return Optional.ofNullable(resolvedPath());
+  }
+
+  @Nullable
+  @VisibleForSerialization
+  PathFragment resolvedPath() {
+    return switch (archivedRepresentationOrResolvedPath) {
+      case PathFragment resolvedPath -> resolvedPath;
+      case ArchivedRepresentationAndResolvedPath both -> both.resolvedPath();
+      case null, default -> null;
+    };
   }
 
   @Nullable
   public ArchivedTreeArtifact getArchivedArtifact() {
+    ArchivedRepresentation archivedRepresentation = archivedRepresentation();
     return archivedRepresentation != null
         ? archivedRepresentation.archivedTreeFileArtifact()
         : null;
   }
 
+  /**
+   * Returns the children of this tree artifact and their metadata.
+   *
+   * <p>Prefer the other accessors if the {@link TreeFileArtifact}s themselves are not needed, as
+   * they may have to be created on every call.
+   */
   public ImmutableSortedMap<TreeFileArtifact, FileArtifactValue> getChildValues() {
-    return childData;
+    if (parent == null) {
+      return childMap();
+    }
+    ImmutableSortedMap.Builder<TreeFileArtifact, FileArtifactValue> childValues =
+        childDataBuilder();
+    directory()
+        .forEachFile(
+            (parentRelativePath, metadata) ->
+                childValues.put(createChild(parent, parentRelativePath), metadata));
+    return childValues.buildOrThrow();
   }
 
   /** Returns whether this tree artifact has at least one child. */
   public boolean hasChildren() {
-    return !childData.isEmpty();
+    // A TreeArtifactDirectory always has at least one entry.
+    return parent != null || !childMap().isEmpty();
   }
 
   /** Returns the number of children of this tree artifact. */
   public int getChildCount() {
-    return childData.size();
+    return parent != null ? directory().getFileCount() : childMap().size();
   }
 
   /**
@@ -394,7 +488,10 @@ public class TreeArtifactValue implements HasDigest, SkyValue {
    */
   @Nullable
   public TreeFileArtifact getFirstChild() {
-    return childData.isEmpty() ? null : childData.firstKey();
+    if (parent != null) {
+      return createChild(parent, directory().getFirstFilePath());
+    }
+    return childMap().isEmpty() ? null : childMap().firstKey();
   }
 
   /**
@@ -403,7 +500,9 @@ public class TreeArtifactValue implements HasDigest, SkyValue {
    */
   @Nullable
   public FileArtifactValue getChildValue(TreeFileArtifact child) {
-    return childData.get(child);
+    return parent != null
+        ? getChildValueFromDirectory(child.getExecPathString())
+        : childMap().get(child);
   }
 
   /**
@@ -412,8 +511,32 @@ public class TreeArtifactValue implements HasDigest, SkyValue {
    */
   @Nullable
   public FileArtifactValue findChildValueByExecPath(PathFragment execPath) {
+    if (parent != null) {
+      return getChildValueFromDirectory(execPath.getPathString());
+    }
     Map.Entry<TreeFileArtifact, FileArtifactValue> entry = findChildEntryByExecPath(execPath);
     return entry != null ? entry.getValue() : null;
+  }
+
+  @Nullable
+  private FileArtifactValue getChildValueFromDirectory(String execPath) {
+    int start = getParentRelativePathStart(execPath);
+    return start != -1 ? directory().getFile(execPath, start) : null;
+  }
+
+  /**
+   * Returns the index at which the parent-relative path starts in the given exec path, or -1 if it
+   * doesn't point below the {@link #parent}.
+   */
+  private int getParentRelativePathStart(String execPath) {
+    String parentExecPath = parent.getExecPathString();
+    int parentLength = parentExecPath.length();
+    if (execPath.length() <= parentLength + 1
+        || execPath.charAt(parentLength) != '/'
+        || !execPath.startsWith(parentExecPath)) {
+      return -1;
+    }
+    return parentLength + 1;
   }
 
   /**
@@ -424,12 +547,24 @@ public class TreeArtifactValue implements HasDigest, SkyValue {
    * not needed.
    */
   public void forEachChild(BiConsumer<PathFragment, FileArtifactValue> consumer) {
-    childData.forEach((child, metadata) -> consumer.accept(child.getParentRelativePath(), metadata));
+    if (parent != null) {
+      directory()
+          .forEachFile(
+              (parentRelativePath, metadata) ->
+                  consumer.accept(
+                      PathFragment.createAlreadyNormalized(parentRelativePath), metadata));
+      return;
+    }
+    childMap()
+        .forEach((child, metadata) -> consumer.accept(child.getParentRelativePath(), metadata));
   }
 
   /** Returns whether the metadata of at least one child satisfies the given predicate. */
   public boolean anyChildValueMatches(Predicate<? super FileArtifactValue> predicate) {
-    for (FileArtifactValue metadata : childData.values()) {
+    if (parent != null) {
+      return directory().anyFileMatches(predicate);
+    }
+    for (FileArtifactValue metadata : childMap().values()) {
       if (predicate.test(metadata)) {
         return true;
       }
@@ -442,8 +577,20 @@ public class TreeArtifactValue implements HasDigest, SkyValue {
   @Nullable
   public Map.Entry<TreeFileArtifact, FileArtifactValue> findChildEntryByExecPath(
       PathFragment execPath) {
+    if (parent != null) {
+      String execPathString = execPath.getPathString();
+      int start = getParentRelativePathStart(execPathString);
+      if (start == -1) {
+        return null;
+      }
+      FileArtifactValue metadata = directory().getFile(execPathString, start);
+      return metadata != null
+          ? Maps.immutableEntry(createChild(parent, execPathString.substring(start)), metadata)
+          : null;
+    }
     ActionInput searchToken = ActionInputHelper.fromPath(execPath);
     // Not really a copy -- original map is already an ImmutableSortedMap using the same comparator.
+    ImmutableSortedMap<TreeFileArtifact, FileArtifactValue> childData = childMap();
     ImmutableSortedMap<ActionInput, FileArtifactValue> casted =
         ImmutableSortedMap.copyOf(childData, EXEC_PATH_COMPARATOR);
     checkState(casted == (Object) childData, "Casting children resulted with a copy");
@@ -458,9 +605,46 @@ public class TreeArtifactValue implements HasDigest, SkyValue {
     return totalChildSizeAndEntirelyRemote < 0;
   }
 
+  /**
+   * Returns the value for the corresponding output of a shared action, which is equivalent to
+   * recreating all children and the archived representation (but not the resolved path) for the
+   * given parent.
+   */
+  TreeArtifactValue transformForSharedAction(SpecialArtifact newParent) {
+    ArchivedRepresentation archivedRepresentation = archivedRepresentation();
+    // The directory, digest, size and remoteness don't depend on the parent and can be reused as is
+    // as long as the children of the new parent can also be recreated on demand.
+    if (parent != null
+        && createChild(newParent, directory().getFirstFilePath()).isChildOfDeclaredDirectory()) {
+      return new TreeArtifactValue(
+          digest,
+          children,
+          newParent,
+          getTotalChildBytes(),
+          archivedRepresentation != null
+              ? ArchivedRepresentation.create(
+                  ArchivedTreeArtifact.createForTree(newParent),
+                  archivedRepresentation.archivedFileValue())
+              : null,
+          /* resolvedPath= */ null,
+          isEntirelyRemote());
+    }
+    Builder newTree = newBuilder(newParent);
+    forEachChild(
+        (parentRelativePath, metadata) ->
+            newTree.putChild(
+                TreeFileArtifact.createTreeOutput(newParent, parentRelativePath), metadata));
+    if (archivedRepresentation != null) {
+      newTree.setArchivedRepresentation(
+          ArchivedTreeArtifact.createForTree(newParent),
+          archivedRepresentation.archivedFileValue());
+    }
+    return newTree.build();
+  }
+
   @Override
   public int hashCode() {
-    return HashCodes.hashObjects(Arrays.hashCode(digest), archivedRepresentation, resolvedPath);
+    return HashCodes.hashObjects(Arrays.hashCode(digest), archivedRepresentation(), resolvedPath());
   }
 
   @Override
@@ -474,18 +658,19 @@ public class TreeArtifactValue implements HasDigest, SkyValue {
     }
 
     return Arrays.equals(digest, that.digest)
-        && childData.equals(that.childData)
-        && Objects.equals(archivedRepresentation, that.archivedRepresentation)
-        && Objects.equals(resolvedPath, that.resolvedPath);
+        && Objects.equals(parent, that.parent)
+        && children.equals(that.children)
+        && Objects.equals(
+            archivedRepresentationOrResolvedPath, that.archivedRepresentationOrResolvedPath);
   }
 
   @Override
   public String toString() {
     return MoreObjects.toStringHelper(this)
         .add("digest", digest)
-        .add("childData", childData)
-        .add("archivedRepresentation", archivedRepresentation)
-        .add("resolvedPath", resolvedPath)
+        .add("childData", getChildValues())
+        .add("archivedRepresentation", archivedRepresentation())
+        .add("resolvedPath", resolvedPath())
         .toString();
   }
 
@@ -500,6 +685,7 @@ public class TreeArtifactValue implements HasDigest, SkyValue {
     return new TreeArtifactValue(
         null,
         EMPTY_MAP,
+        /* parent= */ null,
         0L,
         /* archivedRepresentation= */ null,
         /* resolvedPath= */ null,
@@ -797,10 +983,20 @@ public class TreeArtifactValue implements HasDigest, SkyValue {
       boolean entirelyRemote =
           archivedRepresentation == null || archivedRepresentation.archivedFileValue().isRemote();
 
+      int childCount = finalChildData.size();
+      String[] parentRelativePaths = new String[childCount];
+      FileArtifactValue[] childValues = new FileArtifactValue[childCount];
+      ActionLookupData parentKey =
+          parent.hasGeneratingActionKey() ? parent.getGeneratingActionKey() : null;
+      boolean canRecreateChildren = childCount > 0 && parentKey != null;
       long totalChildSize = 0;
+      int i = 0;
       for (Map.Entry<TreeFileArtifact, FileArtifactValue> childData : finalChildData.entrySet()) {
-        // Digest will be deterministic because children are sorted.
-        fingerprint.addPath(childData.getKey().getParentRelativePath());
+        TreeFileArtifact child = childData.getKey();
+        String parentRelativePath = child.getTreeRelativePathString();
+        // Digest will be deterministic because children are sorted. This is equivalent to (but
+        // cheaper than) adding child.getParentRelativePath().
+        fingerprint.addString(parentRelativePath);
         FileArtifactValue metadata = childData.getValue();
         metadata.addTo(fingerprint);
 
@@ -810,6 +1006,11 @@ public class TreeArtifactValue implements HasDigest, SkyValue {
         if (metadata.getType() == FileStateType.REGULAR_FILE) {
           totalChildSize += metadata.getSize();
         }
+
+        canRecreateChildren &= canRecreate(child, parentRelativePath, parentKey);
+        parentRelativePaths[i] = parentRelativePath;
+        childValues[i] = metadata;
+        i++;
       }
 
       if (archivedRepresentation != null) {
@@ -818,11 +1019,31 @@ public class TreeArtifactValue implements HasDigest, SkyValue {
 
       return new TreeArtifactValue(
           fingerprint.digestAndReset(),
-          finalChildData,
+          canRecreateChildren
+              ? TreeArtifactDirectory.create(parentRelativePaths, childValues)
+              : finalChildData,
+          canRecreateChildren ? parent : null,
           totalChildSize,
           archivedRepresentation,
           resolvedPath,
           entirelyRemote);
+    }
+
+    /**
+     * Returns whether the given child is equal to the result of {@link
+     * TreeFileArtifact#createTreeOutput} for the parent of this builder and the child's
+     * parent-relative path, so that it doesn't have to be retained.
+     *
+     * <p>This is the case for children of declared directories, but not for the outputs of action
+     * template expansions, which are owned by the expanded actions.
+     */
+    private boolean canRecreate(
+        TreeFileArtifact child, String parentRelativePath, ActionLookupData parentKey) {
+      return child.getParent().equals(parent)
+          && child.isChildOfDeclaredDirectory()
+          && child.hasGeneratingActionKey()
+          && child.getGeneratingActionKey().equals(parentKey)
+          && TreeArtifactDirectory.canRepresent(parentRelativePath);
     }
   }
 }
