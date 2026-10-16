@@ -203,7 +203,16 @@ public class TreeArtifactValue implements HasDigest, SkyValue {
 
   private final byte[] digest;
   private final ImmutableSortedMap<TreeFileArtifact, FileArtifactValue> childData;
-  private final long totalChildSize;
+
+  /**
+   * The total size of all regular file children in the lower 63 bits and whether the children are
+   * {@linkplain #isEntirelyRemote entirely remote} in the sign bit.
+   *
+   * <p>Sizes are never negative, so the sign bit is free. Packing the flag into it instead of using
+   * a separate boolean field reduces the size of this object from 40 to 32 bytes with compact
+   * object headers.
+   */
+  private final long totalChildSizeAndEntirelyRemote;
 
   /**
    * Optional archived representation of the entire tree artifact which can be sent instead of all
@@ -217,8 +226,6 @@ public class TreeArtifactValue implements HasDigest, SkyValue {
    * <p>See {@link FileArtifactValue#getResolvedPath} for semantics.
    */
   @Nullable private final PathFragment resolvedPath;
-
-  private final boolean entirelyRemote;
 
   /** A FileArtifactValue used to stand in for a TreeArtifactValue. */
   private static final class TreeArtifactCompositeFileArtifactValue extends FileArtifactValue {
@@ -309,20 +316,21 @@ public class TreeArtifactValue implements HasDigest, SkyValue {
   TreeArtifactValue(
       byte[] digest,
       ImmutableSortedMap<TreeFileArtifact, FileArtifactValue> childData,
-      long totalChildSize,
+      long totalChildBytes,
       @Nullable ArchivedRepresentation archivedRepresentation,
       @Nullable PathFragment resolvedPath,
       boolean entirelyRemote) {
+    checkArgument(totalChildBytes >= 0, "Negative total child size: %s", totalChildBytes);
     this.digest = digest;
     this.childData = childData;
-    this.totalChildSize = totalChildSize;
+    this.totalChildSizeAndEntirelyRemote =
+        entirelyRemote ? totalChildBytes | Long.MIN_VALUE : totalChildBytes;
     this.archivedRepresentation = archivedRepresentation;
     this.resolvedPath = resolvedPath;
-    this.entirelyRemote = entirelyRemote;
   }
 
   public FileArtifactValue getMetadata() {
-    return new TreeArtifactCompositeFileArtifactValue(digest, entirelyRemote, resolvedPath);
+    return new TreeArtifactCompositeFileArtifactValue(digest, isEntirelyRemote(), resolvedPath);
   }
 
   ImmutableSet<PathFragment> getChildPaths() {
@@ -341,7 +349,7 @@ public class TreeArtifactValue implements HasDigest, SkyValue {
   }
 
   public long getTotalChildBytes() {
-    return totalChildSize;
+    return totalChildSizeAndEntirelyRemote & Long.MAX_VALUE;
   }
 
   /** Returns the archived representation of the tree artifact, if present. */
@@ -387,7 +395,7 @@ public class TreeArtifactValue implements HasDigest, SkyValue {
 
   /** Returns true if the {@link TreeFileArtifact}s are only stored remotely. */
   public boolean isEntirelyRemote() {
-    return entirelyRemote;
+    return totalChildSizeAndEntirelyRemote < 0;
   }
 
   @Override

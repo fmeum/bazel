@@ -60,6 +60,12 @@ public class TreeArtifactValueCodecTest extends BuildViewTestBase {
             .putChild(child2, metadata2)
             .build());
 
+    subjects.add(
+        TreeArtifactValue.newBuilder(parent)
+            .putChild(child1, FileArtifactValue.createForNormalFile(new byte[] {1}, null, 1))
+            .putChild(child2, metadata2)
+            .build());
+
     ArchivedTreeArtifact archivedTreeArtifact = ArchivedTreeArtifact.createForTree(parent);
     FileArtifactValue archivedArtifactMetadata = metadataWithId(3);
     subjects.add(
@@ -85,10 +91,12 @@ public class TreeArtifactValueCodecTest extends BuildViewTestBase {
         .addDependency(
             ArtifactSerializationContext.class,
             skyframeExecutor.getSkyframeBuildView().getArtifactFactory()::getSourceArtifact)
-        .setVerificationFunction(
+        .<TreeArtifactValue>setVerificationFunction(
             (in, out) -> {
               assertThat(in).isEqualTo(out);
               assertThat(out).isInstanceOf(DeserializedSkyValue.class);
+              assertThat(out.getTotalChildBytes()).isEqualTo(in.getTotalChildBytes());
+              assertThat(out.isEntirelyRemote()).isEqualTo(in.isEntirelyRemote());
             })
         .runTests();
   }

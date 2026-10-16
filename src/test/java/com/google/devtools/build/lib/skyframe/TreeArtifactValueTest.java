@@ -123,6 +123,34 @@ public final class TreeArtifactValueTest {
   }
 
   @Test
+  public void totalChildBytesAndEntirelyRemote(@TestParameter boolean remote) {
+    SpecialArtifact parent = createTreeArtifact("bin/tree");
+    TreeFileArtifact child1 = TreeFileArtifact.createTreeOutput(parent, "child1");
+    TreeFileArtifact child2 = TreeFileArtifact.createTreeOutput(parent, "child2");
+    // Exercise the high bits of the size to verify that they are kept apart from the remote bit.
+    long size1 = (1L << 62) + 1;
+    long size2 = 2;
+    FileArtifactValue metadata1 =
+        remote
+            ? FileArtifactValue.createForRemoteFile(new byte[] {1}, size1, 0)
+            : FileArtifactValue.createForNormalFile(new byte[] {1}, null, size1);
+    FileArtifactValue metadata2 =
+        remote
+            ? FileArtifactValue.createForRemoteFile(new byte[] {2}, size2, 0)
+            : FileArtifactValue.createForNormalFile(new byte[] {2}, null, size2);
+
+    TreeArtifactValue tree =
+        TreeArtifactValue.newBuilder(parent)
+            .putChild(child1, metadata1)
+            .putChild(child2, metadata2)
+            .build();
+
+    assertThat(tree.getTotalChildBytes()).isEqualTo(size1 + size2);
+    assertThat(tree.isEntirelyRemote()).isEqualTo(remote);
+    assertThat(tree.getMetadata().isRemote()).isEqualTo(remote);
+  }
+
+  @Test
   public void createsCorrectValueWithResolvedPath() {
     PathFragment targetPath = PathFragment.create("/some/target/path");
     SpecialArtifact parent = createTreeArtifact("bin/tree");
