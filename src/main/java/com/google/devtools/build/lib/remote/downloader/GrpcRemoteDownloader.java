@@ -28,6 +28,7 @@ import com.google.auth.Credentials;
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Ascii;
 import com.google.common.base.Strings;
+import com.google.devtools.build.lib.actions.FileArtifactValue;
 import com.google.devtools.build.lib.bazel.repository.downloader.Checksum;
 import com.google.devtools.build.lib.bazel.repository.downloader.Downloader;
 import com.google.devtools.build.lib.bazel.repository.downloader.HashOutputStream;
@@ -42,6 +43,7 @@ import com.google.devtools.build.lib.remote.common.OutputDigestMismatchException
 import com.google.devtools.build.lib.remote.common.RemoteActionExecutionContext;
 import com.google.devtools.build.lib.remote.common.RemoteCacheClient;
 import com.google.devtools.build.lib.remote.options.RemoteOptions;
+import com.google.devtools.build.lib.remote.util.DigestUtil;
 import com.google.devtools.build.lib.remote.util.TracingMetadataUtils;
 import com.google.devtools.build.lib.remote.util.Utils;
 import com.google.devtools.build.lib.vfs.Path;
@@ -237,6 +239,70 @@ public class GrpcRemoteDownloader implements AutoCloseable, Downloader {
           type,
           context);
     }
+  }
+
+  @Override
+  public Optional<FileArtifactValue> fetchRemotely(
+      List<URI> urls,
+      Map<String, List<String>> headers,
+      Credentials credentials,
+      Checksum checksum,
+      String canonicalId,
+      ExtendedEventHandler eventHandler,
+      String context)
+      throws IOException, InterruptedException {
+    // file: URLs can't use the gRPC downloader.
+    if (urls.stream().anyMatch(url -> Objects.equals(url.getScheme(), "file"))) {
+      return Optional.empty();
+    }
+    RequestMetadata metadata =
+        TracingMetadataUtils.buildMetadata(
+            buildRequestId,
+            commandId,
+            "remote_downloader",
+            /* mnemonic= */ null,
+            /* label= */ context,
+            /* configurationId= */ null);
+    RemoteActionExecutionContext remoteActionExecutionContext =
+        RemoteActionExecutionContext.create(metadata);
+
+    final FetchBlobRequest request =
+        newFetchBlobRequest(
+            options.getRemoteInstanceName(),
+            options.getRemoteDownloaderPropagateCredentials(),
+            urls,
+            Optional.of(checksum),
+            canonicalId,
+            digestFunction,
+            headers,
+            credentials);
+    FetchBlobResponse response;
+    try {
+      response =
+          retrier.execute(
+              () ->
+                  channel.withChannelBlocking(
+                      channel ->
+                          fetchBlockingStub(remoteActionExecutionContext, channel)
+                              .fetchBlob(request)));
+    } catch (StatusRuntimeException e) {
+      throw new IOException(e);
+    }
+    if (response.getStatus().getCode() != Code.OK_VALUE) {
+      throw new IOException(StatusProto.toStatusRuntimeException(response.getStatus()));
+    }
+    eventHandler.post(
+        new FetchEvent(
+            response.getUri().isEmpty() ? urls.getFirst().toString() : response.getUri(),
+            FetchId.Downloader.GRPC,
+            /* success= */ true));
+    // The server has verified the blob against the checksum qualifier.
+    Digest blobDigest = response.getBlobDigest();
+    return Optional.of(
+        FileArtifactValue.createForRemoteFile(
+            DigestUtil.toBinaryDigest(blobDigest),
+            blobDigest.getSizeBytes(),
+            /* locationIndex= */ 1));
   }
 
   @VisibleForTesting

@@ -93,6 +93,7 @@ import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.function.Predicate;
 import javax.annotation.Nullable;
 import net.starlark.java.annot.Param;
 import net.starlark.java.annot.ParamType;
@@ -164,6 +165,8 @@ public abstract class StarlarkBaseExternalContext implements AutoCloseable, Star
   private final List<AsyncTask> asyncTasks;
   private final boolean allowWatchingPathsOutsideWorkspace;
   private final ExecutorService executorService;
+  // The empty placeholders of files that have been downloaded lazily, keyed by their path.
+  private final LinkedHashMap<Path, LazyDownload> lazyDownloads = new LinkedHashMap<>();
 
   private boolean wasSuccessful = false;
 
@@ -662,6 +665,177 @@ public abstract class StarlarkBaseExternalContext implements AutoCloseable, Star
     return calculateDownloadResult(pendingDownload.checksum, downloadedPath);
   }
 
+  /**
+   * A file that has been downloaded lazily: its contents are available in the remote cache, but
+   * only an empty placeholder exists locally.
+   */
+  public record LazyDownload(DownloadManager.RemoteDownload remoteDownload, boolean executable) {
+    /** Replaces the given placeholder with the actual contents of the file. */
+    public void materialize(Path placeholder) throws IOException, InterruptedException {
+      remoteDownload.materialize(placeholder);
+      if (executable) {
+        placeholder.setExecutable(true);
+      }
+    }
+  }
+
+  /**
+   * Whether files with a known checksum may be downloaded lazily, that is, only be made available
+   * in the remote cache, with their contents downloaded when needed.
+   */
+  @ForOverride
+  protected boolean allowLazyDownloads() {
+    return false;
+  }
+
+  /**
+   * Returns the files that have been downloaded lazily and still only exist as placeholders, keyed
+   * by their path relative to the working directory.
+   */
+  public ImmutableMap<PathFragment, LazyDownload> getLazyDownloads() {
+    var result = ImmutableMap.<PathFragment, LazyDownload>builder();
+    for (var entry : lazyDownloads.entrySet()) {
+      Path placeholder = entry.getKey();
+      // A placeholder that has been replaced or deleted in a way not tracked by this context
+      // doesn't stand for a lazily downloaded file anymore.
+      try {
+        if (!placeholder.isFile(Symlinks.NOFOLLOW) || placeholder.getFileSize() != 0) {
+          continue;
+        }
+      } catch (IOException e) {
+        continue;
+      }
+      result.put(placeholder.relativeTo(workingDirectory), entry.getValue());
+    }
+    return result.buildOrThrow();
+  }
+
+  /**
+   * Replaces the placeholders of lazily downloaded files at or below the given path with their
+   * actual contents. Symlinks are followed for the given path itself, but not below it.
+   */
+  protected void materializeLazyDownloads(Path path)
+      throws RepositoryFunctionException, InterruptedException {
+    if (lazyDownloads.isEmpty()) {
+      return;
+    }
+    Path resolvedPath;
+    try {
+      resolvedPath = path.resolveSymbolicLinks();
+    } catch (IOException e) {
+      // The path doesn't exist or is a dangling symlink.
+      resolvedPath = path;
+    }
+    Path finalResolvedPath = resolvedPath;
+    materializeLazyDownloadsIf(
+        placeholder -> placeholder.startsWith(path) || placeholder.startsWith(finalResolvedPath));
+  }
+
+  /** Replaces the placeholders of all lazily downloaded files with their actual contents. */
+  protected void materializeAllLazyDownloads()
+      throws RepositoryFunctionException, InterruptedException {
+    materializeLazyDownloadsIf(placeholder -> true);
+  }
+
+  private void materializeLazyDownloadsIf(Predicate<Path> predicate)
+      throws RepositoryFunctionException, InterruptedException {
+    var it = lazyDownloads.entrySet().iterator();
+    while (it.hasNext()) {
+      var entry = it.next();
+      if (!predicate.test(entry.getKey())) {
+        continue;
+      }
+      try {
+        entry.getValue().materialize(entry.getKey());
+      } catch (IOException e) {
+        throw new RepositoryFunctionException(e, Transience.TRANSIENT);
+      }
+      it.remove();
+    }
+  }
+
+  /** Forgets about the lazily downloaded files at or below the given path, which is replaced. */
+  protected void forgetLazyDownloads(Path path) {
+    lazyDownloads.keySet().removeIf(placeholder -> placeholder.startsWith(path));
+  }
+
+  /** Updates the paths of the lazily downloaded files at or below the given path after a move. */
+  protected void moveLazyDownloads(Path src, Path dst) {
+    var moved = new LinkedHashMap<Path, LazyDownload>();
+    var it = lazyDownloads.entrySet().iterator();
+    while (it.hasNext()) {
+      var entry = it.next();
+      if (entry.getKey().startsWith(src)) {
+        moved.put(dst.getRelative(entry.getKey().relativeTo(src)), entry.getValue());
+        it.remove();
+      }
+    }
+    lazyDownloads.putAll(moved);
+  }
+
+  /**
+   * Makes a file available in the remote cache and creates an empty placeholder for it at the given
+   * path, which is replaced with the actual contents of the file when they are needed.
+   *
+   * @return the result of the download, or null if the file has to be downloaded eagerly
+   */
+  @Nullable
+  private StructImpl tryDownloadLazily(
+      ImmutableList<URI> urls,
+      ImmutableMap<String, List<String>> headers,
+      ImmutableMap<URI, Map<String, List<String>>> authHeaders,
+      Checksum checksum,
+      String canonicalId,
+      Path output,
+      boolean executable)
+      throws RepositoryFunctionException, InterruptedException {
+    // Downloads to symlinks write through them and other kinds of files can't be replaced, which is
+    // left to the regular download logic to handle.
+    try {
+      if (output.exists(Symlinks.NOFOLLOW) && !output.isFile(Symlinks.NOFOLLOW)) {
+        return null;
+      }
+    } catch (IOException e) {
+      return null;
+    }
+    Optional<DownloadManager.RemoteDownload> remoteDownload =
+        downloadManager.startRemoteDownload(
+            urls,
+            headers,
+            authHeaders,
+            checksum,
+            canonicalId,
+            nonstrictRepoEnv,
+            identifyingStringForLogging);
+    if (remoteDownload.isEmpty()) {
+      return null;
+    }
+    long size = remoteDownload.get().getMetadata().getSize();
+    try {
+      output.delete();
+      FileSystemUtils.createEmptyFile(output);
+      if (executable) {
+        output.setExecutable(true);
+      }
+    } catch (IOException e) {
+      throw new RepositoryFunctionException(e, Transience.TRANSIENT);
+    }
+    // The placeholder of an empty file already has the actual contents.
+    if (size > 0) {
+      lazyDownloads.put(output, new LazyDownload(remoteDownload.get(), executable));
+    }
+
+    ImmutableMap.Builder<String, Object> out = ImmutableMap.builder();
+    out.put("success", true);
+    out.put("integrity", checksum.toSubresourceIntegrity());
+    // For compatibility with older Bazel versions that don't support non-SHA256 checksums.
+    if (checksum.getKeyType() == KeyType.SHA256) {
+      out.put("sha256", checksum.toString());
+    }
+    out.put("size_bytes", StarlarkInt.of(size));
+    return StarlarkInfo.create(StructProvider.STRUCT, out.buildOrThrow());
+  }
+
   @StarlarkMethod(
       name = "download",
       doc =
@@ -838,6 +1012,22 @@ When <code>sha256</code> or <code>integrity</code> is user specified, setting an
               thread.getCallerLocation());
     }
     if (download == null) {
+      // A previous lazy download to the same path is replaced in any case.
+      forgetLazyDownloads(outputPath.getPath());
+      if (block && checksum.isPresent() && checksumValidation == null && allowLazyDownloads()) {
+        StructImpl lazyDownloadResult =
+            tryDownloadLazily(
+                urls,
+                headers,
+                authHeaders,
+                checksum.get(),
+                canonicalId,
+                outputPath.getPath(),
+                executable);
+        if (lazyDownloadResult != null) {
+          return lazyDownloadResult;
+        }
+      }
       Future<Path> downloadFuture =
           downloadManager.startDownload(
               executorService,
@@ -1098,6 +1288,8 @@ Strip the given number of leading components from file paths on extraction. Only
     StarlarkPath outputPath = getPath(output);
     checkInOutputDirectory("write", outputPath);
     createDirectory(outputPath.getPath());
+    // Extracted files may replace the placeholders of lazily downloaded files.
+    materializeLazyDownloads(outputPath.getPath());
 
     Path downloadedPath;
     Path downloadDirectory;
@@ -1346,6 +1538,9 @@ Strip the given number of leading components from file paths on extraction. Only
 
     StarlarkPath outputPath = getPath(output);
     checkInOutputDirectory("write", outputPath);
+    // Extracted files may replace the placeholders of lazily downloaded files.
+    materializeLazyDownloads(archivePath.getPath());
+    materializeLazyDownloads(outputPath.getPath());
 
     Map<String, String> renameFilesMap =
         Dict.cast(renameFiles, String.class, String.class, "rename_files");
@@ -1492,6 +1687,7 @@ Strip the given number of leading components from file paths on extraction. Only
       checkInOutputDirectory("write", p);
       makeDirectories(p.getPath());
       p.getPath().delete();
+      forgetLazyDownloads(p.getPath());
       try (OutputStream stream = p.getPath().getOutputStream()) {
         stream.write(StringUnsafe.getInternalStringBytes(content));
       }
@@ -1619,6 +1815,7 @@ Strip the given number of leading components from file paths on extraction. Only
     if (p.isDir()) {
       throw Starlark.errorf("attempting to read() a directory: %s", p);
     }
+    materializeLazyDownloads(p.getPath());
     try {
       return FileSystemUtils.readContent(p.getPath(), ISO_8859_1);
     } catch (IOException e) {
@@ -2032,6 +2229,9 @@ Strip the given number of leading components from file paths on extraction. Only
 
     // Execute on the local/host machine
 
+    // The command may read any file that has been downloaded lazily.
+    materializeAllLazyDownloads();
+
     List<String> args = new ArrayList<>(arguments.size());
     for (Object arg : arguments) {
       if (arg instanceof Label label) {
@@ -2168,6 +2368,7 @@ Strip the given number of leading components from file paths on extraction. Only
             thread.getCallerLocation());
     env.getListener().post(w);
     maybeWatch(p, ShouldWatch.fromString(watch));
+    materializeLazyDownloads(p.getPath());
     try {
       byte[] moduleContent = FileSystemUtils.readContent(p.getPath());
       return new StarlarkWasmModule(p, path, moduleContent, compile, allocateFn);
@@ -2303,6 +2504,7 @@ func(
     try {
       if (wasmModule == null) {
         maybeWatch(path, ShouldWatch.fromString(watch));
+        materializeLazyDownloads(path.getPath());
         byte[] moduleContent = FileSystemUtils.readContent(path.getPath());
         boolean compile =
             starlarkSemantics.getBool(

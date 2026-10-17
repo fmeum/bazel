@@ -15,6 +15,7 @@ java_library(
     name = "downloader",
     srcs = glob(["*.java"]),
     deps = [
+        "//src/main/java/com/google/devtools/build/lib/actions:file_metadata",
         "//src/main/java/com/google/devtools/build/lib/bazel/repository/downloader",
         "//src/main/java/com/google/devtools/build/lib/buildeventstream",
         "//src/main/java/com/google/devtools/build/lib/buildeventstream/proto:build_event_stream_java_proto",
@@ -24,6 +25,7 @@ java_library(
         "//src/main/java/com/google/devtools/build/lib/remote:Retrier",
         "//src/main/java/com/google/devtools/build/lib/remote/common",
         "//src/main/java/com/google/devtools/build/lib/remote/options",
+        "//src/main/java/com/google/devtools/build/lib/remote/util:digest_util",
         "//src/main/java/com/google/devtools/build/lib/remote/util:futures",
         "//src/main/java/com/google/devtools/build/lib/remote/util:tracing_metadata_utils",
         "//src/main/java/com/google/devtools/build/lib/remote/util:utils",

@@ -77,6 +77,7 @@ public class StarlarkRepositoryContext extends StarlarkBaseExternalContext {
   private final PathPackageLocator packageLocator;
   private final IgnoredSubdirectories ignoredSubdirectories;
   private final SyscallCache syscallCache;
+  private final boolean allowLazyDownloads;
 
   /**
    * Create a new context (repository_ctx) object for a Starlark repository rule ({@code rule}
@@ -96,7 +97,8 @@ public class StarlarkRepositoryContext extends StarlarkBaseExternalContext {
       StarlarkSemantics starlarkSemantics,
       @Nullable RepositoryRemoteExecutor remoteExecutor,
       SyscallCache syscallCache,
-      BlazeDirectories directories)
+      BlazeDirectories directories,
+      boolean allowLazyDownloads)
       throws EvalException {
     super(
         outputDirectory,
@@ -116,11 +118,17 @@ public class StarlarkRepositoryContext extends StarlarkBaseExternalContext {
     this.packageLocator = packageLocator;
     this.ignoredSubdirectories = ignoredSubdirectories;
     this.syscallCache = syscallCache;
+    this.allowLazyDownloads = allowLazyDownloads;
   }
 
   @Override
   protected boolean shouldDeleteWorkingDirectoryOnClose(boolean successful) {
     return !successful;
+  }
+
+  @Override
+  protected boolean allowLazyDownloads() {
+    return allowLazyDownloads;
   }
 
   @StarlarkMethod(
@@ -335,9 +343,11 @@ public class StarlarkRepositoryContext extends StarlarkBaseExternalContext {
       throw Starlark.errorf("attempting to use a directory as template: %s", t);
     }
     maybeWatch(t, ShouldWatch.fromString(watchTemplate));
+    materializeLazyDownloads(t.getPath());
     try {
       checkInOutputDirectory("write", p);
       makeDirectories(p.getPath());
+      forgetLazyDownloads(p.getPath());
       // Read and write files as raw bytes by using the Latin-1 encoding, which matches the encoding
       // used by Bazel for strings.
       String tpl = FileSystemUtils.readContent(t.getPath(), ISO_8859_1);
@@ -400,7 +410,9 @@ public class StarlarkRepositoryContext extends StarlarkBaseExternalContext {
     try {
       Path path = starlarkPath.getPath();
       path.deleteTreesBelow();
-      return path.delete();
+      boolean deleted = path.delete();
+      forgetLazyDownloads(path);
+      return deleted;
     } catch (IOException e) {
       throw new RepositoryFunctionException(e, Transience.TRANSIENT);
     }
@@ -462,6 +474,7 @@ public class StarlarkRepositoryContext extends StarlarkBaseExternalContext {
       }
       makeDirectories(dstPath.getPath());
       srcPath.getPath().renameTo(dstPath.getPath());
+      moveLazyDownloads(srcPath.getPath(), dstPath.getPath());
     } catch (IOException e) {
       throw new RepositoryFunctionException(
           new IOException(
@@ -557,6 +570,8 @@ public class StarlarkRepositoryContext extends StarlarkBaseExternalContext {
       throw Starlark.errorf("attempting to use a directory as patch file: %s", starlarkPath);
     }
     maybeWatch(starlarkPath, ShouldWatch.fromString(watchPatch));
+    // The patch may modify any file, possibly through symlinks.
+    materializeAllLazyDownloads();
     try {
       PatchUtil.apply(starlarkPath.getPath(), strip, directoryPath.getPath());
     } catch (PatchFailedException e) {

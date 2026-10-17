@@ -27,6 +27,7 @@ import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Iterables;
+import com.google.devtools.build.lib.actions.FileArtifactValue;
 import com.google.devtools.build.lib.authandtls.StaticCredentials;
 import com.google.devtools.build.lib.bazel.repository.cache.DownloadCache;
 import com.google.devtools.build.lib.bazel.repository.cache.DownloadCache.KeyType;
@@ -198,21 +199,9 @@ public class DownloadManager {
       throw new InterruptedException();
     }
 
-    // TODO(andreisolo): This code path is inconsistent as the authHeaders are fetched from a
-    //  .netrc only if it comes from a http_{archive,file,jar} - and it is handled directly
-    //  by Starlark code -, or if a UrlRewriter is present. However, if it comes directly from a
-    //  ctx.download{,_and_extract}, this not the case. Should be refactored to handle all .netrc
-    //  parsing in one place, in Java code (similarly to #downloadAndReadOneUrl).
-    ImmutableList<URI> rewrittenUrls = ImmutableList.copyOf(originalUrls);
-    Map<URI, Map<String, List<String>>> rewrittenAuthHeaders = authHeaders;
-
-    if (rewriter != null) {
-      ImmutableList<UrlRewriter.RewrittenURL> rewrittenUrlMappings = rewriter.amend(originalUrls);
-      rewrittenUrls =
-          rewrittenUrlMappings.stream().map(RewrittenURL::url).collect(toImmutableList());
-      rewrittenAuthHeaders =
-          rewriter.updateAuthHeaders(rewrittenUrlMappings, authHeaders, netrcCreds);
-    }
+    RewrittenUrls rewritten = rewriteUrls(originalUrls, authHeaders);
+    ImmutableList<URI> rewrittenUrls = rewritten.urls();
+    Map<URI, Map<String, List<String>>> rewrittenAuthHeaders = rewritten.authHeaders();
 
     URI mainUrl; // The "main" URL for this request, used for reporting.
     // The URL used to derive the download's file name. When the rewriter blocks all URLs, this
@@ -360,6 +349,140 @@ public class DownloadManager {
     }
 
     return destination;
+  }
+
+  private record RewrittenUrls(
+      ImmutableList<URI> urls, Map<URI, Map<String, List<String>>> authHeaders) {}
+
+  private RewrittenUrls rewriteUrls(
+      List<URI> originalUrls, Map<URI, Map<String, List<String>>> authHeaders) {
+    // TODO(andreisolo): This code path is inconsistent as the authHeaders are fetched from a
+    //  .netrc only if it comes from a http_{archive,file,jar} - and it is handled directly
+    //  by Starlark code -, or if a UrlRewriter is present. However, if it comes directly from a
+    //  ctx.download{,_and_extract}, this not the case. Should be refactored to handle all .netrc
+    //  parsing in one place, in Java code (similarly to #downloadAndReadOneUrl).
+    if (rewriter == null) {
+      return new RewrittenUrls(ImmutableList.copyOf(originalUrls), authHeaders);
+    }
+    ImmutableList<UrlRewriter.RewrittenURL> rewrittenUrlMappings = rewriter.amend(originalUrls);
+    return new RewrittenUrls(
+        rewrittenUrlMappings.stream().map(RewrittenURL::url).collect(toImmutableList()),
+        rewriter.updateAuthHeaders(rewrittenUrlMappings, authHeaders, netrcCreds));
+  }
+
+  /**
+   * Makes a file with a known checksum available in the remote cache without downloading its
+   * contents, if the downloader supports this.
+   *
+   * <p>Failures are not reported, but result in an empty return value so that the caller can fall
+   * back to {@link #startDownload}, which reports errors as usual.
+   *
+   * @return a handle to the file in the remote cache, or empty if the file has to be downloaded
+   */
+  public Optional<RemoteDownload> startRemoteDownload(
+      List<URI> originalUrls,
+      Map<String, List<String>> headers,
+      Map<URI, Map<String, List<String>>> authHeaders,
+      Checksum checksum,
+      String canonicalId,
+      Map<String, String> clientEnv,
+      String context)
+      throws InterruptedException {
+    if (disableDownload) {
+      return Optional.empty();
+    }
+    RewrittenUrls rewritten = rewriteUrls(originalUrls, authHeaders);
+    if (rewritten.urls().isEmpty()) {
+      return Optional.empty();
+    }
+    Optional<FileArtifactValue> metadata;
+    try {
+      metadata =
+          downloader.fetchRemotely(
+              rewritten.urls(),
+              headers,
+              credentialFactory.create(rewritten.authHeaders()),
+              checksum,
+              canonicalId,
+              eventHandler,
+              context);
+    } catch (IOException e) {
+      eventHandler.handle(
+          Event.debug(
+              "Failed to fetch %s into the remote cache, downloading it instead: %s"
+                  .formatted(context, e.getMessage())));
+      return Optional.empty();
+    }
+    return metadata.map(
+        m ->
+            new RemoteDownload(
+                ImmutableList.copyOf(originalUrls),
+                headers,
+                authHeaders,
+                checksum,
+                canonicalId,
+                clientEnv,
+                context,
+                m));
+  }
+
+  /**
+   * A file that is available in the remote cache, but whose contents haven't been downloaded.
+   *
+   * <p>The remote cache has verified the contents against the checksum the file was requested with.
+   */
+  public final class RemoteDownload {
+    private final ImmutableList<URI> originalUrls;
+    private final Map<String, List<String>> headers;
+    private final Map<URI, Map<String, List<String>>> authHeaders;
+    private final Checksum checksum;
+    private final String canonicalId;
+    private final Map<String, String> clientEnv;
+    private final String context;
+    private final FileArtifactValue metadata;
+
+    private RemoteDownload(
+        ImmutableList<URI> originalUrls,
+        Map<String, List<String>> headers,
+        Map<URI, Map<String, List<String>>> authHeaders,
+        Checksum checksum,
+        String canonicalId,
+        Map<String, String> clientEnv,
+        String context,
+        FileArtifactValue metadata) {
+      this.originalUrls = originalUrls;
+      this.headers = headers;
+      this.authHeaders = authHeaders;
+      this.checksum = checksum;
+      this.canonicalId = canonicalId;
+      this.clientEnv = clientEnv;
+      this.context = context;
+      this.metadata = metadata;
+    }
+
+    /** Returns the metadata of the file in the remote cache. */
+    public FileArtifactValue getMetadata() {
+      return metadata;
+    }
+
+    /**
+     * Downloads the contents of the file to the given path, replacing the file at that path if it
+     * exists.
+     */
+    public void materialize(Path output) throws IOException, InterruptedException {
+      var unused =
+          downloadInExecutor(
+              originalUrls,
+              headers,
+              authHeaders,
+              Optional.of(checksum),
+              canonicalId,
+              /* type= */ Optional.empty(),
+              output,
+              clientEnv,
+              context,
+              /* mayHardlink= */ false);
+    }
   }
 
   private boolean shouldRetryDownload(IOException e, int attempt) {

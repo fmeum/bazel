@@ -205,6 +205,25 @@ public abstract class RemoteOptions extends CommonRemoteOptions {
   public abstract boolean getRemoteDownloaderPropagateCredentials();
 
   @Option(
+      name = "experimental_remote_repo_lazy_downloads",
+      defaultValue = "false",
+      documentationCategory = OptionDocumentationCategory.REMOTE,
+      metadataTags = OptionMetadataTag.EXPERIMENTAL,
+      effectTags = {OptionEffectTag.LOADING_AND_ANALYSIS},
+      help =
+          "If enabled together with --experimental_remote_repo_contents_cache and"
+              + " --remote_downloader, files that repository rules download with a known checksum"
+              + " are only fetched into the remote cache via the Remote Asset API and their"
+              + " contents are downloaded only when they are needed, either by Bazel itself,"
+              + " another repository rule or an action that runs locally. The other files created"
+              + " by such a repository rule are uploaded to the remote cache, but no action cache"
+              + " entries are written, so this also works with remote caches that only allow"
+              + " remote executors to write to the action cache.")
+  public abstract boolean getRemoteRepoLazyDownloads();
+
+  public abstract void setRemoteRepoLazyDownloads(boolean value);
+
+  @Option(
       name = "remote_header",
       converter = Converters.AssignmentConverter.class,
       defaultValue = "null",

@@ -21,7 +21,9 @@ import static com.google.common.util.concurrent.Futures.transformAsync;
 import static com.google.common.util.concurrent.Futures.whenAllSucceed;
 import static com.google.common.util.concurrent.MoreExecutors.directExecutor;
 import static com.google.devtools.build.lib.remote.util.BulkTransfers.waitForBulkTransfer;
+import static com.google.devtools.build.lib.remote.util.Futures.getFromFuture;
 import static com.google.devtools.build.lib.unsafe.StringUnsafe.getInternalStringBytes;
+import static com.google.devtools.build.lib.util.StringEncoding.internalToUnicode;
 import static java.nio.charset.StandardCharsets.ISO_8859_1;
 import static java.util.stream.Collectors.joining;
 
@@ -40,9 +42,11 @@ import com.google.common.base.Throwables;
 import com.google.common.collect.Collections2;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
+import com.google.common.collect.Iterables;
 import com.google.common.util.concurrent.Futures;
 import com.google.common.util.concurrent.ListenableFuture;
 import com.google.devtools.build.lib.actions.ExecException;
+import com.google.devtools.build.lib.actions.FileArtifactValue;
 import com.google.devtools.build.lib.analysis.BlazeDirectories;
 import com.google.devtools.build.lib.bazel.repository.DigestWriter;
 import com.google.devtools.build.lib.cmdline.RepositoryName;
@@ -58,9 +62,11 @@ import com.google.devtools.build.lib.rules.repository.RepoRecordedInput;
 import com.google.devtools.build.lib.runtime.RemoteRepoContentsCache;
 import com.google.devtools.build.lib.unsafe.StringUnsafe;
 import com.google.devtools.build.lib.util.Fingerprint;
+import com.google.devtools.build.lib.vfs.Dirent;
 import com.google.devtools.build.lib.vfs.FileSystemUtils;
 import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.build.lib.vfs.PathFragment;
+import com.google.devtools.build.lib.vfs.Symlinks;
 import com.google.devtools.build.skyframe.SkyFunction;
 import com.google.protobuf.ByteString;
 import com.google.protobuf.ExtensionRegistryLite;
@@ -68,7 +74,12 @@ import java.io.IOException;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Collections;
+import java.util.Comparator;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import javax.annotation.Nullable;
 
@@ -127,12 +138,20 @@ public final class RemoteRepoContentsCacheImpl implements RemoteRepoContentsCach
   private static final ByteString COMMAND_BYTES = COMMAND.toByteString();
   private static final Directory INPUT_ROOT = Directory.getDefaultInstance();
 
+  // Limits the total size of the local files that are uploaded when turning a repo with lazily
+  // downloaded files into one backed by the remote cache. These are usually small generated files
+  // such as BUILD files, but a repo rule could also download other files eagerly or extract an
+  // archive. Uploading them isn't worth it in that case, especially since they would have to be
+  // downloaded again when needed.
+  private static final long MAX_LOCAL_FILES_BYTES_FOR_REMOTE_REPO = 1024 * 1024;
+
   private final BlazeDirectories directories;
   private final CombinedCache cache;
   private final String buildRequestId;
   private final String commandId;
   private final boolean acceptCached;
   private final boolean uploadLocalResults;
+  private final boolean lazyDownloads;
   private final boolean verboseFailures;
   private final DigestUtil digestUtil;
   private final Action baseAction;
@@ -145,6 +164,7 @@ public final class RemoteRepoContentsCacheImpl implements RemoteRepoContentsCach
       String commandId,
       boolean acceptCached,
       boolean uploadLocalResults,
+      boolean lazyDownloads,
       boolean verboseFailures) {
     this.directories = directories;
     this.cache = cache;
@@ -152,6 +172,7 @@ public final class RemoteRepoContentsCacheImpl implements RemoteRepoContentsCach
     this.commandId = commandId;
     this.acceptCached = acceptCached;
     this.uploadLocalResults = uploadLocalResults;
+    this.lazyDownloads = lazyDownloads;
     this.verboseFailures = verboseFailures;
     this.digestUtil = cache.digestUtil;
     this.baseAction =
@@ -299,6 +320,177 @@ public final class RemoteRepoContentsCacheImpl implements RemoteRepoContentsCach
 
     return remoteFs.injectRemoteRepo(
         repoName, repoDirectoryContentFuture.resultNow(), markerFileContent);
+  }
+
+  @Override
+  public boolean allowsLazyDownloads(Path repoDir) {
+    return lazyDownloads
+        && cache.hasRemoteCache()
+        && repoDir.getFileSystem() instanceof RemoteExternalOverlayFileSystem;
+  }
+
+  @Override
+  public boolean injectRepoWithRemoteFiles(
+      RepositoryName repoName,
+      Path repoDir,
+      String markerFileContent,
+      Map<PathFragment, FileArtifactValue> remoteFiles,
+      ExtendedEventHandler reporter)
+      throws IOException, InterruptedException {
+    if (!(repoDir.getFileSystem() instanceof RemoteExternalOverlayFileSystem remoteFs)) {
+      return false;
+    }
+    var treeBuilder = new RepoTreeBuilder(repoDir, remoteFiles);
+    Tree tree;
+    try {
+      tree = treeBuilder.build();
+    } catch (IOException e) {
+      reporter.handle(
+          Event.warn(
+              "Failed to read the contents of repo %s, downloading its files instead: %s"
+                  .formatted(repoName, maybeGetStackTrace(e))));
+      return false;
+    }
+    if (tree == null) {
+      reporter.handle(
+          Event.debug(
+              "The contents of repo %s can't be backed by the remote cache, downloading its files"
+                  .formatted(repoName)));
+      return false;
+    }
+
+    // Just like the inputs of remotely executed actions, the local files have to be uploaded for
+    // the repo to be backed by the remote cache. This is thus independent of
+    // --remote_upload_local_results, which governs the upload of action results.
+    var context =
+        RemoteActionExecutionContext.create(
+                TracingMetadataUtils.buildMetadata(buildRequestId, commandId, repoName.getName()))
+            .withReadCachePolicy(CachePolicy.REMOTE_CACHE_ONLY)
+            .withWriteCachePolicy(CachePolicy.REMOTE_CACHE_ONLY);
+    var remoteDigests =
+        remoteFiles.values().stream()
+            .map(metadata -> DigestUtil.buildDigest(metadata.getDigest(), metadata.getSize()))
+            .collect(toImmutableSet());
+    try {
+      var missingDigests =
+          getFromFuture(
+              cache.findMissingDigests(
+                  context, Iterables.concat(remoteDigests, treeBuilder.localFiles.keySet())));
+      if (!Collections.disjoint(missingDigests, remoteDigests)) {
+        reporter.handle(
+            Event.debug(
+                "Lazily downloaded files of repo %s are no longer available in the remote cache"
+                    .formatted(repoName)));
+        return false;
+      }
+      waitForBulkTransfer(
+          missingDigests.stream()
+              .map(digest -> cache.uploadFile(context, digest, treeBuilder.localFiles.get(digest)))
+              .collect(toImmutableList()));
+    } catch (IOException e) {
+      reporter.handle(
+          Event.warn(
+              ("Failed to upload the files of repo %s to the remote cache, downloading its files"
+                      + " instead: %s")
+                  .formatted(repoName, maybeGetStackTrace(e))));
+      return false;
+    }
+
+    // From here on, the local contents of the repo are discarded.
+    if (!remoteFs.injectRemoteRepo(repoName, tree, markerFileContent)) {
+      throw new IOException(
+          "files of repo %s are no longer available in the remote cache".formatted(repoName));
+    }
+    return true;
+  }
+
+  /**
+   * Builds the REAPI tree of a freshly fetched repo, in which the given remote files are
+   * represented by their metadata.
+   */
+  private final class RepoTreeBuilder {
+    private final Path repoDir;
+    private final Map<PathFragment, FileArtifactValue> remoteFiles;
+    // The other files of the repo by digest.
+    private final HashMap<Digest, Path> localFiles = new HashMap<>();
+    private final LinkedHashMap<Digest, Directory> children = new LinkedHashMap<>();
+    private long localFilesBytes = 0;
+
+    RepoTreeBuilder(Path repoDir, Map<PathFragment, FileArtifactValue> remoteFiles) {
+      this.repoDir = repoDir;
+      this.remoteFiles = remoteFiles;
+    }
+
+    /**
+     * Returns the tree of the repo, or null if the repo contains entries that can't be represented
+     * or too many local files.
+     */
+    @Nullable
+    Tree build() throws IOException {
+      var root = buildDirectory(repoDir);
+      if (root == null) {
+        return null;
+      }
+      return Tree.newBuilder().setRoot(root).addAllChildren(children.values()).build();
+    }
+
+    @Nullable
+    private Directory buildDirectory(Path dir) throws IOException {
+      var dirents = new ArrayList<>(dir.readdir(Symlinks.NOFOLLOW));
+      // The REAPI requires the entries of a directory to be sorted by name.
+      dirents.sort(Comparator.comparing(Dirent::getName));
+      var builder = Directory.newBuilder();
+      for (var dirent : dirents) {
+        Path path = dir.getChild(dirent.getName());
+        String name = internalToUnicode(dirent.getName());
+        switch (dirent.getType()) {
+          case FILE -> {
+            Digest digest;
+            var remoteFile = remoteFiles.get(path.relativeTo(repoDir));
+            if (remoteFile != null) {
+              digest = DigestUtil.buildDigest(remoteFile.getDigest(), remoteFile.getSize());
+            } else {
+              localFilesBytes += path.getFileSize(Symlinks.NOFOLLOW);
+              if (localFilesBytes > MAX_LOCAL_FILES_BYTES_FOR_REMOTE_REPO) {
+                return null;
+              }
+              digest = digestUtil.compute(path);
+              localFiles.put(digest, path);
+            }
+            builder
+                .addFilesBuilder()
+                .setName(name)
+                .setDigest(digest)
+                .setIsExecutable(path.isExecutable());
+          }
+          case SYMLINK -> {
+            PathFragment target = path.readSymbolicLink();
+            // The in-memory file system only supports symlinks that stay within the repo.
+            if (target.isAbsolute()
+                || !dir.asFragment().getRelative(target).startsWith(repoDir.asFragment())) {
+              return null;
+            }
+            builder
+                .addSymlinksBuilder()
+                .setName(name)
+                .setTarget(internalToUnicode(target.getPathString()));
+          }
+          case DIRECTORY -> {
+            var subdir = buildDirectory(path);
+            if (subdir == null) {
+              return null;
+            }
+            var subdirDigest = digestUtil.compute(subdir);
+            children.putIfAbsent(subdirDigest, subdir);
+            builder.addDirectoriesBuilder().setName(name).setDigest(subdirDigest);
+          }
+          default -> {
+            return null;
+          }
+        }
+      }
+      return builder.build();
+    }
   }
 
   private enum CacheOp {

@@ -15,10 +15,14 @@
 # pylint: disable=g-long-ternary
 # pylint: disable=g-bad-todo
 
+import functools
+import hashlib
+import http.server
 import json
 import os
 import re
 import tempfile
+import threading
 from absl.testing import absltest
 from src.test.py.bazel import test_base
 
@@ -51,6 +55,33 @@ class RemoteRepoContentsCacheTest(test_base.TestBase):
   def tearDown(self):
     test_base.TestBase.tearDown(self)
     self.StopRemoteWorker()
+
+  def StartHttpServer(self, directory):
+    """Serves the files in the given directory via HTTP and returns the port."""
+    handler = functools.partial(
+        http.server.SimpleHTTPRequestHandler, directory=directory
+    )
+    server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    self.addCleanup(server.server_close)
+    self.addCleanup(server.shutdown)
+    return server.server_address[1]
+
+  def CountActionCacheEntries(self):
+    count = 0
+    for _, _, files in os.walk(os.path.join(self._cas_path, 'ac')):
+      count += len(files)
+    return count
+
+  def LazyDownloadFlags(self):
+    return [
+        '--remote_downloader=grpc://localhost:' + str(self._worker_port),
+        '--experimental_remote_repo_lazy_downloads',
+        '--remote_download_minimal',
+        # Simulate a remote cache that only allows remote executors to write
+        # to the action cache.
+        '--noremote_upload_local_results',
+    ]
 
   def RepoDir(self, repo_name, cwd=None):
     _, stdout, _ = self.RunBazel(['info', 'output_base'], cwd=cwd)
@@ -2846,6 +2877,151 @@ class RemoteRepoContentsCacheTest(test_base.TestBase):
         ' configured).',
         stderr,
     )
+
+  def testLazyDownloads(self):
+    data_dir = tempfile.mkdtemp(dir=os.environ['TEST_TMPDIR'])
+    with open(os.path.join(data_dir, 'data.txt'), 'w') as f:
+      f.write('lazy data\n')
+    sha256 = hashlib.sha256(b'lazy data\n').hexdigest()
+    port = self.StartHttpServer(data_dir)
+    self.ScratchFile(
+        'MODULE.bazel',
+        [
+            (
+                'http_file = use_repo_rule('
+                '"@bazel_tools//tools/build_defs/repo:http.bzl", "http_file")'
+            ),
+            'http_file(',
+            '  name = "my_file",',
+            '  downloaded_file_path = "data.txt",',
+            '  sha256 = "%s",' % sha256,
+            '  urls = ["http://127.0.0.1:%d/data.txt"],' % port,
+            ')',
+        ],
+    )
+    self.ScratchFile(
+        'BUILD.bazel',
+        [
+            'genrule(',
+            '  name = "show_data",',
+            '  outs = ["data.txt"],',
+            '  cmd = "cat $(location @my_file//file) > $@",',
+            '  srcs = ["@my_file//file"],',
+            ')',
+        ],
+    )
+    data_file = os.path.join(self.RepoDir('my_file'), 'file', 'data.txt')
+
+    # Fetching the repo doesn't download the file.
+    self.RunBazel(['build', '@my_file//file'] + self.LazyDownloadFlags())
+    self.assertFalse(os.path.exists(data_file))
+
+    # A local action that reads the file downloads it.
+    self.RunBazel(['build', '//:show_data'] + self.LazyDownloadFlags())
+    with open(self.Path('bazel-bin/data.txt')) as f:
+      self.assertEqual(f.read(), 'lazy data\n')
+    self.assertTrue(os.path.exists(data_file))
+
+    # After a server restart, the repo is fetched lazily again.
+    self.RunBazel(['shutdown'])
+    self.RunBazel(['build', '@my_file//file'] + self.LazyDownloadFlags())
+    self.assertFalse(os.path.exists(data_file))
+    self.RunBazel(['build', '//:show_data'] + self.LazyDownloadFlags())
+    with open(self.Path('bazel-bin/data.txt')) as f:
+      self.assertEqual(f.read(), 'lazy data\n')
+
+    self.assertEqual(self.CountActionCacheEntries(), 0)
+
+    # Without lazy downloads, the file is downloaded when the repo is fetched.
+    self.RunBazel(['clean', '--expunge'])
+    self.RunBazel(['build', '@my_file//file', '--remote_download_minimal'])
+    self.assertTrue(os.path.exists(data_file))
+
+  def testLazyDownloadsMaterializedWhenNeeded(self):
+    data_dir = tempfile.mkdtemp(dir=os.environ['TEST_TMPDIR'])
+    with open(os.path.join(data_dir, 'data.txt'), 'w') as f:
+      f.write('lazy data\n')
+    sha256 = hashlib.sha256(b'lazy data\n').hexdigest()
+    port = self.StartHttpServer(data_dir)
+    self.ScratchFile(
+        'MODULE.bazel',
+        [
+            'repo = use_repo_rule("//:repo.bzl", "repo")',
+            'repo(name = "lazy")',
+            'repo(name = "reads_file", read = True)',
+            'repo(name = "nonreproducible", reproducible = False)',
+            'consumer = use_repo_rule("//:repo.bzl", "consumer")',
+            'consumer(name = "consumer", src = "@lazy//:data.txt")',
+        ],
+    )
+    self.ScratchFile('BUILD.bazel')
+    self.ScratchFile(
+        'repo.bzl',
+        [
+            'def _repo_impl(rctx):',
+            '  rctx.download(',
+            '    url = "http://127.0.0.1:%d/data.txt",' % port,
+            '    output = "data.txt",',
+            '    sha256 = "%s",' % sha256,
+            '  )',
+            '  content = rctx.read("data.txt") if rctx.attr.read else ""',
+            (
+                '  rctx.file("BUILD",'
+                ' "exports_files([\'data.txt\', \'content.txt\'])")'
+            ),
+            '  rctx.file("content.txt", content)',
+            '  if rctx.attr.reproducible:',
+            '    return rctx.repo_metadata(reproducible = True)',
+            'repo = repository_rule(',
+            '  _repo_impl,',
+            '  attrs = {',
+            '    "read": attr.bool(),',
+            '    "reproducible": attr.bool(default = True),',
+            '  },',
+            ')',
+            'def _consumer_impl(rctx):',
+            '  rctx.file("BUILD", "exports_files([\'content.txt\'])")',
+            '  rctx.file("content.txt", rctx.read(rctx.attr.src))',
+            '  return rctx.repo_metadata(reproducible = True)',
+            'consumer = repository_rule(',
+            '  _consumer_impl,',
+            '  attrs = {"src": attr.label()},',
+            ')',
+        ],
+    )
+
+    self.RunBazel(
+        [
+            'build',
+            '--nobuild',
+            '@lazy//:data.txt',
+            '@reads_file//:content.txt',
+            '@nonreproducible//:data.txt',
+        ]
+        + self.LazyDownloadFlags()
+    )
+    # Not needed by anything.
+    self.assertFalse(
+        os.path.exists(os.path.join(self.RepoDir('lazy'), 'data.txt'))
+    )
+    # Read by the repo rule itself.
+    with open(os.path.join(self.RepoDir('reads_file'), 'data.txt')) as f:
+      self.assertEqual(f.read(), 'lazy data\n')
+    with open(os.path.join(self.RepoDir('reads_file'), 'content.txt')) as f:
+      self.assertEqual(f.read(), 'lazy data\n')
+    # Non-reproducible repos are kept on disk.
+    with open(os.path.join(self.RepoDir('nonreproducible'), 'data.txt')) as f:
+      self.assertEqual(f.read(), 'lazy data\n')
+
+    # Read by another repo rule.
+    self.RunBazel(
+        ['build', '--nobuild', '@consumer//:content.txt']
+        + self.LazyDownloadFlags()
+    )
+    with open(os.path.join(self.RepoDir('consumer'), 'content.txt')) as f:
+      self.assertEqual(f.read(), 'lazy data\n')
+
+    self.assertEqual(self.CountActionCacheEntries(), 0)
 
 
 if __name__ == '__main__':

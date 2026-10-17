@@ -22,12 +22,15 @@ import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import com.google.auth.Credentials;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.ImmutableSortedMap;
 import com.google.common.collect.ImmutableTable;
+import com.google.common.hash.Hashing;
 import com.google.common.io.CharStreams;
+import com.google.devtools.build.lib.actions.FileArtifactValue;
 import com.google.devtools.build.lib.actions.FileValue;
 import com.google.devtools.build.lib.analysis.BlazeDirectories;
 import com.google.devtools.build.lib.analysis.ServerDirectories;
@@ -36,7 +39,11 @@ import com.google.devtools.build.lib.bazel.bzlmod.RepoSpec;
 import com.google.devtools.build.lib.bazel.repository.RepoDefinition;
 import com.google.devtools.build.lib.bazel.repository.RepoRule;
 import com.google.devtools.build.lib.bazel.repository.RepositoryFunctionException;
+import com.google.devtools.build.lib.bazel.repository.cache.DownloadCache;
+import com.google.devtools.build.lib.bazel.repository.downloader.Checksum;
 import com.google.devtools.build.lib.bazel.repository.downloader.DownloadManager;
+import com.google.devtools.build.lib.bazel.repository.downloader.Downloader;
+import com.google.devtools.build.lib.bazel.repository.downloader.HttpDownloader;
 import com.google.devtools.build.lib.cmdline.IgnoredSubdirectories;
 import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.cmdline.PackageIdentifier;
@@ -45,6 +52,7 @@ import com.google.devtools.build.lib.events.ExtendedEventHandler;
 import com.google.devtools.build.lib.packages.Attribute;
 import com.google.devtools.build.lib.packages.BuildFileName;
 import com.google.devtools.build.lib.packages.LabelConverter;
+import com.google.devtools.build.lib.packages.StructImpl;
 import com.google.devtools.build.lib.packages.Type;
 import com.google.devtools.build.lib.packages.Types;
 import com.google.devtools.build.lib.packages.semantics.BuildLanguageOptions;
@@ -56,6 +64,7 @@ import com.google.devtools.build.lib.skyframe.BazelSkyframeExecutorConstants;
 import com.google.devtools.build.lib.skyframe.FileKey;
 import com.google.devtools.build.lib.skyframe.PackageLookupValue;
 import com.google.devtools.build.lib.testutil.Scratch;
+import com.google.devtools.build.lib.vfs.FileSystemUtils;
 import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.build.lib.vfs.PathFragment;
 import com.google.devtools.build.lib.vfs.Root;
@@ -65,10 +74,13 @@ import com.google.protobuf.ByteString;
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStreamReader;
+import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.atomic.AtomicInteger;
 import javax.annotation.Nullable;
 import net.starlark.java.eval.Dict;
 import net.starlark.java.eval.EvalException;
@@ -100,6 +112,8 @@ public final class StarlarkRepositoryContextTest {
   private StarlarkRepositoryContext context;
   private Label fakeFileLabel;
   private RepoRule repoRule;
+  private DownloadManager downloadManager = Mockito.mock(DownloadManager.class);
+  private boolean allowLazyDownloads = false;
   private static final StarlarkThread thread =
       StarlarkThread.createTransient(Mutability.create("test"), StarlarkSemantics.DEFAULT);
 
@@ -167,7 +181,6 @@ public final class StarlarkRepositoryContextTest {
         repoRule.instantiate(kwargs, DUMMY_STACK, labelConverter, listener, "somewhere");
     RepoDefinition repoDefinition =
         new RepoDefinition(repoRule, repoSpec.attributes(), (String) kwargs.get("name"), null);
-    DownloadManager downloader = Mockito.mock(DownloadManager.class);
     SkyFunction.Environment environment = Mockito.mock(SkyFunction.Environment.class);
     when(environment.getListener()).thenReturn(listener);
     fakeFileLabel = Label.parseCanonical("//:foo");
@@ -194,13 +207,14 @@ public final class StarlarkRepositoryContextTest {
             environment,
             repoEnvVariables,
             clientEnvVariables,
-            downloader,
+            downloadManager,
             1.0,
             /* processWrapper= */ null,
             starlarkSemantics,
             repoRemoteExecutor,
             SyscallCache.NO_CACHE,
-            directories);
+            directories,
+            allowLazyDownloads);
   }
 
   private void setUpRepo(String name) throws Exception {
@@ -657,5 +671,165 @@ public final class StarlarkRepositoryContextTest {
             context.getRecordedInputs().stream()
                 .filter(inputAndValue -> inputAndValue.input() instanceof RepoRecordedInput.File))
         .isEmpty();
+  }
+
+  /** A downloader that can make files available remotely and counts the files it downloads. */
+  private static final class FakeRemoteDownloader implements Downloader {
+    private final byte[] content;
+    private final AtomicInteger downloads = new AtomicInteger();
+
+    FakeRemoteDownloader(String content) {
+      this.content = content.getBytes(StandardCharsets.UTF_8);
+    }
+
+    String sha256() {
+      return Hashing.sha256().hashBytes(content).toString();
+    }
+
+    @Override
+    public void download(
+        List<URI> urls,
+        Map<String, List<String>> headers,
+        Credentials credentials,
+        Optional<Checksum> checksum,
+        String canonicalId,
+        Path destination,
+        ExtendedEventHandler eventHandler,
+        Map<String, String> clientEnv,
+        Optional<String> type,
+        String context)
+        throws IOException {
+      downloads.incrementAndGet();
+      FileSystemUtils.writeContent(destination, content);
+    }
+
+    @Override
+    public Optional<FileArtifactValue> fetchRemotely(
+        List<URI> urls,
+        Map<String, List<String>> headers,
+        Credentials credentials,
+        Checksum checksum,
+        String canonicalId,
+        ExtendedEventHandler eventHandler,
+        String context) {
+      return Optional.of(
+          FileArtifactValue.createForRemoteFile(
+              Hashing.sha256().hashBytes(content).asBytes(),
+              content.length,
+              /* locationIndex= */ 1));
+    }
+  }
+
+  private FakeRemoteDownloader setUpRepoWithLazyDownloads(String content) throws Exception {
+    var downloader = new FakeRemoteDownloader(content);
+    downloadManager =
+        new DownloadManager(
+            Mockito.mock(DownloadCache.class),
+            downloader,
+            Mockito.mock(HttpDownloader.class),
+            Mockito.mock(ExtendedEventHandler.class));
+    allowLazyDownloads = true;
+    setUpRepo("test");
+    return downloader;
+  }
+
+  private StructImpl download(String output, String sha256) throws Exception {
+    return (StructImpl)
+        context.download(
+            "https://example.com/file",
+            output,
+            sha256,
+            /* executable= */ false,
+            /* allowFail= */ false,
+            /* canonicalId= */ "",
+            Dict.empty(),
+            Dict.empty(),
+            /* integrity= */ "",
+            /* block= */ true,
+            thread);
+  }
+
+  @Test
+  public void testLazyDownload() throws Exception {
+    var downloader = setUpRepoWithLazyDownloads("lazy content");
+
+    StructImpl result = download("foo", downloader.sha256());
+
+    assertThat(result.getValue("success")).isEqualTo(true);
+    assertThat(result.getValue("sha256")).isEqualTo(downloader.sha256());
+    assertThat(result.getValue("size_bytes")).isEqualTo(StarlarkInt.of(12));
+    // Only an empty placeholder has been created.
+    testOutputFile(outputDirectory.getChild("foo"), "");
+    assertThat(downloader.downloads.get()).isEqualTo(0);
+    assertThat(context.getLazyDownloads().keySet()).containsExactly(PathFragment.create("foo"));
+
+    // Reading the file downloads it.
+    assertThat(context.readFile(context.getPath("foo"), "auto", thread)).isEqualTo("lazy content");
+    assertThat(downloader.downloads.get()).isEqualTo(1);
+    assertThat(context.getLazyDownloads()).isEmpty();
+  }
+
+  @Test
+  public void testLazyDownload_renamedAndDeleted() throws Exception {
+    var downloader = setUpRepoWithLazyDownloads("lazy content");
+
+    download("dir/foo", downloader.sha256());
+    context.rename(context.getPath("dir"), context.getPath("renamed"), thread);
+    assertThat(context.getLazyDownloads().keySet())
+        .containsExactly(PathFragment.create("renamed/foo"));
+
+    context.delete(context.getPath("renamed"), thread);
+    assertThat(context.getLazyDownloads()).isEmpty();
+    assertThat(downloader.downloads.get()).isEqualTo(0);
+  }
+
+  @Test
+  public void testLazyDownload_overwritten() throws Exception {
+    var downloader = setUpRepoWithLazyDownloads("lazy content");
+
+    download("foo", downloader.sha256());
+    context.createFile(context.getPath("foo"), "new content", false, true, thread);
+
+    testOutputFile(outputDirectory.getChild("foo"), "new content");
+    assertThat(downloader.downloads.get()).isEqualTo(0);
+    assertThat(context.getLazyDownloads()).isEmpty();
+  }
+
+  @Test
+  public void testLazyDownload_materializedForPatch() throws Exception {
+    var downloader = setUpRepoWithLazyDownloads("line one\n");
+
+    download("foo", downloader.sha256());
+    context.createFile(
+        context.getPath("my.patch"), "--- foo\n+++ foo\n" + ONE_LINE_PATCH, false, true, thread);
+    context.patch(context.getPath("my.patch"), StarlarkInt.of(0), "", "auto", thread);
+
+    testOutputFile(outputDirectory.getChild("foo"), "line one\nline two\n");
+    assertThat(downloader.downloads.get()).isEqualTo(1);
+    assertThat(context.getLazyDownloads()).isEmpty();
+  }
+
+  @Test
+  public void testLazyDownload_withoutChecksum() throws Exception {
+    var downloader = setUpRepoWithLazyDownloads("lazy content");
+
+    download("foo", /* sha256= */ "");
+
+    testOutputFile(outputDirectory.getChild("foo"), "lazy content");
+    assertThat(downloader.downloads.get()).isEqualTo(1);
+    assertThat(context.getLazyDownloads()).isEmpty();
+  }
+
+  @Test
+  public void testLazyDownload_notAllowed() throws Exception {
+    var downloader = setUpRepoWithLazyDownloads("lazy content");
+    allowLazyDownloads = false;
+    setUpRepo("test");
+
+    download("foo", downloader.sha256());
+
+    testOutputFile(outputDirectory.getChild("foo"), "lazy content");
+    assertThat(downloader.downloads.get()).isEqualTo(1);
+    assertThat(context.getLazyDownloads()).isEmpty();
   }
 }

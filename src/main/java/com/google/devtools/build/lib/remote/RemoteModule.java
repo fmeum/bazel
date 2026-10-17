@@ -367,6 +367,7 @@ public final class RemoteModule extends BlazeModule {
             remoteOptions.getRemoteInstanceName(),
             remoteOptions.getRemoteAcceptCached(),
             remoteOptions.getRemoteUploadLocalResults(),
+            remoteOptions.getRemoteRepoLazyDownloads(),
             verboseFailures));
     if (env.getDirectories().getOutputBase().getFileSystem()
         instanceof RemoteExternalOverlayFileSystem remoteFs) {

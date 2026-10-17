@@ -23,6 +23,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import build.bazel.remote.asset.v1.FetchBlobRequest;
@@ -38,6 +39,7 @@ import com.google.common.collect.ImmutableMap;
 import com.google.common.io.ByteStreams;
 import com.google.common.util.concurrent.ListeningScheduledExecutorService;
 import com.google.common.util.concurrent.MoreExecutors;
+import com.google.devtools.build.lib.actions.FileArtifactValue;
 import com.google.devtools.build.lib.authandtls.StaticCredentials;
 import com.google.devtools.build.lib.bazel.repository.cache.DownloadCache.KeyType;
 import com.google.devtools.build.lib.bazel.repository.downloader.Checksum;
@@ -649,5 +651,112 @@ public class GrpcRemoteDownloaderTest {
                 .addQualifiers(
                     Qualifier.newBuilder().setName("bazel.canonical_id").setValue("canonical ID"))
                 .build());
+  }
+
+  @Test
+  public void testFetchRemotely() throws Exception {
+    final byte[] content = "example content".getBytes(UTF_8);
+    final Digest contentDigest = DIGEST_UTIL.compute(content);
+
+    serviceRegistry.addService(
+        new FetchImplBase() {
+          @Override
+          public void fetchBlob(
+              FetchBlobRequest request, StreamObserver<FetchBlobResponse> responseObserver) {
+            assertThat(request)
+                .isEqualTo(
+                    FetchBlobRequest.newBuilder()
+                        .setDigestFunction(DIGEST_UTIL.getDigestFunction())
+                        .addUris("http://example.com/content.txt")
+                        .addQualifiers(
+                            Qualifier.newBuilder()
+                                .setName("checksum.sri")
+                                .setValue("sha256-ot7ke6YmiSXal3UKt0K69n8C4vtUziPUmftmpbAiKQM="))
+                        .build());
+            responseObserver.onNext(
+                FetchBlobResponse.newBuilder()
+                    .setUri("http://example.com/content.txt")
+                    .setBlobDigest(contentDigest)
+                    .build());
+            responseObserver.onCompleted();
+          }
+        });
+    // The contents of the blob are not downloaded from the cache.
+    final RemoteCacheClient cacheClient = mock(RemoteCacheClient.class);
+    final GrpcRemoteDownloader downloader = newDownloader(cacheClient);
+
+    Optional<FileArtifactValue> metadata =
+        downloader.fetchRemotely(
+            ImmutableList.of(URI.create("http://example.com/content.txt")),
+            ImmutableMap.of(),
+            StaticCredentials.EMPTY,
+            Checksum.fromString(KeyType.SHA256, contentDigest.getHash()),
+            /* canonicalId= */ "",
+            eventHandler,
+            "context");
+
+    assertThat(metadata).isPresent();
+    assertThat(metadata.get().isRemote()).isTrue();
+    assertThat(metadata.get().getDigest()).isEqualTo(DigestUtil.toBinaryDigest(contentDigest));
+    assertThat(metadata.get().getSize()).isEqualTo(content.length);
+    verifyNoInteractions(cacheClient);
+    assertThat(eventHandler.getPosts())
+        .containsExactly(
+            new FetchEvent(
+                "http://example.com/content.txt", FetchId.Downloader.GRPC, /* success= */ true));
+  }
+
+  @Test
+  public void testFetchRemotely_failure() throws Exception {
+    serviceRegistry.addService(
+        new FetchImplBase() {
+          @Override
+          public void fetchBlob(
+              FetchBlobRequest request, StreamObserver<FetchBlobResponse> responseObserver) {
+            responseObserver.onNext(
+                FetchBlobResponse.newBuilder()
+                    .setStatus(
+                        Status.newBuilder()
+                            .setCode(Code.NOT_FOUND_VALUE)
+                            .setMessage("not found")
+                            .build())
+                    .build());
+            responseObserver.onCompleted();
+          }
+        });
+    final GrpcRemoteDownloader downloader = newDownloader(new InMemoryCacheClient());
+
+    var exception =
+        assertThrows(
+            IOException.class,
+            () ->
+                downloader.fetchRemotely(
+                    ImmutableList.of(URI.create("http://example.com/content.txt")),
+                    ImmutableMap.of(),
+                    StaticCredentials.EMPTY,
+                    Checksum.fromString(KeyType.SHA256, DIGEST_UTIL.compute(new byte[0]).getHash()),
+                    /* canonicalId= */ "",
+                    eventHandler,
+                    "context"));
+    assertThat(exception).hasMessageThat().contains("not found");
+    assertThat(eventHandler.getPosts()).isEmpty();
+  }
+
+  @Test
+  public void testFetchRemotely_fileUrl() throws Exception {
+    // No Fetch service is registered, so a request would fail.
+    final GrpcRemoteDownloader downloader = newDownloader(new InMemoryCacheClient());
+
+    Optional<FileArtifactValue> metadata =
+        downloader.fetchRemotely(
+            ImmutableList.of(URI.create("file:///some/file")),
+            ImmutableMap.of(),
+            StaticCredentials.EMPTY,
+            Checksum.fromString(KeyType.SHA256, DIGEST_UTIL.compute(new byte[0]).getHash()),
+            /* canonicalId= */ "",
+            eventHandler,
+            "context");
+
+    assertThat(metadata).isEmpty();
   }
 }

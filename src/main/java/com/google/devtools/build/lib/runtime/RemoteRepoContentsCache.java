@@ -14,11 +14,14 @@
 
 package com.google.devtools.build.lib.runtime;
 
+import com.google.devtools.build.lib.actions.FileArtifactValue;
 import com.google.devtools.build.lib.cmdline.RepositoryName;
 import com.google.devtools.build.lib.events.ExtendedEventHandler;
 import com.google.devtools.build.lib.vfs.Path;
+import com.google.devtools.build.lib.vfs.PathFragment;
 import com.google.devtools.build.skyframe.SkyFunction;
 import java.io.IOException;
+import java.util.Map;
 
 /** A remote cache for the contents of external repositories. */
 public interface RemoteRepoContentsCache {
@@ -44,5 +47,35 @@ public interface RemoteRepoContentsCache {
       Path repoDir,
       String predeclaredInputHash,
       SkyFunction.Environment env)
+      throws IOException, InterruptedException;
+
+  /**
+   * Whether repository rules fetching into the given directory may download files lazily, that is,
+   * only make them available in the remote cache.
+   */
+  boolean allowsLazyDownloads(Path repoDir);
+
+  /**
+   * Turns a repository that has just been fetched into one backed by the remote cache, in which the
+   * given files are only available remotely.
+   *
+   * <p>The other files of the repository are uploaded to the remote cache, but no action cache
+   * entries are written.
+   *
+   * @param markerFileContent the content of the repository's marker file, which must not have been
+   *     written yet
+   * @param remoteFiles empty placeholder files in the repository, keyed by their path relative to
+   *     the repository directory, and the metadata of their actual contents in the remote cache
+   * @return true if the repository is now backed by the remote cache; false if it has been left
+   *     untouched, in which case the placeholders have to be replaced with the actual contents
+   * @throws IOException if the repository could neither be backed by the remote cache nor be left
+   *     untouched
+   */
+  boolean injectRepoWithRemoteFiles(
+      RepositoryName repoName,
+      Path repoDir,
+      String markerFileContent,
+      Map<PathFragment, FileArtifactValue> remoteFiles,
+      ExtendedEventHandler reporter)
       throws IOException, InterruptedException;
 }

@@ -21,6 +21,7 @@ import com.google.common.base.Preconditions;
 import com.google.common.base.Throwables;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
+import com.google.common.collect.Maps;
 import com.google.devtools.build.lib.actions.FileStateValue;
 import com.google.devtools.build.lib.actions.FileValue;
 import com.google.devtools.build.lib.analysis.BlazeDirectories;
@@ -34,6 +35,7 @@ import com.google.devtools.build.lib.bazel.repository.downloader.DownloadManager
 import com.google.devtools.build.lib.bazel.repository.starlark.NeedsSkyframeRestartException;
 import com.google.devtools.build.lib.bazel.repository.starlark.RepoMetadata;
 import com.google.devtools.build.lib.bazel.repository.starlark.RepoMetadata.Reproducibility;
+import com.google.devtools.build.lib.bazel.repository.starlark.StarlarkBaseExternalContext.LazyDownload;
 import com.google.devtools.build.lib.bazel.repository.starlark.StarlarkRepositoryContext;
 import com.google.devtools.build.lib.bazel.repository.starlark.StarlarkRepositoryDefinitionLocationEvent;
 import com.google.devtools.build.lib.cmdline.LabelConstants;
@@ -313,13 +315,14 @@ public final class RepositoryFetchFunction implements SkyFunction {
       if (result == null) {
         return null;
       }
-      digestWriter.writeMarkerFile(result.recordedInputValues());
-      if (result.reproducible() == Reproducibility.YES && !repoDefinition.repoRule().local()) {
+      boolean reproducible =
+          result.reproducible() == Reproducibility.YES && !repoDefinition.repoRule().local();
+      RepositoryUtils.ReplantSymlinksResult replantSymlinksResult = null;
+      if (reproducible) {
         // This repo may be eligible for the local and remote repo contents cache.
         // Replant symlinks before caching to convert absolute symlinks relative if possible, which
         // can make more repos eligible.
         Path externalRepoRoot = RepositoryUtils.getExternalRepositoryDirectory(directories);
-        RepositoryUtils.ReplantSymlinksResult replantSymlinksResult;
         try {
           replantSymlinksResult =
               RepositoryUtils.replantSymlinks(
@@ -340,6 +343,19 @@ public final class RepositoryFetchFunction implements SkyFunction {
                   e),
               Transience.TRANSIENT);
         }
+      }
+      if (!result.lazyDownloads().isEmpty()
+          && keepLazyDownloadsRemote(
+              env,
+              repositoryName,
+              repoRoot,
+              digestWriter,
+              result,
+              replantSymlinksResult != null && replantSymlinksResult.safeForRemoteCache())) {
+        return new Success(Root.fromPath(repoRoot), excludeRepoFromVendoring);
+      }
+      digestWriter.writeMarkerFile(result.recordedInputValues());
+      if (reproducible) {
         if (remoteRepoContentsCache != null && replantSymlinksResult.safeForRemoteCache()) {
           remoteRepoContentsCache.addToCache(
               repositoryName,
@@ -427,6 +443,51 @@ public final class RepositoryFetchFunction implements SkyFunction {
                     repositoryName)));
 
     return new Success(Root.fromPath(repoRoot), excludeRepoFromVendoring);
+  }
+
+  /**
+   * Tries to turn a freshly fetched repo with lazily downloaded files into one backed by the remote
+   * cache, which keeps the contents of these files remote. Otherwise, replaces the placeholders of
+   * these files with their actual contents.
+   *
+   * <p>Must be called before the marker file is written.
+   *
+   * @return true if the repo is now backed by the remote cache
+   */
+  private boolean keepLazyDownloadsRemote(
+      Environment env,
+      RepositoryName repositoryName,
+      Path repoRoot,
+      DigestWriter digestWriter,
+      FetchResult result,
+      boolean safeForRemoteCache)
+      throws RepositoryFunctionException, InterruptedException {
+    // A repo backed by the remote cache is refetched after a server restart, which is only
+    // acceptable if the repo is reproducible, and it can't contain symlinks that point out of the
+    // repo.
+    if (safeForRemoteCache && remoteRepoContentsCache != null) {
+      try {
+        if (remoteRepoContentsCache.injectRepoWithRemoteFiles(
+            repositoryName,
+            repoRoot,
+            digestWriter.getMarkerFileContent(result.recordedInputValues()),
+            Maps.transformValues(
+                result.lazyDownloads(), download -> download.remoteDownload().getMetadata()),
+            env.getListener())) {
+          return true;
+        }
+      } catch (IOException e) {
+        throw new RepositoryFunctionException(e, Transience.TRANSIENT);
+      }
+    }
+    for (var entry : result.lazyDownloads().entrySet()) {
+      try {
+        entry.getValue().materialize(repoRoot.getRelative(entry.getKey()));
+      } catch (IOException e) {
+        throw new RepositoryFunctionException(e, Transience.TRANSIENT);
+      }
+    }
+    return false;
   }
 
   @Nullable
@@ -601,10 +662,13 @@ public final class RepositoryFetchFunction implements SkyFunction {
    * @param recordedInputValues Any recorded inputs (and their values) encountered during the fetch
    *     of the repo. Changes to these inputs will result in the repo being refetched in the future.
    * @param reproducible Whether the fetched repo contents are reproducible, hence cacheable.
+   * @param lazyDownloads The files that have been downloaded lazily and only exist as empty
+   *     placeholders in the repo, keyed by their path relative to the repo directory.
    */
   private record FetchResult(
       ImmutableList<RepoRecordedInput.WithValue> recordedInputValues,
-      Reproducibility reproducible) {}
+      Reproducibility reproducible,
+      ImmutableMap<PathFragment, LazyDownload> lazyDownloads) {}
 
   @Nullable
   private FetchResult fetch(
@@ -655,6 +719,7 @@ public final class RepositoryFetchFunction implements SkyFunction {
 
     ImmutableList<RepoRecordedInput.WithValue> recordedInputValues;
     RepoMetadata repoMetadata;
+    ImmutableMap<PathFragment, LazyDownload> lazyDownloads;
     try (Mutability mu = Mutability.create("Starlark repository");
         StarlarkRepositoryContext starlarkRepositoryContext =
             new StarlarkRepositoryContext(
@@ -671,7 +736,9 @@ public final class RepositoryFetchFunction implements SkyFunction {
                 starlarkSemantics,
                 repositoryRemoteExecutor,
                 syscallCache,
-                directories)) {
+                directories,
+                remoteRepoContentsCache != null
+                    && remoteRepoContentsCache.allowsLazyDownloads(outputDirectory))) {
       StarlarkThread thread =
           StarlarkThread.create(
               mu,
@@ -729,6 +796,7 @@ public final class RepositoryFetchFunction implements SkyFunction {
       }
 
       recordedInputValues = starlarkRepositoryContext.getRecordedInputs();
+      lazyDownloads = starlarkRepositoryContext.getLazyDownloads();
     } catch (NeedsSkyframeRestartException e) {
       return null;
     } catch (EvalException e) {
@@ -793,7 +861,7 @@ public final class RepositoryFetchFunction implements SkyFunction {
       }
     }
 
-    return new FetchResult(recordedInputValues, repoMetadata.reproducible());
+    return new FetchResult(recordedInputValues, repoMetadata.reproducible(), lazyDownloads);
   }
 
   private static boolean shouldRequireRepoMetadata(

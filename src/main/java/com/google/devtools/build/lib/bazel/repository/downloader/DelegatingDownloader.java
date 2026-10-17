@@ -15,6 +15,7 @@
 package com.google.devtools.build.lib.bazel.repository.downloader;
 
 import com.google.auth.Credentials;
+import com.google.devtools.build.lib.actions.FileArtifactValue;
 import com.google.devtools.build.lib.events.ExtendedEventHandler;
 import com.google.devtools.build.lib.vfs.Path;
 import java.io.IOException;
@@ -72,5 +73,23 @@ public class DelegatingDownloader implements Downloader {
         clientEnv,
         type,
         context);
+  }
+
+  @Override
+  public Optional<FileArtifactValue> fetchRemotely(
+      List<URI> urls,
+      Map<String, List<String>> headers,
+      Credentials credentials,
+      Checksum checksum,
+      String canonicalId,
+      ExtendedEventHandler eventHandler,
+      String context)
+      throws IOException, InterruptedException {
+    Downloader downloader = defaultDelegate;
+    if (delegate != null) {
+      downloader = delegate;
+    }
+    return downloader.fetchRemotely(
+        urls, headers, credentials, checksum, canonicalId, eventHandler, context);
   }
 }

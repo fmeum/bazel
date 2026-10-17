@@ -15,6 +15,7 @@
 package com.google.devtools.build.lib.bazel.repository.downloader;
 
 import com.google.auth.Credentials;
+import com.google.devtools.build.lib.actions.FileArtifactValue;
 import com.google.devtools.build.lib.events.ExtendedEventHandler;
 import com.google.devtools.build.lib.vfs.Path;
 import java.io.IOException;
@@ -53,4 +54,32 @@ public interface Downloader {
       Optional<String> type,
       String context)
       throws IOException, InterruptedException;
+
+  /**
+   * Makes a file available in the remote cache without downloading its contents to the local
+   * machine.
+   *
+   * <p>Only downloaders backed by a remote cache, which verifies the file's contents against the
+   * given checksum, can support this.
+   *
+   * @param urls list of mirror URLs with identical content
+   * @param credentials credentials to use when connecting to URLs
+   * @param checksum the checksum of the file
+   * @param context free-form string that describes the origin of the download for logging
+   * @return the metadata of the file in the remote cache, or empty if this downloader doesn't
+   *     support making files available remotely
+   * @throws IOException if the file couldn't be made available remotely
+   * @throws InterruptedException if this thread is being cast into oblivion
+   */
+  default Optional<FileArtifactValue> fetchRemotely(
+      List<URI> urls,
+      Map<String, List<String>> headers,
+      Credentials credentials,
+      Checksum checksum,
+      String canonicalId,
+      ExtendedEventHandler eventHandler,
+      String context)
+      throws IOException, InterruptedException {
+    return Optional.empty();
+  }
 }

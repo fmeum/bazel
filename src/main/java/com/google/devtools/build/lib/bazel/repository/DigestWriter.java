@@ -73,14 +73,18 @@ public class DigestWriter {
     return new DigestWriter(directories, repositoryName, predeclaredInputHash);
   }
 
-  void writeMarkerFile(List<RepoRecordedInput.WithValue> recordedInputValues)
-      throws RepositoryFunctionException {
+  String getMarkerFileContent(List<RepoRecordedInput.WithValue> recordedInputValues) {
     StringBuilder builder = new StringBuilder();
     builder.append(predeclaredInputHash).append('\n');
     for (var recordedInputValue : recordedInputValues) {
       builder.append(recordedInputValue).append('\n');
     }
-    String content = builder.toString();
+    return builder.toString();
+  }
+
+  void writeMarkerFile(List<RepoRecordedInput.WithValue> recordedInputValues)
+      throws RepositoryFunctionException {
+    String content = getMarkerFileContent(recordedInputValues);
     try {
       FileSystemUtils.writeContent(markerPath, ISO_8859_1, content);
     } catch (IOException e) {
