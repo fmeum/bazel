@@ -20,6 +20,7 @@ import com.github.difflib.patch.PatchFailedException;
 import com.google.common.base.Strings;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
+import com.google.common.collect.ImmutableSet;
 import com.google.devtools.build.docgen.annot.DocCategory;
 import com.google.devtools.build.lib.analysis.BlazeDirectories;
 import com.google.devtools.build.lib.bazel.debug.WorkspaceRuleEvent;
@@ -570,8 +571,24 @@ public class StarlarkRepositoryContext extends StarlarkBaseExternalContext {
       throw Starlark.errorf("attempting to use a directory as patch file: %s", starlarkPath);
     }
     maybeWatch(starlarkPath, ShouldWatch.fromString(watchPatch));
-    // The patch may modify any file, possibly through symlinks.
-    materializeAllLazyDownloads();
+    materializeLazyDownloads(starlarkPath.getPath());
+    if (hasLazyDownloads()) {
+      ImmutableSet<Path> affectedFiles;
+      try {
+        affectedFiles =
+            PatchUtil.getAffectedFiles(starlarkPath.getPath(), strip, directoryPath.getPath());
+      } catch (PatchFailedException | IOException e) {
+        // The error is reported when applying the patch below.
+        affectedFiles = null;
+      }
+      if (affectedFiles != null) {
+        for (Path affectedFile : affectedFiles) {
+          materializeLazyDownloads(affectedFile);
+        }
+      } else {
+        materializeAllLazyDownloads();
+      }
+    }
     try {
       PatchUtil.apply(starlarkPath.getPath(), strip, directoryPath.getPath());
     } catch (PatchFailedException e) {

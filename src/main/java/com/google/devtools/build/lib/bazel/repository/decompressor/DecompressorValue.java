@@ -32,9 +32,7 @@ import java.util.Optional;
 import java.util.Set;
 import net.starlark.java.eval.Starlark;
 
-/**
- * The contents of decompressed archive.
- */
+/** The contents of decompressed archive. */
 public class DecompressorValue implements SkyValue {
 
   private static final ImmutableList<String> ZIP_FORMATS =
@@ -212,6 +210,33 @@ public class DecompressorValue implements SkyValue {
             readableSupportedFormats(/* prefix= */ ".", /* suffix= */ "", /* conjunction= */ "or"),
             archivePath),
         Transience.PERSISTENT);
+  }
+
+  /**
+   * Returns the type of the archive with the given base name, which determines the decompressor in
+   * the same way as {@link #getDecompressor(Path)}, or empty if no decompressor matches.
+   */
+  public static Optional<String> getArchiveType(String baseName) {
+    for (Pair<ImmutableList<String>, Decompressor> format : supportedFormats) {
+      for (String type : format.first) {
+        if (baseName.endsWith("." + type)) {
+          return Optional.of(type);
+        }
+      }
+    }
+    return Optional.empty();
+  }
+
+  /**
+   * Whether the given archive type is supported and the files extracted from such an archive don't
+   * depend on the archive's file name, which isn't the case for compressed single files.
+   */
+  public static boolean isExtractedIndependentlyOfName(String type) {
+    try {
+      return !(getDecompressor(type) instanceof CompressedFunction);
+    } catch (RepositoryFunctionException e) {
+      return false;
+    }
   }
 
   /**

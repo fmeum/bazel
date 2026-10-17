@@ -28,6 +28,7 @@ import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.ImmutableSortedMap;
 import com.google.common.collect.ImmutableTable;
+import com.google.common.hash.HashCode;
 import com.google.common.hash.Hashing;
 import com.google.common.io.CharStreams;
 import com.google.devtools.build.lib.actions.FileArtifactValue;
@@ -60,6 +61,7 @@ import com.google.devtools.build.lib.pkgcache.PathPackageLocator;
 import com.google.devtools.build.lib.rules.repository.RepoRecordedInput;
 import com.google.devtools.build.lib.runtime.RepositoryRemoteExecutor;
 import com.google.devtools.build.lib.runtime.RepositoryRemoteExecutor.ExecutionResult;
+import com.google.devtools.build.lib.runtime.RepositoryRemoteExecutor.TreeEntry;
 import com.google.devtools.build.lib.skyframe.BazelSkyframeExecutorConstants;
 import com.google.devtools.build.lib.skyframe.FileKey;
 import com.google.devtools.build.lib.skyframe.PackageLookupValue;
@@ -71,16 +73,20 @@ import com.google.devtools.build.lib.vfs.Root;
 import com.google.devtools.build.lib.vfs.SyscallCache;
 import com.google.devtools.build.skyframe.SkyFunction;
 import com.google.protobuf.ByteString;
+import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.zip.GZIPOutputStream;
 import javax.annotation.Nullable;
 import net.starlark.java.eval.Dict;
 import net.starlark.java.eval.EvalException;
@@ -95,6 +101,8 @@ import net.starlark.java.eval.StarlarkThread;
 import net.starlark.java.syntax.FileOptions;
 import net.starlark.java.syntax.Location;
 import net.starlark.java.syntax.ParserInput;
+import org.apache.commons.compress.archivers.tar.TarArchiveEntry;
+import org.apache.commons.compress.archivers.tar.TarArchiveOutputStream;
 import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
@@ -679,7 +687,11 @@ public final class StarlarkRepositoryContextTest {
     private final AtomicInteger downloads = new AtomicInteger();
 
     FakeRemoteDownloader(String content) {
-      this.content = content.getBytes(StandardCharsets.UTF_8);
+      this(content.getBytes(StandardCharsets.UTF_8));
+    }
+
+    FakeRemoteDownloader(byte[] content) {
+      this.content = content;
     }
 
     String sha256() {
@@ -830,6 +842,267 @@ public final class StarlarkRepositoryContextTest {
 
     testOutputFile(outputDirectory.getChild("foo"), "lazy content");
     assertThat(downloader.downloads.get()).isEqualTo(1);
+    assertThat(context.getLazyDownloads()).isEmpty();
+  }
+
+  /**
+   * A remote executor that extracts any archive into the same tree, which matches the archive
+   * created by {@link #createTarGz}, except for the symlinks and the executable file.
+   */
+  private static final class FakeRemoteExtractor implements RepositoryRemoteExecutor {
+    private static final ImmutableMap<String, String> FILES =
+        ImmutableMap.of("dir/foo", "foo content", "dir/tool.sh", "#!/bin/sh", "empty", "");
+
+    private final List<String> extractedTypes = new ArrayList<>();
+    private final AtomicInteger downloads = new AtomicInteger();
+
+    @Override
+    public ExecutionResult execute(
+        ImmutableList<String> arguments,
+        ImmutableSortedMap<PathFragment, Path> inputFiles,
+        ImmutableMap<String, String> executionProperties,
+        ImmutableMap<String, String> environment,
+        String workingDirectory,
+        Duration timeout) {
+      throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public ExtractedArchive extractArchive(
+        FileArtifactValue archive,
+        String type,
+        String stripPrefix,
+        int stripComponents,
+        ImmutableMap<String, String> renameFiles) {
+      extractedTypes.add(type);
+      var contentByDigest = new HashMap<HashCode, String>();
+      var entries = ImmutableList.<TreeEntry>builder();
+      entries.add(new TreeEntry.Directory(PathFragment.create("dir")));
+      FILES.forEach(
+          (path, content) -> {
+            byte[] bytes = content.getBytes(StandardCharsets.UTF_8);
+            HashCode digest = Hashing.sha256().hashBytes(bytes);
+            contentByDigest.put(digest, content);
+            entries.add(
+                new TreeEntry.File(
+                    PathFragment.create(path),
+                    FileArtifactValue.createForRemoteFile(
+                        digest.asBytes(), bytes.length, /* locationIndex= */ 1),
+                    path.endsWith(".sh")));
+          });
+      entries.add(
+          new TreeEntry.Symlink(
+              PathFragment.create("rel_link"),
+              PathFragment.create("dir/foo"),
+              /* targetUnderRoot= */ false));
+      entries.add(
+          new TreeEntry.Symlink(
+              PathFragment.create("abs_link"),
+              PathFragment.create("dir/foo"),
+              /* targetUnderRoot= */ true));
+      return new ExtractedArchive() {
+        @Override
+        public ImmutableList<TreeEntry> entries() {
+          return entries.build();
+        }
+
+        @Override
+        public void downloadFile(FileArtifactValue metadata, Path destination) throws IOException {
+          downloads.incrementAndGet();
+          FileSystemUtils.writeContent(
+              destination,
+              StandardCharsets.UTF_8,
+              contentByDigest.get(HashCode.fromBytes(metadata.getDigest())));
+        }
+      };
+    }
+  }
+
+  private static byte[] createTarGz() throws IOException {
+    var bytes = new ByteArrayOutputStream();
+    try (var tar = new TarArchiveOutputStream(new GZIPOutputStream(bytes))) {
+      byte[] content = "foo content".getBytes(StandardCharsets.UTF_8);
+      var foo = new TarArchiveEntry("dir/foo");
+      foo.setSize(content.length);
+      tar.putArchiveEntry(foo);
+      tar.write(content);
+      tar.closeArchiveEntry();
+      tar.putArchiveEntry(new TarArchiveEntry("empty"));
+      tar.closeArchiveEntry();
+    }
+    return bytes.toByteArray();
+  }
+
+  private FakeRemoteExtractor setUpRepoWithRemoteExtraction(FakeRemoteDownloader downloader)
+      throws Exception {
+    downloadManager =
+        new DownloadManager(
+            Mockito.mock(DownloadCache.class),
+            downloader,
+            Mockito.mock(HttpDownloader.class),
+            Mockito.mock(ExtendedEventHandler.class));
+    allowLazyDownloads = true;
+    var extractor = new FakeRemoteExtractor();
+    setUpRepo(
+        ImmutableMap.of("name", "test"),
+        IgnoredSubdirectories.EMPTY,
+        ImmutableMap.of("FOO", "BAR"),
+        ImmutableMap.of("FOO", "BAR"),
+        StarlarkSemantics.DEFAULT,
+        extractor);
+    return extractor;
+  }
+
+  private StructImpl downloadAndExtract(String url, String output, String sha256) throws Exception {
+    return context.downloadAndExtract(
+        url,
+        output,
+        sha256,
+        /* type= */ "",
+        /* stripPrefix= */ "",
+        /* allowFail= */ false,
+        /* canonicalId= */ "",
+        Dict.empty(),
+        Dict.empty(),
+        /* integrity= */ "",
+        Dict.empty(),
+        /* oldStripPrefix= */ "",
+        StarlarkInt.of(0),
+        thread);
+  }
+
+  @Test
+  public void testRemoteExtraction_downloadAndExtract() throws Exception {
+    var downloader = new FakeRemoteDownloader(createTarGz());
+    var extractor = setUpRepoWithRemoteExtraction(downloader);
+
+    StructImpl result =
+        downloadAndExtract("https://example.com/archive.tar.gz", "out", downloader.sha256());
+
+    assertThat(result.getValue("success")).isEqualTo(true);
+    assertThat(result.getValue("sha256")).isEqualTo(downloader.sha256());
+    assertThat(downloader.downloads.get()).isEqualTo(0);
+    assertThat(extractor.extractedTypes).containsExactly("tar.gz");
+    Path out = outputDirectory.getRelative("out");
+    testOutputFile(out.getRelative("dir/foo"), "");
+    testOutputFile(out.getRelative("dir/tool.sh"), "");
+    assertThat(out.getRelative("dir/tool.sh").isExecutable()).isTrue();
+    testOutputFile(out.getRelative("empty"), "");
+    assertThat(out.getRelative("rel_link").readSymbolicLink())
+        .isEqualTo(PathFragment.create("dir/foo"));
+    // Absolute symlinks point into the output directory, just like after local extraction.
+    assertThat(out.getRelative("abs_link").readSymbolicLink())
+        .isEqualTo(out.getRelative("dir/foo").asFragment());
+    assertThat(context.getLazyDownloads().keySet())
+        .containsExactly(
+            PathFragment.create("out/dir/foo"), PathFragment.create("out/dir/tool.sh"));
+
+    // Reading a file through a symlink downloads it.
+    assertThat(context.readFile(context.getPath("out/abs_link"), "auto", thread))
+        .isEqualTo("foo content");
+    assertThat(extractor.downloads.get()).isEqualTo(1);
+    assertThat(context.getLazyDownloads().keySet())
+        .containsExactly(PathFragment.create("out/dir/tool.sh"));
+  }
+
+  @Test
+  public void testRemoteExtraction_extractLazilyDownloadedArchive() throws Exception {
+    var downloader = new FakeRemoteDownloader(createTarGz());
+    var extractor = setUpRepoWithRemoteExtraction(downloader);
+
+    download("archive.tar.gz", downloader.sha256());
+    context.extract(
+        "archive.tar.gz",
+        "out",
+        /* stripPrefix= */ "",
+        Dict.empty(),
+        /* watchArchive= */ "auto",
+        /* oldStripPrefix= */ "",
+        StarlarkInt.of(0),
+        /* type= */ "",
+        thread);
+
+    assertThat(downloader.downloads.get()).isEqualTo(0);
+    assertThat(extractor.extractedTypes).containsExactly("tar.gz");
+    assertThat(context.getLazyDownloads().keySet())
+        .containsExactly(
+            PathFragment.create("archive.tar.gz"),
+            PathFragment.create("out/dir/foo"),
+            PathFragment.create("out/dir/tool.sh"));
+  }
+
+  @Test
+  public void testRemoteExtraction_patchOnlyMaterializesAffectedFiles() throws Exception {
+    var downloader = new FakeRemoteDownloader(createTarGz());
+    var extractor = setUpRepoWithRemoteExtraction(downloader);
+
+    downloadAndExtract("https://example.com/archive.tar.gz", "", downloader.sha256());
+    context.createFile(
+        context.getPath("my.patch"),
+        "--- dir/foo\n+++ dir/foo\n@@ -1,1 +1,2 @@\n foo content\n+more content\n",
+        false,
+        true,
+        thread);
+    context.patch(context.getPath("my.patch"), StarlarkInt.of(0), "", "auto", thread);
+
+    testOutputFile(outputDirectory.getRelative("dir/foo"), "foo content\nmore content\n");
+    assertThat(extractor.downloads.get()).isEqualTo(1);
+    assertThat(context.getLazyDownloads().keySet())
+        .containsExactly(PathFragment.create("dir/tool.sh"));
+  }
+
+  @Test
+  public void testRemoteExtraction_invalidPatchMaterializesAllFiles() throws Exception {
+    var downloader = new FakeRemoteDownloader(createTarGz());
+    var extractor = setUpRepoWithRemoteExtraction(downloader);
+
+    downloadAndExtract("https://example.com/archive.tar.gz", "", downloader.sha256());
+    context.createFile(
+        context.getPath("my.patch"),
+        "--- dir/foo\n+++ dir/foo\n@@ -1,1 +1,2 @@\n",
+        false,
+        true,
+        thread);
+
+    assertThrows(
+        RepositoryFunctionException.class,
+        () -> context.patch(context.getPath("my.patch"), StarlarkInt.of(0), "", "auto", thread));
+    assertThat(extractor.downloads.get()).isEqualTo(2);
+    assertThat(context.getLazyDownloads()).isEmpty();
+    testOutputFile(outputDirectory.getRelative("dir/foo"), "foo content");
+    testOutputFile(outputDirectory.getRelative("dir/tool.sh"), "#!/bin/sh");
+    assertThat(outputDirectory.getRelative("dir/tool.sh").isExecutable()).isTrue();
+  }
+
+  @Test
+  public void testRemoteExtraction_compressedFileExtractedLocally() throws Exception {
+    var gzipped = new ByteArrayOutputStream();
+    try (var out = new GZIPOutputStream(gzipped)) {
+      out.write("hello".getBytes(StandardCharsets.UTF_8));
+    }
+    var downloader = new FakeRemoteDownloader(gzipped.toByteArray());
+    var extractor = setUpRepoWithRemoteExtraction(downloader);
+
+    downloadAndExtract("https://example.com/file.txt.gz", "", downloader.sha256());
+
+    assertThat(extractor.extractedTypes).isEmpty();
+    assertThat(downloader.downloads.get()).isEqualTo(1);
+    testOutputFile(outputDirectory.getRelative("file.txt"), "hello");
+  }
+
+  @Test
+  public void testRemoteExtraction_conflictWithExistingFilesExtractedLocally() throws Exception {
+    var downloader = new FakeRemoteDownloader(createTarGz());
+    var extractor = setUpRepoWithRemoteExtraction(downloader);
+    // Local extraction writes through the symlink.
+    scratch.dir("/outputDir/other");
+    context.symlink("other", "dir", thread);
+
+    downloadAndExtract("https://example.com/archive.tar.gz", "", downloader.sha256());
+
+    assertThat(extractor.extractedTypes).containsExactly("tar.gz");
+    assertThat(downloader.downloads.get()).isEqualTo(1);
+    testOutputFile(outputDirectory.getRelative("other/foo"), "foo content");
     assertThat(context.getLazyDownloads()).isEmpty();
   }
 }

@@ -868,4 +868,58 @@ public final class PatchUtilTest {
     assertThat(FileSystemUtils.readLines(foo, UTF_8)).containsExactly("foo_new");
     assertThat(FileSystemUtils.readLines(bar, UTF_8)).containsExactly("bar_new");
   }
+
+  @Test
+  public void testGetAffectedFiles() throws IOException, PatchFailedException {
+    scratch.file("/root/foo.cc", "line one");
+    scratch.file("/root/bar.cc", "content");
+    Path patchFile =
+        scratch.file(
+            "/root/patchfile",
+            "diff --git a/foo.cc b/foo.cc",
+            "index f3008f9..ec4aaa0 100644",
+            "--- a/foo.cc",
+            "+++ b/foo.cc",
+            "@@ -1 +1,2 @@",
+            " line one",
+            "+line two",
+            "diff --git a/bar.cc b/bar.cpp",
+            "similarity index 100%",
+            "rename from bar.cc",
+            "rename to bar.cpp",
+            "diff --git a/dir/new.txt b/dir/new.txt",
+            "new file mode 100644",
+            "index 0000000..f742c88",
+            "--- /dev/null",
+            "+++ b/dir/new.txt",
+            "@@ -0,0 +1 @@",
+            "+new");
+
+    assertThat(PatchUtil.getAffectedFiles(patchFile, 1, root))
+        .containsExactly(
+            root.getRelative("foo.cc"),
+            root.getRelative("bar.cc"),
+            root.getRelative("bar.cpp"),
+            root.getRelative("dir/new.txt"));
+    // The patch hasn't been applied.
+    assertThat(FileSystemUtils.readLines(root.getRelative("foo.cc"), UTF_8))
+        .containsExactly("line one");
+    assertThat(root.getRelative("bar.cc").exists()).isTrue();
+    assertThat(root.getRelative("bar.cpp").exists()).isFalse();
+    assertThat(root.getRelative("dir").exists()).isFalse();
+  }
+
+  @Test
+  public void testGetAffectedFiles_fileOutsideOfDirectory() throws IOException {
+    Path patchFile =
+        scratch.file(
+            "/root/patchfile",
+            "--- a/../outside.txt",
+            "+++ b/../outside.txt",
+            "@@ -1 +1,2 @@",
+            " line one",
+            "+line two");
+
+    assertThrows(PatchFailedException.class, () -> PatchUtil.getAffectedFiles(patchFile, 1, root));
+  }
 }

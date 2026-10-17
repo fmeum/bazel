@@ -416,6 +416,7 @@ public class DownloadManager {
     return metadata.map(
         m ->
             new RemoteDownload(
+                rewritten.urls().get(0),
                 ImmutableList.copyOf(originalUrls),
                 headers,
                 authHeaders,
@@ -432,6 +433,7 @@ public class DownloadManager {
    * <p>The remote cache has verified the contents against the checksum the file was requested with.
    */
   public final class RemoteDownload {
+    private final URI mainUrl;
     private final ImmutableList<URI> originalUrls;
     private final Map<String, List<String>> headers;
     private final Map<URI, Map<String, List<String>>> authHeaders;
@@ -442,6 +444,7 @@ public class DownloadManager {
     private final FileArtifactValue metadata;
 
     private RemoteDownload(
+        URI mainUrl,
         ImmutableList<URI> originalUrls,
         Map<String, List<String>> headers,
         Map<URI, Map<String, List<String>>> authHeaders,
@@ -450,6 +453,7 @@ public class DownloadManager {
         Map<String, String> clientEnv,
         String context,
         FileArtifactValue metadata) {
+      this.mainUrl = mainUrl;
       this.originalUrls = originalUrls;
       this.headers = headers;
       this.authHeaders = authHeaders;
@@ -463,6 +467,14 @@ public class DownloadManager {
     /** Returns the metadata of the file in the remote cache. */
     public FileArtifactValue getMetadata() {
       return metadata;
+    }
+
+    /**
+     * Returns the base name that {@link #startDownload} gives the file when downloading it as an
+     * archive of the given type, which may be empty, and which determines how it is extracted.
+     */
+    public String getArchiveBaseName(String type) {
+      return DownloadManager.getArchiveBaseName(mainUrl, type);
     }
 
     /**
@@ -641,16 +653,20 @@ public class DownloadManager {
     if (!type.isPresent()) {
       return output;
     }
+    return output.getRelative(getArchiveBaseName(url, type.get()));
+  }
+
+  private static String getArchiveBaseName(URI url, String type) {
     String basename = MoreObjects.firstNonNull(Strings.emptyToNull(getUrlBaseName(url)), "temp");
-    if (!type.get().isEmpty()) {
-      String suffix = "." + type.get();
+    if (!type.isEmpty()) {
+      String suffix = "." + type;
       if (!basename.endsWith(suffix)) {
         basename += suffix;
       }
     }
     // The basename may contain characters that aren't legal in a path with all file systems. Those
     // characters won't matter for type determination.
-    return output.getRelative(FS_UNSAFE_CHARS.replaceFrom(basename, '_'));
+    return FS_UNSAFE_CHARS.replaceFrom(basename, '_');
   }
 
   /**

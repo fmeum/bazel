@@ -19,6 +19,7 @@ import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import build.bazel.remote.execution.v2.ActionResult;
@@ -27,6 +28,7 @@ import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.ImmutableSortedMap;
+import com.google.devtools.build.lib.actions.FileArtifactValue;
 import com.google.devtools.build.lib.remote.CombinedCache.CachedActionResult;
 import com.google.devtools.build.lib.remote.common.RemoteExecutionClient;
 import com.google.devtools.build.lib.remote.util.DigestUtil;
@@ -34,6 +36,7 @@ import com.google.devtools.build.lib.runtime.RepositoryRemoteExecutor.ExecutionR
 import com.google.devtools.build.lib.testutil.TestConstants;
 import com.google.devtools.build.lib.vfs.DigestHashFunction;
 import com.google.devtools.build.lib.vfs.SyscallCache;
+import com.google.devtools.build.lib.vfs.inmemoryfs.InMemoryFileSystem;
 import com.google.protobuf.ByteString;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -69,7 +72,26 @@ public class RemoteRepositoryRemoteExecutorTest {
             "none",
             TestConstants.WORKSPACE_NAME,
             /* remoteInstanceName= */ "foo",
-            /* acceptCached= */ true);
+            /* acceptCached= */ true,
+            /* remoteExtraction= */ false,
+            /* extractionExecProperties= */ ImmutableMap.of(),
+            new InMemoryFileSystem(DigestHashFunction.SHA256));
+  }
+
+  @Test
+  public void testExtractArchive_disabled() throws Exception {
+    assertThat(
+            repoExecutor.extractArchive(
+                FileArtifactValue.createForRemoteFile(
+                    DigestUtil.toBinaryDigest(DIGEST_UTIL.compute(new byte[] {1})),
+                    1,
+                    /* locationIndex= */ 1),
+                "tar.gz",
+                /* stripPrefix= */ "",
+                /* stripComponents= */ 0,
+                /* renameFiles= */ ImmutableMap.of()))
+        .isNull();
+    verifyNoInteractions(remoteCache, remoteExecutor);
   }
 
   @Test

@@ -165,4 +165,30 @@ public class DecompressorValueTest {
     assertThat(expected).hasMessageThat().contains("No decompressor found for type baz");
     assertThat(expected).hasMessageThat().contains("Available types are: zip, jar");
   }
+
+  @Test
+  public void testGetArchiveType() {
+    assertThat(DecompressorValue.getArchiveType("bar.zip")).hasValue("zip");
+    assertThat(DecompressorValue.getArchiveType("bar.baz.tgz")).hasValue("tgz");
+    // Just like for archive paths, the first matching format wins.
+    assertThat(DecompressorValue.getArchiveType("bar.tar.gz")).hasValue("tar.gz");
+    assertThat(DecompressorValue.getArchiveType("bar.gz")).hasValue("gz");
+    assertThat(DecompressorValue.getArchiveType("bar.tar.gz.zip")).hasValue("zip");
+    assertThat(DecompressorValue.getArchiveType("bar")).isEmpty();
+    assertThat(DecompressorValue.getArchiveType("bar.baz")).isEmpty();
+  }
+
+  @Test
+  public void testIsExtractedIndependentlyOfName() {
+    assertThat(DecompressorValue.isExtractedIndependentlyOfName("zip")).isTrue();
+    assertThat(DecompressorValue.isExtractedIndependentlyOfName("tar.gz")).isTrue();
+    assertThat(DecompressorValue.isExtractedIndependentlyOfName("tzst")).isTrue();
+    assertThat(DecompressorValue.isExtractedIndependentlyOfName("7z")).isTrue();
+    assertThat(DecompressorValue.isExtractedIndependentlyOfName("deb")).isTrue();
+    // Compressed single files are named after the archive.
+    assertThat(DecompressorValue.isExtractedIndependentlyOfName("gz")).isFalse();
+    assertThat(DecompressorValue.isExtractedIndependentlyOfName("zst")).isFalse();
+    assertThat(DecompressorValue.isExtractedIndependentlyOfName("br")).isFalse();
+    assertThat(DecompressorValue.isExtractedIndependentlyOfName("unknown")).isFalse();
+  }
 }

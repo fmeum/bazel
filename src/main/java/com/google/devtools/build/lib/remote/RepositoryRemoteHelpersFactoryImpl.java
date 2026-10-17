@@ -13,6 +13,7 @@
 // limitations under the License.
 package com.google.devtools.build.lib.remote;
 
+import com.google.common.collect.ImmutableMap;
 import com.google.devtools.build.lib.analysis.BlazeDirectories;
 import com.google.devtools.build.lib.remote.common.RemoteExecutionClient;
 import com.google.devtools.build.lib.runtime.RemoteRepoContentsCache;
@@ -34,6 +35,8 @@ class RepositoryRemoteHelpersFactoryImpl implements RepositoryRemoteHelpersFacto
   private final boolean acceptCached;
   private final boolean uploadLocalResults;
   private final boolean lazyDownloads;
+  private final boolean remoteExtraction;
+  private final ImmutableMap<String, String> extractionExecProperties;
   private final boolean verboseFailures;
 
   RepositoryRemoteHelpersFactoryImpl(
@@ -47,6 +50,8 @@ class RepositoryRemoteHelpersFactoryImpl implements RepositoryRemoteHelpersFacto
       boolean acceptCached,
       boolean uploadLocalResults,
       boolean lazyDownloads,
+      boolean remoteExtraction,
+      ImmutableMap<String, String> extractionExecProperties,
       boolean verboseFailures) {
     this.directories = directories;
     this.cache = cache;
@@ -58,6 +63,8 @@ class RepositoryRemoteHelpersFactoryImpl implements RepositoryRemoteHelpersFacto
     this.acceptCached = acceptCached;
     this.uploadLocalResults = uploadLocalResults;
     this.lazyDownloads = lazyDownloads;
+    this.remoteExtraction = remoteExtraction;
+    this.extractionExecProperties = extractionExecProperties;
     this.verboseFailures = verboseFailures;
   }
 
@@ -75,7 +82,10 @@ class RepositoryRemoteHelpersFactoryImpl implements RepositoryRemoteHelpersFacto
         commandId,
         workspaceName,
         remoteInstanceName,
-        acceptCached);
+        acceptCached,
+        lazyDownloads && remoteExtraction,
+        extractionExecProperties,
+        directories.getOutputBase().getFileSystem());
   }
 
   @Nullable

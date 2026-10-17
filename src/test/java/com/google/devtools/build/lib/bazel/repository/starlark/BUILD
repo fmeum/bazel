@@ -54,6 +54,7 @@ java_library(
         "//src/test/java/com/google/devtools/build/lib/analysis/util",
         "//src/test/java/com/google/devtools/build/lib/starlark/util",
         "//src/test/java/com/google/devtools/build/lib/testutil",
+        "//third_party/java/apache_commons_compress:tar",
         "//third_party/java/apache_commons_lang3",
         "//third_party/java/auth_kit:credentials",
         "//third_party/java/guava:collect",

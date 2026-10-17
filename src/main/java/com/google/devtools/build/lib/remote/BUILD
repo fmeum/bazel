@@ -902,6 +902,7 @@ java_library(
         "//src/main/java/com/google/devtools/build/lib/runtime:remote_repo_contents_cache",
         "//src/main/java/com/google/devtools/build/lib/runtime:repository_remote_executor",
         "//src/main/java/com/google/devtools/build/lib/runtime:repository_remote_helpers_factory",
+        "//third_party/java/guava:collect",
         "//third_party/java/jsr305_annotations",
     ],
 )
@@ -916,6 +917,7 @@ java_library(
     deps = [
         ":combined_cache",
         ":remote_execution_cache",
+        "//src/main/java/com/google/devtools/build/lib/actions:file_metadata",
         "//src/main/java/com/google/devtools/build/lib/analysis/platform:platform_utils",
         "//src/main/java/com/google/devtools/build/lib/profiler",
         "//src/main/java/com/google/devtools/build/lib/remote/common",
@@ -926,9 +928,12 @@ java_library(
         "//src/main/java/com/google/devtools/build/lib/remote/util:tracing_metadata_utils",
         "//src/main/java/com/google/devtools/build/lib/remote/util:utils",
         "//src/main/java/com/google/devtools/build/lib/runtime:repository_remote_executor",
+        "//src/main/java/com/google/devtools/build/lib/util:string_encoding",
         "//src/main/java/com/google/devtools/build/lib/vfs",
         "//src/main/java/com/google/devtools/build/lib/vfs:pathfragment",
+        "//third_party/java/guava:base",
         "//third_party/java/guava:collect",
+        "//third_party/java/jsr305_annotations",
         "//third_party/java/protobuf",
         "@remoteapis//:build_bazel_remote_execution_v2_remote_execution_java_proto",
     ],

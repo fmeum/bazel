@@ -504,9 +504,11 @@ java_library(
     name = "repository_remote_executor",
     srcs = ["RepositoryRemoteExecutor.java"],
     deps = [
+        "//src/main/java/com/google/devtools/build/lib/actions:file_metadata",
         "//src/main/java/com/google/devtools/build/lib/vfs",
         "//src/main/java/com/google/devtools/build/lib/vfs:pathfragment",
         "//third_party/java/guava:collect",
+        "//third_party/java/jsr305_annotations",
     ],
 )
 

@@ -224,6 +224,24 @@ public abstract class RemoteOptions extends CommonRemoteOptions {
   public abstract void setRemoteRepoLazyDownloads(boolean value);
 
   @Option(
+      name = "experimental_remote_repo_extraction",
+      defaultValue = "false",
+      documentationCategory = OptionDocumentationCategory.REMOTE,
+      metadataTags = OptionMetadataTag.EXPERIMENTAL,
+      effectTags = {OptionEffectTag.LOADING_AND_ANALYSIS},
+      help =
+          "If enabled together with --experimental_remote_repo_lazy_downloads and"
+              + " --remote_executor, archives that repository rules download with a known checksum"
+              + " are extracted by an action on the remote executor instead of being downloaded."
+              + " The action runs the archive extraction logic of the Bazel server with the JDK of"
+              + " the server, which the remote executor thus has to be able to run, and is executed"
+              + " with the properties given by --remote_default_exec_properties. The extracted"
+              + " files are only downloaded when they are needed.")
+  public abstract boolean getRemoteRepoExtraction();
+
+  public abstract void setRemoteRepoExtraction(boolean value);
+
+  @Option(
       name = "remote_header",
       converter = Converters.AssignmentConverter.class,
       defaultValue = "null",

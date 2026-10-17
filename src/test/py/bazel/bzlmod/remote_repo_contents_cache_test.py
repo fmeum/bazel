@@ -18,9 +18,11 @@
 import functools
 import hashlib
 import http.server
+import io
 import json
 import os
 import re
+import tarfile
 import tempfile
 import threading
 from absl.testing import absltest
@@ -3022,6 +3024,109 @@ class RemoteRepoContentsCacheTest(test_base.TestBase):
       self.assertEqual(f.read(), 'lazy data\n')
 
     self.assertEqual(self.CountActionCacheEntries(), 0)
+
+  def testRemoteExtraction(self):
+    archive_dir = tempfile.mkdtemp(dir=os.environ['TEST_TMPDIR'])
+    big_content = bytes(range(256)) * 8192
+    files = {
+        'pkg-1.0/a.txt': (b'hello\nworld\n', 0o644),
+        'pkg-1.0/big.bin': (big_content, 0o644),
+        'pkg-1.0/tool.sh': (b'#!/bin/sh\necho tool\n', 0o755),
+    }
+    with tarfile.open(os.path.join(archive_dir, 'pkg.tar.gz'), 'w:gz') as tar:
+      for name, (content, mode) in files.items():
+        info = tarfile.TarInfo(name)
+        info.size = len(content)
+        info.mode = mode
+        tar.addfile(info, io.BytesIO(content))
+      link = tarfile.TarInfo('pkg-1.0/abs_link')
+      link.type = tarfile.SYMTYPE
+      link.linkname = '/pkg-1.0/big.bin'
+      tar.addfile(link)
+    with open(os.path.join(archive_dir, 'pkg.tar.gz'), 'rb') as f:
+      sha256 = hashlib.sha256(f.read()).hexdigest()
+    port = self.StartHttpServer(archive_dir)
+    self.ScratchFile(
+        'MODULE.bazel',
+        [
+            (
+                'http_archive = use_repo_rule('
+                '"@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")'
+            ),
+            'http_archive(',
+            '  name = "pkg",',
+            '  sha256 = "%s",' % sha256,
+            '  urls = ["http://127.0.0.1:%d/pkg.tar.gz"],' % port,
+            '  strip_prefix = "pkg-1.0",',
+            '  patches = ["//:a.patch"],',
+            '  patch_strip = 1,',
+            '  build_file_content = "exports_files(glob([\'**\']))",',
+            ')',
+        ],
+    )
+    self.ScratchFile(
+        'a.patch',
+        [
+            '--- a/a.txt',
+            '+++ b/a.txt',
+            '@@ -1,2 +1,2 @@',
+            ' hello',
+            '-world',
+            '+patched',
+        ],
+    )
+    self.ScratchFile(
+        'BUILD.bazel',
+        [
+            'exports_files(["a.patch"])',
+            'genrule(',
+            '  name = "remote",',
+            '  srcs = ["@pkg//:a.txt", "@pkg//:big.bin"],',
+            '  outs = ["remote.txt"],',
+            '  cmd = "cat $(location @pkg//:a.txt) > $@ &&'
+            ' $(location @pkg//:tool.sh) >> $@ &&'
+            ' sha256sum $(location @pkg//:big.bin) | cut -d\' \' -f1 >> $@",',
+            '  tools = ["@pkg//:tool.sh"],',
+            ')',
+            'genrule(',
+            '  name = "local",',
+            '  srcs = ["@pkg//:abs_link"],',
+            '  outs = ["local.txt"],',
+            '  cmd = "sha256sum $< | cut -d\' \' -f1 > $@",',
+            '  tags = ["no-remote"],',
+            ')',
+        ],
+    )
+    flags = self.LazyDownloadFlags() + [
+        '--remote_executor=grpc://localhost:' + str(self._worker_port),
+        '--experimental_remote_repo_extraction',
+        '--remote_download_outputs=toplevel',
+    ]
+    big_sha256 = hashlib.sha256(big_content).hexdigest()
+    big_file = os.path.join(self.RepoDir('pkg'), 'big.bin')
+
+    # The archive is extracted remotely and its files are only downloaded when
+    # needed, but the patch is applied.
+    self.RunBazel(['build', '//:remote'] + flags)
+    with open(self.Path('bazel-bin/remote.txt')) as f:
+      self.assertEqual(f.read(), 'hello\npatched\ntool\n%s\n' % big_sha256)
+    self.assertFalse(os.path.exists(big_file))
+    # The only action cache entries are those written by the remote executor.
+    ac_entries = self.CountActionCacheEntries()
+    self.assertGreater(ac_entries, 1)
+
+    # A local action that reads a file downloads it.
+    self.RunBazel(['build', '//:local'] + flags)
+    with open(self.Path('bazel-bin/local.txt')) as f:
+      self.assertEqual(f.read(), big_sha256 + '\n')
+
+    # After a clean, the extraction is a cache hit.
+    self.RunBazel(['clean', '--expunge'])
+    self.RunBazel(['build', '//:remote'] + flags)
+    with open(self.Path('bazel-bin/remote.txt')) as f:
+      self.assertEqual(f.read(), 'hello\npatched\ntool\n%s\n' % big_sha256)
+    self.assertFalse(os.path.exists(big_file))
+    self.assertEqual(self.CountActionCacheEntries(), ac_entries)
 
 
 if __name__ == '__main__':

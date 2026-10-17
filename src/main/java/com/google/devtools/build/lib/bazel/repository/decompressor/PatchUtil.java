@@ -23,6 +23,7 @@ import com.github.difflib.patch.PatchFailedException;
 import com.google.common.base.Preconditions;
 import com.google.common.base.Splitter;
 import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Iterables;
 import com.google.common.collect.Lists;
 import com.google.devtools.build.lib.vfs.FileSystemUtils;
@@ -30,6 +31,7 @@ import com.google.devtools.build.lib.vfs.Path;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.function.Consumer;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import javax.annotation.Nullable;
@@ -426,7 +428,23 @@ public class PatchUtil {
    */
   public static void apply(Path patchFile, int strip, Path outputDirectory)
       throws IOException, PatchFailedException {
-    applyInternal(patchFile, strip, outputDirectory, /* singleFile= */ null);
+    applyInternal(
+        patchFile, strip, outputDirectory, /* singleFile= */ null, /* affectedFiles= */ null);
+  }
+
+  /**
+   * Returns the files that applying a patch file under a directory would read or write, without
+   * applying it.
+   *
+   * @param patchFile the patch file to apply
+   * @param strip the number of leading components to strip from file path in the patch file
+   * @param outputDirectory the directory to apply the patch file to
+   */
+  public static ImmutableSet<Path> getAffectedFiles(Path patchFile, int strip, Path outputDirectory)
+      throws IOException, PatchFailedException {
+    var affectedFiles = ImmutableSet.<Path>builder();
+    applyInternal(patchFile, strip, outputDirectory, /* singleFile= */ null, affectedFiles::add);
+    return affectedFiles.build();
   }
 
   /**
@@ -442,11 +460,19 @@ public class PatchUtil {
   public static void applyToSingleFile(
       Path patchFile, int strip, Path outputDirectory, Path singleFile)
       throws IOException, PatchFailedException {
-    applyInternal(patchFile, strip, outputDirectory, singleFile);
+    applyInternal(patchFile, strip, outputDirectory, singleFile, /* affectedFiles= */ null);
   }
 
+  /**
+   * Applies a patch file, or only reports the files it would read or write to {@code affectedFiles}
+   * if non-null.
+   */
   private static void applyInternal(
-      Path patchFile, int strip, Path outputDirectory, @Nullable Path singleFile)
+      Path patchFile,
+      int strip,
+      Path outputDirectory,
+      @Nullable Path singleFile,
+      @Nullable Consumer<Path> affectedFiles)
       throws IOException, PatchFailedException {
     if (!patchFile.exists()) {
       throw new PatchFailedException("Cannot find patch file: " + patchFile.getPathString());
@@ -597,7 +623,14 @@ public class PatchUtil {
             checkPatchContentIsComplete(
                 patchContent, header, oldLineCount, newLineCount, patchStartLocation);
 
-            if (isRenaming) {
+            if (affectedFiles != null) {
+              if (oldFile != null) {
+                affectedFiles.accept(oldFile);
+              }
+              if (newFile != null) {
+                affectedFiles.accept(newFile);
+              }
+            } else if (isRenaming) {
               if (singleFile != null) {
                 if (singleFile.equals(newFile) || singleFile.equals(oldFile)) {
                   throw new PatchFailedException(
@@ -620,7 +653,9 @@ public class PatchUtil {
                       patchStartLocation));
             }
 
-            if (singleFile == null || (singleFile.equals(newFile) && singleFile.equals(oldFile))) {
+            if (affectedFiles == null
+                && (singleFile == null
+                    || (singleFile.equals(newFile) && singleFile.equals(oldFile)))) {
               Patch<String> patch = UnifiedDiffUtils.parseUnifiedDiff(patchContent);
               checkFilesStatusForPatching(
                   patch, oldFile, newFile, oldFileStr, newFileStr, patchStartLocation);

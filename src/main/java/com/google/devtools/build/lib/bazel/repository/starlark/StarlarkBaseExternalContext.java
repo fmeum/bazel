@@ -22,12 +22,14 @@ import static java.nio.charset.StandardCharsets.UTF_8;
 import com.google.common.base.Ascii;
 import com.google.common.base.Splitter;
 import com.google.common.base.Strings;
+import com.google.common.base.Throwables;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSortedMap;
 import com.google.common.collect.Maps;
 import com.google.common.flogger.GoogleLogger;
 import com.google.common.util.concurrent.Futures;
+import com.google.devtools.build.lib.actions.FileArtifactValue;
 import com.google.devtools.build.lib.analysis.BlazeDirectories;
 import com.google.devtools.build.lib.bazel.debug.WorkspaceRuleEvent;
 import com.google.devtools.build.lib.bazel.repository.RepositoryFunctionException;
@@ -62,6 +64,7 @@ import com.google.devtools.build.lib.runtime.RepositoryRemoteExecutor.ExecutionR
 import com.google.devtools.build.lib.unsafe.StringUnsafe;
 import com.google.devtools.build.lib.util.OsUtils;
 import com.google.devtools.build.lib.util.io.OutErr;
+import com.google.devtools.build.lib.vfs.FileStatus;
 import com.google.devtools.build.lib.vfs.FileSystemUtils;
 import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.build.lib.vfs.PathFragment;
@@ -90,9 +93,11 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.Semaphore;
 import java.util.function.Predicate;
 import javax.annotation.Nullable;
 import net.starlark.java.annot.Param;
@@ -668,13 +673,74 @@ public abstract class StarlarkBaseExternalContext implements AutoCloseable, Star
   /**
    * A file that has been downloaded lazily: its contents are available in the remote cache, but
    * only an empty placeholder exists locally.
+   *
+   * @param metadata the metadata of the file in the remote cache
+   * @param materializer downloads the contents of the file to a given path
    */
-  public record LazyDownload(DownloadManager.RemoteDownload remoteDownload, boolean executable) {
+  public record LazyDownload(
+      FileArtifactValue metadata, boolean executable, Materializer materializer) {
+    /** Downloads the contents of a lazily downloaded file. */
+    @FunctionalInterface
+    public interface Materializer {
+      void materialize(Path destination) throws IOException, InterruptedException;
+    }
+
+    // Limits the number of files downloaded at the same time, each of which may keep a file open.
+    private static final int MAX_PARALLEL_MATERIALIZATIONS = 64;
+
     /** Replaces the given placeholder with the actual contents of the file. */
     public void materialize(Path placeholder) throws IOException, InterruptedException {
-      remoteDownload.materialize(placeholder);
+      materializer.materialize(placeholder);
       if (executable) {
         placeholder.setExecutable(true);
+      }
+    }
+
+    /**
+     * Replaces the given placeholders with the actual contents of their files, which are downloaded
+     * in parallel.
+     */
+    public static void materializeAll(Map<Path, LazyDownload> lazyDownloads)
+        throws IOException, InterruptedException {
+      if (lazyDownloads.size() <= 1) {
+        for (var entry : lazyDownloads.entrySet()) {
+          entry.getValue().materialize(entry.getKey());
+        }
+        return;
+      }
+      var permits = new Semaphore(MAX_PARALLEL_MATERIALIZATIONS);
+      var futures = new ArrayList<Future<?>>(lazyDownloads.size());
+      try (var executor =
+          Executors.newThreadPerTaskExecutor(
+              Thread.ofVirtual().name("materialize-lazy-downloads-", 0).factory())) {
+        try {
+          for (var entry : lazyDownloads.entrySet()) {
+            futures.add(
+                executor.submit(
+                    () -> {
+                      permits.acquire();
+                      try {
+                        entry.getValue().materialize(entry.getKey());
+                      } finally {
+                        permits.release();
+                      }
+                      return null;
+                    }));
+          }
+          for (Future<?> future : futures) {
+            future.get();
+          }
+        } catch (ExecutionException e) {
+          Throwables.throwIfInstanceOf(e.getCause(), IOException.class);
+          Throwables.throwIfInstanceOf(e.getCause(), InterruptedException.class);
+          Throwables.throwIfUnchecked(e.getCause());
+          throw new IllegalStateException(e);
+        } finally {
+          // Stops the remaining downloads after a failure or an interruption.
+          for (Future<?> future : futures) {
+            future.cancel(/* mayInterruptIfRunning= */ true);
+          }
+        }
       }
     }
   }
@@ -695,19 +761,44 @@ public abstract class StarlarkBaseExternalContext implements AutoCloseable, Star
   public ImmutableMap<PathFragment, LazyDownload> getLazyDownloads() {
     var result = ImmutableMap.<PathFragment, LazyDownload>builder();
     for (var entry : lazyDownloads.entrySet()) {
-      Path placeholder = entry.getKey();
-      // A placeholder that has been replaced or deleted in a way not tracked by this context
-      // doesn't stand for a lazily downloaded file anymore.
-      try {
-        if (!placeholder.isFile(Symlinks.NOFOLLOW) || placeholder.getFileSize() != 0) {
-          continue;
-        }
-      } catch (IOException e) {
-        continue;
+      if (isPlaceholder(entry.getKey())) {
+        result.put(entry.getKey().relativeTo(workingDirectory), entry.getValue());
       }
-      result.put(placeholder.relativeTo(workingDirectory), entry.getValue());
     }
     return result.buildOrThrow();
+  }
+
+  /** Whether any files have been downloaded lazily and may still only exist as placeholders. */
+  protected boolean hasLazyDownloads() {
+    return !lazyDownloads.isEmpty();
+  }
+
+  /**
+   * Returns the lazily downloaded file whose placeholder is at the given path, possibly after
+   * following symlinks, or null if there is none.
+   */
+  @Nullable
+  private LazyDownload getLazyDownload(Path path) {
+    LazyDownload lazyDownload = lazyDownloads.get(path);
+    if (lazyDownload == null) {
+      try {
+        path = path.resolveSymbolicLinks();
+      } catch (IOException e) {
+        return null;
+      }
+      lazyDownload = lazyDownloads.get(path);
+    }
+    return lazyDownload != null && isPlaceholder(path) ? lazyDownload : null;
+  }
+
+  private static boolean isPlaceholder(Path path) {
+    // A placeholder that has been replaced or deleted in a way not tracked by this context doesn't
+    // stand for a lazily downloaded file anymore.
+    try {
+      return path.isFile(Symlinks.NOFOLLOW) && path.getFileSize() == 0;
+    } catch (IOException e) {
+      return false;
+    }
   }
 
   /**
@@ -739,19 +830,13 @@ public abstract class StarlarkBaseExternalContext implements AutoCloseable, Star
 
   private void materializeLazyDownloadsIf(Predicate<Path> predicate)
       throws RepositoryFunctionException, InterruptedException {
-    var it = lazyDownloads.entrySet().iterator();
-    while (it.hasNext()) {
-      var entry = it.next();
-      if (!predicate.test(entry.getKey())) {
-        continue;
-      }
-      try {
-        entry.getValue().materialize(entry.getKey());
-      } catch (IOException e) {
-        throw new RepositoryFunctionException(e, Transience.TRANSIENT);
-      }
-      it.remove();
+    var toMaterialize = Maps.filterKeys(lazyDownloads, predicate::test);
+    try {
+      LazyDownload.materializeAll(toMaterialize);
+    } catch (IOException e) {
+      throw new RepositoryFunctionException(e, Transience.TRANSIENT);
     }
+    toMaterialize.clear();
   }
 
   /** Forgets about the lazily downloaded files at or below the given path, which is replaced. */
@@ -810,21 +895,31 @@ public abstract class StarlarkBaseExternalContext implements AutoCloseable, Star
     if (remoteDownload.isEmpty()) {
       return null;
     }
-    long size = remoteDownload.get().getMetadata().getSize();
+    FileArtifactValue metadata = remoteDownload.get().getMetadata();
     try {
-      output.delete();
-      FileSystemUtils.createEmptyFile(output);
-      if (executable) {
-        output.setExecutable(true);
-      }
+      createPlaceholder(
+          output, new LazyDownload(metadata, executable, remoteDownload.get()::materialize));
     } catch (IOException e) {
       throw new RepositoryFunctionException(e, Transience.TRANSIENT);
     }
-    // The placeholder of an empty file already has the actual contents.
-    if (size > 0) {
-      lazyDownloads.put(output, new LazyDownload(remoteDownload.get(), executable));
-    }
+    return createLazyDownloadResult(checksum, metadata.getSize());
+  }
 
+  /** Replaces the file at the given path with an empty placeholder for a lazily downloaded file. */
+  private void createPlaceholder(Path path, LazyDownload lazyDownload) throws IOException {
+    path.delete();
+    lazyDownloads.remove(path);
+    FileSystemUtils.createEmptyFile(path);
+    if (lazyDownload.executable()) {
+      path.setExecutable(true);
+    }
+    // The placeholder of an empty file already has the actual contents.
+    if (lazyDownload.metadata().getSize() > 0) {
+      lazyDownloads.put(path, lazyDownload);
+    }
+  }
+
+  private static StructImpl createLazyDownloadResult(Checksum checksum, long size) {
     ImmutableMap.Builder<String, Object> out = ImmutableMap.builder();
     out.put("success", true);
     out.put("integrity", checksum.toSubresourceIntegrity());
@@ -834,6 +929,119 @@ public abstract class StarlarkBaseExternalContext implements AutoCloseable, Star
     }
     out.put("size_bytes", StarlarkInt.of(size));
     return StarlarkInfo.create(StructProvider.STRUCT, out.buildOrThrow());
+  }
+
+  /**
+   * Extracts an archive that is available in the remote cache on the remote executor and creates
+   * empty placeholders for the extracted files in the given directory, which are replaced with
+   * their actual contents when they are needed.
+   *
+   * @param archiveBaseName the base name that determines the type of the archive when it is
+   *     extracted locally
+   * @return whether the archive has been extracted, which is false if it has to be extracted
+   *     locally
+   */
+  private boolean tryExtractRemotely(
+      FileArtifactValue archive,
+      String archiveBaseName,
+      Optional<String> forcedType,
+      String stripPrefix,
+      int stripComponents,
+      Map<String, String> renameFiles,
+      Path output)
+      throws RepositoryFunctionException, InterruptedException {
+    if (remoteExecutor == null || !allowLazyDownloads()) {
+      return false;
+    }
+    // Compressed single files are named after the archive, which is only known locally.
+    Optional<String> type = forcedType.or(() -> DecompressorValue.getArchiveType(archiveBaseName));
+    if (type.isEmpty() || !DecompressorValue.isExtractedIndependentlyOfName(type.get())) {
+      return false;
+    }
+    env.getListener()
+        .post(
+            new ExtractProgress(output.toString(), "Extracting " + archiveBaseName + " remotely"));
+    RepositoryRemoteExecutor.ExtractedArchive extracted;
+    try (SilentCloseable c =
+        Profiler.instance().profile("extracting remotely: " + identifyingStringForLogging)) {
+      extracted =
+          remoteExecutor.extractArchive(
+              archive, type.get(), stripPrefix, stripComponents, ImmutableMap.copyOf(renameFiles));
+    } catch (IOException e) {
+      env.getListener()
+          .handle(
+              Event.debug(
+                  "Failed to extract %s remotely for %s, extracting it locally instead: %s"
+                      .formatted(archiveBaseName, identifyingStringForLogging, e.getMessage())));
+      extracted = null;
+    }
+    if (extracted == null) {
+      env.getListener().post(new ExtractProgress(output.toString()));
+      return false;
+    }
+    try {
+      if (!createRemotelyExtractedFiles(extracted, output)) {
+        env.getListener().post(new ExtractProgress(output.toString()));
+        return false;
+      }
+    } catch (IOException e) {
+      throw new RepositoryFunctionException(e, Transience.TRANSIENT);
+    }
+    env.getListener().post(new ExtractProgress(output.toString()));
+    return true;
+  }
+
+  /**
+   * Creates the files of a remotely extracted archive in the given directory, with empty
+   * placeholders for regular files.
+   *
+   * @return false if nothing has been created since the archive would replace existing files in a
+   *     way that only local extraction reproduces faithfully
+   */
+  private boolean createRemotelyExtractedFiles(
+      RepositoryRemoteExecutor.ExtractedArchive extracted, Path output) throws IOException {
+    for (RepositoryRemoteExecutor.TreeEntry entry : extracted.entries()) {
+      FileStatus status = output.getRelative(entry.path()).statIfFound(Symlinks.NOFOLLOW);
+      if (status == null) {
+        continue;
+      }
+      boolean replaceable =
+          switch (entry) {
+            case RepositoryRemoteExecutor.TreeEntry.Directory directory -> status.isDirectory();
+            case RepositoryRemoteExecutor.TreeEntry.File file -> status.isFile();
+            case RepositoryRemoteExecutor.TreeEntry.Symlink symlink -> !status.isDirectory();
+          };
+      if (!replaceable) {
+        return false;
+      }
+    }
+    output.createDirectoryAndParents();
+    for (RepositoryRemoteExecutor.TreeEntry entry : extracted.entries()) {
+      Path path = output.getRelative(entry.path());
+      switch (entry) {
+        case RepositoryRemoteExecutor.TreeEntry.Directory directory ->
+            path.createDirectoryAndParents();
+        case RepositoryRemoteExecutor.TreeEntry.File file ->
+            createPlaceholder(
+                path,
+                new LazyDownload(
+                    file.metadata(),
+                    file.executable(),
+                    destination -> extracted.downloadFile(file.metadata(), destination)));
+        case RepositoryRemoteExecutor.TreeEntry.Symlink symlink -> {
+          path.delete();
+          lazyDownloads.remove(path);
+          path.getParentDirectory().createDirectoryAndParents();
+          // Absolute targets are made to point into the output directory, just like when
+          // extracting locally.
+          path.createSymbolicLink(
+              symlink.targetUnderRoot()
+                  ? output.getRelative(symlink.target()).asFragment()
+                  : symlink.target());
+        }
+      }
+    }
+    return true;
   }
 
   @StarlarkMethod(
@@ -1288,6 +1496,35 @@ Strip the given number of leading components from file paths on extraction. Only
     StarlarkPath outputPath = getPath(output);
     checkInOutputDirectory("write", outputPath);
     createDirectory(outputPath.getPath());
+
+    if (checksum.isPresent() && checksumValidation == null && remoteExecutor != null) {
+      Optional<DownloadManager.RemoteDownload> remoteDownload =
+          allowLazyDownloads()
+              ? downloadManager.startRemoteDownload(
+                  urls,
+                  headers,
+                  authHeaders,
+                  checksum.get(),
+                  canonicalId,
+                  nonstrictRepoEnv,
+                  identifyingStringForLogging)
+              : Optional.empty();
+      if (remoteDownload.isPresent()
+          && tryExtractRemotely(
+              remoteDownload.get().getMetadata(),
+              remoteDownload.get().getArchiveBaseName(type),
+              // Like below, the type is only used to determine the name of the archive.
+              /* forcedType= */ Optional.empty(),
+              stripPrefix,
+              stripComponents,
+              renameFilesMap,
+              outputPath.getPath())) {
+        env.getListener().post(w);
+        return createLazyDownloadResult(
+            checksum.get(), remoteDownload.get().getMetadata().getSize());
+      }
+    }
+
     // Extracted files may replace the placeholders of lazily downloaded files.
     materializeLazyDownloads(outputPath.getPath());
 
@@ -1538,9 +1775,6 @@ Strip the given number of leading components from file paths on extraction. Only
 
     StarlarkPath outputPath = getPath(output);
     checkInOutputDirectory("write", outputPath);
-    // Extracted files may replace the placeholders of lazily downloaded files.
-    materializeLazyDownloads(archivePath.getPath());
-    materializeLazyDownloads(outputPath.getPath());
 
     Map<String, String> renameFilesMap =
         Dict.cast(renameFiles, String.class, String.class, "rename_files");
@@ -1554,6 +1788,24 @@ Strip the given number of leading components from file paths on extraction. Only
             identifyingStringForLogging,
             thread.getCallerLocation());
     env.getListener().post(w);
+
+    Optional<String> forcedType = Optional.ofNullable(type).filter(s -> !s.isBlank());
+    LazyDownload lazyArchive = getLazyDownload(archivePath.getPath());
+    if (lazyArchive != null
+        && tryExtractRemotely(
+            lazyArchive.metadata(),
+            archivePath.getBasename(),
+            forcedType,
+            stripPrefix,
+            stripComponents,
+            renameFilesMap,
+            outputPath.getPath())) {
+      return;
+    }
+
+    // Extracted files may replace the placeholders of lazily downloaded files.
+    materializeLazyDownloads(archivePath.getPath());
+    materializeLazyDownloads(outputPath.getPath());
 
     env.getListener()
         .post(
@@ -1569,8 +1821,7 @@ Strip the given number of leading components from file paths on extraction. Only
     if (!stripPrefix.isEmpty()) {
       descriptorBuilder.setPrefix(stripPrefix);
     }
-    DecompressorValue.decompress(
-        descriptorBuilder.build(), Optional.ofNullable(type).filter(s -> !s.isBlank()));
+    DecompressorValue.decompress(descriptorBuilder.build(), forcedType);
     env.getListener().post(new ExtractProgress(outputPath.getPath().toString()));
   }
 

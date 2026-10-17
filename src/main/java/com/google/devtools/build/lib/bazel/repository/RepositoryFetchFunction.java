@@ -74,6 +74,7 @@ import com.google.devtools.build.skyframe.SkyKey;
 import com.google.devtools.build.skyframe.SkyValue;
 import com.google.devtools.build.skyframe.WorkerSkyKeyComputeState;
 import java.io.IOException;
+import java.util.LinkedHashMap;
 import java.util.Optional;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.ExecutionException;
@@ -471,8 +472,7 @@ public final class RepositoryFetchFunction implements SkyFunction {
             repositoryName,
             repoRoot,
             digestWriter.getMarkerFileContent(result.recordedInputValues()),
-            Maps.transformValues(
-                result.lazyDownloads(), download -> download.remoteDownload().getMetadata()),
+            Maps.transformValues(result.lazyDownloads(), LazyDownload::metadata),
             env.getListener())) {
           return true;
         }
@@ -480,12 +480,15 @@ public final class RepositoryFetchFunction implements SkyFunction {
         throw new RepositoryFunctionException(e, Transience.TRANSIENT);
       }
     }
-    for (var entry : result.lazyDownloads().entrySet()) {
-      try {
-        entry.getValue().materialize(repoRoot.getRelative(entry.getKey()));
-      } catch (IOException e) {
-        throw new RepositoryFunctionException(e, Transience.TRANSIENT);
-      }
+    var lazyDownloads = new LinkedHashMap<Path, LazyDownload>();
+    result
+        .lazyDownloads()
+        .forEach(
+            (path, lazyDownload) -> lazyDownloads.put(repoRoot.getRelative(path), lazyDownload));
+    try {
+      LazyDownload.materializeAll(lazyDownloads);
+    } catch (IOException e) {
+      throw new RepositoryFunctionException(e, Transience.TRANSIENT);
     }
     return false;
   }
