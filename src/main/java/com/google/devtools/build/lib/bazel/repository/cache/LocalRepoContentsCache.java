@@ -256,10 +256,23 @@ public final class LocalRepoContentsCache {
       // Yield between input hashes so commands in other servers can acquire the shared lock
       // without waiting for the entire cache scan. If the lock is busy, abort GC as before.
       try (var lock = FileSystemLock.tryGet(path.getRelative(LOCK_PATH), LockMode.EXCLUSIVE)) {
+        Path entryDir = path.getChild(dirent.getName());
+        // Repo contents without a recorded inputs file are left behind if moving a repo into the
+        // cache fails or is cut short. They can't be looked up and would never be collected
+        // otherwise. No repo can be in the middle of being moved into the cache while the exclusive
+        // lock is held.
+        for (Dirent entry : entryDir.readdir(Symlinks.NOFOLLOW)) {
+          if (!entry.getName().endsWith(RECORDED_INPUTS_SUFFIX)
+              && !entryDir.getChild(entry.getName() + RECORDED_INPUTS_SUFFIX).exists()) {
+            entryDir
+                .getChild(entry.getName())
+                .renameTo(trashDir.getChild(UUID.randomUUID().toString()));
+          }
+        }
         // Sort all recorded input files by descending mtime, so that deduplication keeps around the
         // most recent entry.
         var recordedInputsFiles =
-            path.getChild(dirent.getName()).getDirectoryEntries().stream()
+            entryDir.getDirectoryEntries().stream()
                 .filter(file -> file.getBaseName().endsWith(RECORDED_INPUTS_SUFFIX))
                 .sorted(comparingLong(LocalRepoContentsCache::getLastModifiedTimeOrZero).reversed())
                 .collect(toImmutableList());
