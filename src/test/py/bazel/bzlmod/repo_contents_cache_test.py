@@ -71,6 +71,14 @@ class RepoContentsCacheTest(test_base.TestBase):
       time.sleep(0.5)
     self.fail('repo contents cache still not empty after 5 seconds')
 
+  def evictCachedRepo(self, repo_dir):
+    """Removes the cache entry of a cached repo, as the GC would."""
+    entry = os.path.realpath(repo_dir)
+    os.remove(entry + '.recorded_inputs')
+    # Avoid access denied on Windows due to files being read-only by moving to
+    # a different location instead.
+    os.rename(entry, os.path.join(tempfile.mkdtemp(dir=self._tests_root), 'x'))
+
   def repoDir(self, repo_name, cwd=None):
     _, stdout, _ = self.RunBazel(['info', 'output_base'], cwd=cwd)
     self.assertLen(stdout, 1)
@@ -658,6 +666,73 @@ class RepoContentsCacheTest(test_base.TestBase):
     self.assertNoUnexpectedWarning(stderr)
     with open(os.path.join(workspace, 'bazel-bin/out.txt'), 'r') as f:
       self.assertEqual(f.read(), 'hello world5\n')
+
+  def doTestSymlinkToRealPathOfCachedRepo(self, reproducible):
+    self.ScratchFile(
+        'MODULE.bazel',
+        [
+            'repo = use_repo_rule("//:repo.bzl", "repo")',
+            'repo(name = "dep")',
+            'linking_repo = use_repo_rule("//:repo.bzl", "linking_repo")',
+            'linking_repo(name = "linking")',
+        ],
+    )
+    self.ScratchFile(
+        'repo.bzl',
+        [
+            'def _repo_impl(rctx):',
+            '  rctx.file("BUILD", "exports_files([\'dir/data\'])")',
+            '  rctx.file("dir/data", "hello")',
+            '  print("JUST FETCHED")',
+            '  return rctx.repo_metadata(reproducible=True)',
+            'repo = repository_rule(_repo_impl)',
+            'def _linking_repo_impl(rctx):',
+            '  rctx.file("BUILD", "exports_files([\'link/data\'])")',
+            '  dep_dir = rctx.path(Label("@dep//:dir/data")).dirname',
+            '  rctx.symlink(dep_dir.realpath, "link")',
+            '  return rctx.repo_metadata(reproducible=%s)' % reproducible,
+            'linking_repo = repository_rule(_linking_repo_impl)',
+        ],
+    )
+    self.ScratchFile(
+        'BUILD',
+        [
+            'genrule(',
+            '  name = "gen",',
+            '  srcs = ["@linking//:link/data"],',
+            '  outs = ["out.txt"],',
+            '  cmd = "cat $< > $@",',
+            ')',
+        ],
+    )
+    self.RunBazel(['build', '//:gen'])
+    dep_dir = self.repoDir('dep')
+    self.assertRepoCached(dep_dir)
+
+    # Cached dep GC'd while the server is alive: dep is fetched again and the
+    # symlink to it still resolves
+    self.evictCachedRepo(dep_dir)
+    _, _, stderr = self.RunBazel(['build', '//:gen'])
+    self.assertIn('JUST FETCHED', '\n'.join(stderr))
+    self.AssertFileContentContains(
+        os.path.join(self._test_cwd, 'bazel-bin/out.txt'), 'hello'
+    )
+
+    # Cached dep GC'd while the server is down: same
+    self.RunBazel(['shutdown'])
+    self.evictCachedRepo(dep_dir)
+    self.RunBazel(['clean'])
+    _, _, stderr = self.RunBazel(['build', '//:gen'])
+    self.assertIn('JUST FETCHED', '\n'.join(stderr))
+    self.AssertFileContentContains(
+        os.path.join(self._test_cwd, 'bazel-bin/out.txt'), 'hello'
+    )
+
+  def testSymlinkToRealPathOfCachedRepo(self):
+    self.doTestSymlinkToRealPathOfCachedRepo(reproducible=False)
+
+  def testSymlinkToRealPathOfCachedRepo_fromReproducibleRepo(self):
+    self.doTestSymlinkToRealPathOfCachedRepo(reproducible=True)
 
   def testRepoContentsCacheDeleted_withCheckExternalRepositoryFiles(self):
     self.doTestRepoContentsCacheDeleted(check_external_repository_files=True)

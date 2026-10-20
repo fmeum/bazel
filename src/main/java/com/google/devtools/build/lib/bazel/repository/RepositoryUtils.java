@@ -20,17 +20,25 @@ import com.google.devtools.build.lib.cmdline.LabelConstants;
 import com.google.devtools.build.lib.skyframe.PackageLookupFunction;
 import com.google.devtools.build.lib.skyframe.PackageLookupValue;
 import com.google.devtools.build.lib.util.OS;
+import com.google.devtools.build.lib.vfs.Dirent;
 import com.google.devtools.build.lib.vfs.FileSystemUtils;
 import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.build.lib.vfs.PathFragment;
 import com.google.devtools.build.lib.vfs.Root;
 import com.google.devtools.build.lib.vfs.RootedPath;
+import com.google.devtools.build.lib.vfs.Symlinks;
 import com.google.devtools.build.skyframe.SkyFunction.Environment;
 import com.google.devtools.build.skyframe.SkyKey;
 import com.google.errorprone.annotations.CanIgnoreReturnValue;
+import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.nio.file.Files;
+import java.util.ArrayList;
 import java.util.Collection;
+import java.util.HashMap;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Map;
 import javax.annotation.Nullable;
 import net.starlark.java.eval.EvalException;
 import net.starlark.java.eval.Starlark;
@@ -211,5 +219,100 @@ public class RepositoryUtils {
           String.format("Failed to rewrite symlinks under %s: %s", repoDir, e.getMessage()), e);
     }
     return new ReplantSymlinksResult(portableSymlinksOnly, symlinksResolveWithinRepo);
+  }
+
+  /**
+   * Rewrites the symlinks under {@code repoDir} that point into a repo in the local repo contents
+   * cache at {@code repoContentsCacheDir} to point into the directory of that repo under {@code
+   * externalRepoRoot} instead, so that they keep resolving after the cached repo has been garbage
+   * collected and fetched again.
+   */
+  public static void redirectSymlinksToCachedRepos(
+      Path repoDir, Path externalRepoRoot, Path repoContentsCacheDir) throws IOException {
+    if (repoDir.isSymbolicLink()) {
+      // The repo is a directory that Bazel doesn't manage, e.g. that of a local_repository.
+      return;
+    }
+    var symlinks = new ArrayList<Path>();
+    collectSymlinks(repoDir, symlinks);
+    if (symlinks.isEmpty()) {
+      return;
+    }
+    // Resolving the path of a file in a cached repo, e.g. with repository_ctx.path(...).realpath,
+    // results in a path below the resolved cache dir.
+    var cacheDirs = new LinkedHashSet<PathFragment>();
+    cacheDirs.add(repoContentsCacheDir.asFragment());
+    try {
+      cacheDirs.add(repoContentsCacheDir.resolveSymbolicLinks().asFragment());
+    } catch (FileNotFoundException _) {
+      // No repo has been cached yet.
+      return;
+    }
+    Map<PathFragment, String> cachedRepos = null;
+    for (Path symlink : symlinks) {
+      PathFragment pathInCache = relativeToAny(symlink.readSymbolicLink(), cacheDirs);
+      if (pathInCache == null || pathInCache.segmentCount() < 2) {
+        continue;
+      }
+      if (cachedRepos == null) {
+        cachedRepos = collectCachedRepos(externalRepoRoot, cacheDirs);
+      }
+      String repoName = cachedRepos.get(pathInCache.subFragment(0, 2));
+      if (repoName != null) {
+        FileSystemUtils.ensureSymbolicLink(
+            symlink,
+            externalRepoRoot
+                .getChild(repoName)
+                .getRelative(pathInCache.subFragment(2))
+                .asFragment());
+      }
+    }
+  }
+
+  private static void collectSymlinks(Path dir, List<Path> symlinks) throws IOException {
+    for (Dirent dirent : dir.readdir(Symlinks.NOFOLLOW)) {
+      Path child = dir.getChild(dirent.getName());
+      switch (dirent.getType()) {
+        case SYMLINK -> symlinks.add(child);
+        case DIRECTORY -> collectSymlinks(child, symlinks);
+        default -> {}
+      }
+    }
+  }
+
+  /**
+   * Returns the names of the repos under {@code externalRepoRoot} that are symlinks to a cached
+   * repo, keyed by the path of the cached repo relative to the cache dir.
+   */
+  private static Map<PathFragment, String> collectCachedRepos(
+      Path externalRepoRoot, Collection<PathFragment> cacheDirs) throws IOException {
+    var cachedRepos = new HashMap<PathFragment, String>();
+    for (Dirent dirent : externalRepoRoot.readdir(Symlinks.NOFOLLOW)) {
+      if (dirent.getType() != Dirent.Type.SYMLINK) {
+        continue;
+      }
+      PathFragment target;
+      try {
+        target = externalRepoRoot.getChild(dirent.getName()).readSymbolicLink();
+      } catch (IOException _) {
+        // The repo is being fetched concurrently.
+        continue;
+      }
+      PathFragment pathInCache = relativeToAny(target, cacheDirs);
+      if (pathInCache != null && pathInCache.segmentCount() == 2) {
+        cachedRepos.put(pathInCache, dirent.getName());
+      }
+    }
+    return cachedRepos;
+  }
+
+  @Nullable
+  private static PathFragment relativeToAny(PathFragment path, Collection<PathFragment> dirs) {
+    for (PathFragment dir : dirs) {
+      if (path.startsWith(dir)) {
+        return path.relativeTo(dir);
+      }
+    }
+    return null;
   }
 }

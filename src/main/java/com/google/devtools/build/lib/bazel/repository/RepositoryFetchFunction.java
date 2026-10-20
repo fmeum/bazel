@@ -320,12 +320,25 @@ public final class RepositoryFetchFunction implements SkyFunction {
       if (result == null) {
         return null;
       }
+      Path externalRepoRoot = RepositoryUtils.getExternalRepositoryDirectory(directories);
+      if (repoContentsCache.isEnabled()) {
+        try {
+          RepositoryUtils.redirectSymlinksToCachedRepos(
+              repoRoot, externalRepoRoot, repoContentsCache.getPath());
+        } catch (IOException e) {
+          throw new RepositoryFunctionException(
+              new IOException(
+                  "error redirecting symlinks to cached repos in repo %s: %s"
+                      .formatted(repositoryName, e.getMessage()),
+                  e),
+              Transience.TRANSIENT);
+        }
+      }
       digestWriter.writeMarkerFile(result.recordedInputValues());
       if (result.reproducible() == Reproducibility.YES && !repoDefinition.repoRule().local()) {
         // This repo may be eligible for the local and remote repo contents cache.
         // Replant symlinks before caching to convert absolute symlinks relative if possible, which
         // can make more repos eligible.
-        Path externalRepoRoot = RepositoryUtils.getExternalRepositoryDirectory(directories);
         RepositoryUtils.ReplantSymlinksResult replantSymlinksResult;
         try {
           replantSymlinksResult =
