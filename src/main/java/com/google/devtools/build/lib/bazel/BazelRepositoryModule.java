@@ -418,7 +418,8 @@ public class BazelRepositoryModule extends BlazeModule {
                 .getRepoContentsCache()
                 .createGcIdleTask(
                     repoOptions.getRepoContentsCacheGcMaxAge(),
-                    repoOptions.getRepoContentsCacheGcIdleDelay()));
+                    repoOptions.getRepoContentsCacheGcIdleDelay(),
+                    env.getOutputBase().getRelative(LabelConstants.EXTERNAL_PATH_PREFIX)));
       }
 
       try {

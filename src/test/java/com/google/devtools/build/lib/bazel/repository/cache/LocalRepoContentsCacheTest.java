@@ -78,7 +78,10 @@ public final class LocalRepoContentsCacheTest {
     var cache = new LocalRepoContentsCache();
     cache.setPath(cachePath);
 
-    cache.createGcIdleTask(Duration.ofMillis(1), Duration.ZERO).run();
+    cache
+        .createGcIdleTask(
+            Duration.ofMillis(1), Duration.ZERO, fs.getPath(root).getRelative("../no_external"))
+        .run();
 
     assertThat(sharedLocksAcquired.get()).isEqualTo(2);
     for (String hash : new String[] {"first", "second"}) {
@@ -86,5 +89,30 @@ public final class LocalRepoContentsCacheTest {
     }
     assertThat(cachePath.getRelative(LocalRepoContentsCache.TRASH_PATH).getDirectoryEntries())
         .isEmpty();
+  }
+
+  @Test
+  public void gc_keepsReposUsedByOutputBase() throws Exception {
+    var root = TestUtils.createUniqueTmpDir(null);
+    var cachePath = root.getRelative("cache");
+    for (String hash : new String[] {"used", "unused"}) {
+      var entry = cachePath.getRelative(hash);
+      entry.getRelative("repo").createDirectoryAndParents();
+      var inputs = entry.getRelative("repo.recorded_inputs");
+      FileSystemUtils.writeContentAsLatin1(inputs, hash);
+      inputs.setLastModifiedTime(1);
+    }
+    var externalRepoDir = root.getRelative("output_base/external");
+    externalRepoDir.createDirectoryAndParents();
+    externalRepoDir.getChild("+repo+used").createSymbolicLink(cachePath.getRelative("used/repo"));
+    var cache = new LocalRepoContentsCache();
+    cache.setPath(cachePath);
+
+    cache.createGcIdleTask(Duration.ofDays(1), Duration.ZERO, externalRepoDir).run();
+
+    assertThat(cachePath.getRelative("used").getDirectoryEntries())
+        .containsExactly(
+            cachePath.getRelative("used/repo"), cachePath.getRelative("used/repo.recorded_inputs"));
+    assertThat(cachePath.getRelative("unused").getDirectoryEntries()).isEmpty();
   }
 }

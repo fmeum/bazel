@@ -71,6 +71,23 @@ class RepoContentsCacheTest(test_base.TestBase):
       time.sleep(0.5)
     self.fail('repo contents cache still not empty after 5 seconds')
 
+  def collectGarbageFromOtherOutputBase(self):
+    """Runs the GC from an output base that doesn't use any cached repo."""
+    gc_dir = self.ScratchDir('gc')
+    self.ScratchFile('gc/MODULE.bazel')
+    self.CopyFile(self.Path('.bazelrc'), 'gc/.bazelrc')
+    # Unlike some other info keys, output_base doesn't require any repos.
+    self.RunBazel(
+        [
+            'info',
+            '--repo_contents_cache_gc_max_age=1ms',
+            '--repo_contents_cache_gc_idle_delay=1ms',
+            'output_base',
+        ],
+        cwd=gc_dir,
+    )
+    self.sleepUntilCacheEmpty()
+
   def repoDir(self, repo_name, cwd=None):
     _, stdout, _ = self.RunBazel(['info', 'output_base'], cwd=cwd)
     self.assertLen(stdout, 1)
@@ -350,7 +367,7 @@ class RepoContentsCacheTest(test_base.TestBase):
     _, _, stderr = self.RunBazel(['build', '@my_repo//:haha'], cwd=dir_a)
     self.assertNotIn('JUST FETCHED', '\n'.join(stderr))
 
-  def testGc_singleServer_gcAfterCacheHit(self):
+  def testGc_otherServer_gcAfterCacheHit(self):
     self.ScratchFile(
         'MODULE.bazel',
         [
@@ -373,24 +390,20 @@ class RepoContentsCacheTest(test_base.TestBase):
     _, _, stderr = self.RunBazel(['build', '@my_repo//:haha'])
     self.assertIn('JUST FETCHED', '\n'.join(stderr))
 
-    # After expunging, but with a very quick GC delay & max age: cached
+    # After expunging: cached
     self.RunBazel(['clean', '--expunge'])
-    _, _, stderr = self.RunBazel([
-        'build',
-        '--repo_contents_cache_gc_max_age=1ms',
-        '--repo_contents_cache_gc_idle_delay=1ms',
-        '@my_repo//:haha',
-    ])
+    _, _, stderr = self.RunBazel(['build', '@my_repo//:haha'])
     self.assertNotIn('JUST FETCHED', '\n'.join(stderr))
 
-    # GC'd while server is alive: not cached, but also no crash
-    self.sleepUntilCacheEmpty()
+    # GC'd by another server while this server is alive: not cached, but also
+    # no crash
+    self.collectGarbageFromOtherOutputBase()
     _, _, stderr = self.RunBazel(['build', '@my_repo//:haha'])
     stderr = '\n'.join(stderr)
     self.assertIn('JUST FETCHED', stderr)
     self.assertNoUnexpectedWarning(stderr)
 
-  def testGc_singleServer_gcAfterCacheMiss(self):
+  def testGc_otherServer_gcAfterCacheMiss(self):
     self.ScratchFile(
         'MODULE.bazel',
         [
@@ -410,16 +423,12 @@ class RepoContentsCacheTest(test_base.TestBase):
         ],
     )
     # First fetch: not cached
-    _, _, stderr = self.RunBazel([
-        'build',
-        '--repo_contents_cache_gc_max_age=1ms',
-        '--repo_contents_cache_gc_idle_delay=1ms',
-        '@my_repo//:haha',
-    ])
+    _, _, stderr = self.RunBazel(['build', '@my_repo//:haha'])
     self.assertIn('JUST FETCHED', '\n'.join(stderr))
 
-    # GC'd while server is alive: not cached, but also no crash
-    self.sleepUntilCacheEmpty()
+    # GC'd by another server while this server is alive: not cached, but also
+    # no crash
+    self.collectGarbageFromOtherOutputBase()
     _, _, stderr = self.RunBazel(['build', '@my_repo//:haha'])
     stderr = '\n'.join(stderr)
     self.assertIn('JUST FETCHED', stderr)
@@ -454,41 +463,89 @@ class RepoContentsCacheTest(test_base.TestBase):
     _, _, stderr = self.RunBazel(['build', '@my_repo//:haha'], cwd=dir_a)
     self.assertIn('JUST FETCHED', '\n'.join(stderr))
 
-    # Fetch in B with subsequent GC run: cached
-    _, _, stderr = self.RunBazel(
-        [
-            'build',
-            '--repo_contents_cache_gc_max_age=1ms',
-            '--repo_contents_cache_gc_idle_delay=1ms',
-            '@my_repo//:haha',
-        ],
-        cwd=dir_b,
-    )
+    # Fetch in B: cached
+    _, _, stderr = self.RunBazel(['build', '@my_repo//:haha'], cwd=dir_b)
     self.assertNotIn('JUST FETCHED', '\n'.join(stderr))
 
-    # GC'd while A's server is alive (after A's earlier cache miss) with
-    # subsequent GC run: not cached, but also no crash
-    self.sleepUntilCacheEmpty()
-    _, _, stderr = self.RunBazel(
-        [
-            'build',
-            '--repo_contents_cache_gc_max_age=1ms',
-            '--repo_contents_cache_gc_idle_delay=1ms',
-            '@my_repo//:haha',
-        ],
-        cwd=dir_a,
-    )
+    # GC'd while A's server is alive (after A's earlier cache miss): not
+    # cached, but also no crash
+    self.collectGarbageFromOtherOutputBase()
+    _, _, stderr = self.RunBazel(['build', '@my_repo//:haha'], cwd=dir_a)
     stderr = '\n'.join(stderr)
     self.assertIn('JUST FETCHED', stderr)
     self.assertNoUnexpectedWarning(stderr)
 
     # GC'd while B's server is alive (after B's earlier cache hit):
     # not cached, but also no crash
-    self.sleepUntilCacheEmpty()
+    self.collectGarbageFromOtherOutputBase()
     _, _, stderr = self.RunBazel(['build', '@my_repo//:haha'], cwd=dir_b)
     stderr = '\n'.join(stderr)
     self.assertIn('JUST FETCHED', stderr)
     self.assertNoUnexpectedWarning(stderr)
+
+  def testGc_keepsReposUsedByOwnOutputBase(self):
+    repo_bzl_lines = [
+        'def _repo_impl(rctx):',
+        '  rctx.file("BUILD", "filegroup(name=\'haha\')")',
+        '  print("JUST FETCHED")',
+        '  return rctx.repo_metadata(reproducible=True)',
+        'repo = repository_rule(_repo_impl)',
+    ]
+    dir_a = self.ScratchDir('a')
+    dir_b = self.ScratchDir('b')
+    self.ScratchFile(
+        'a/MODULE.bazel',
+        [
+            'repo = use_repo_rule("//:repo.bzl", "repo")',
+            'repo(name = "used_repo")',
+        ],
+    )
+    self.ScratchFile(
+        'b/MODULE.bazel',
+        [
+            'repo = use_repo_rule("//:repo.bzl", "repo")',
+            'repo(name = "unused_repo")',
+        ],
+    )
+    self.ScratchFile('a/BUILD.bazel')
+    self.ScratchFile('b/BUILD.bazel')
+    self.ScratchFile('a/repo.bzl', repo_bzl_lines)
+    self.ScratchFile('b/repo.bzl', repo_bzl_lines)
+    self.CopyFile(self.Path('.bazelrc'), 'a/.bazelrc')
+    self.CopyFile(self.Path('.bazelrc'), 'b/.bazelrc')
+
+    _, _, stderr = self.RunBazel(['build', '@used_repo//:haha'], cwd=dir_a)
+    self.assertIn('JUST FETCHED', '\n'.join(stderr))
+    _, _, stderr = self.RunBazel(['build', '@unused_repo//:haha'], cwd=dir_b)
+    self.assertIn('JUST FETCHED', '\n'.join(stderr))
+
+    # Make both cached repos look as if they had last been used long ago.
+    used_entry = os.readlink(self.repoDir('used_repo', cwd=dir_a))
+    unused_entry = os.readlink(self.repoDir('unused_repo', cwd=dir_b))
+    for entry in [used_entry, unused_entry]:
+      os.utime(entry + '.recorded_inputs', (0, 0))
+
+    # A's server keeps the repo that A uses, even if it hasn't fetched it since.
+    self.RunBazel(
+        [
+            'info',
+            '--repo_contents_cache_gc_max_age=1d',
+            '--repo_contents_cache_gc_idle_delay=1ms',
+        ],
+        cwd=dir_a,
+    )
+    for _ in range(10):
+      if not os.path.exists(unused_entry + '.recorded_inputs'):
+        break
+      time.sleep(0.5)
+    else:
+      self.fail('unused repo still cached after 5 seconds')
+    self.assertTrue(os.path.exists(used_entry + '.recorded_inputs'))
+
+    # The kept repo is still a cache hit.
+    self.RunBazel(['clean', '--expunge'], cwd=dir_a)
+    _, _, stderr = self.RunBazel(['build', '@used_repo//:haha'], cwd=dir_a)
+    self.assertNotIn('JUST FETCHED', '\n'.join(stderr))
 
   def testReverseDependencyDirection(self):
     # Set up two repos that retain their predeclared input hashes across two

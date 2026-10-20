@@ -29,10 +29,13 @@ import com.google.devtools.build.lib.vfs.DigestHashFunction;
 import com.google.devtools.build.lib.vfs.Dirent;
 import com.google.devtools.build.lib.vfs.FileSystemUtils;
 import com.google.devtools.build.lib.vfs.Path;
+import com.google.devtools.build.lib.vfs.PathFragment;
 import com.google.devtools.build.lib.vfs.Symlinks;
+import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.Collection;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -52,8 +55,9 @@ import javax.annotation.Nullable;
  * their values of a cached repo, and the directory {@code UUID} contains the cached repo contents.
  *
  * <p>On a cache hit (that is, the predeclared inputs hash matches, and recorded inputs are
- * up-to-date), the recorded inputs file has its mtime updated. Cached repos whose recorded inputs
- * file is older than {@code --repo_contents_cache_gc_max_age} are garbage collected.
+ * up-to-date), the recorded inputs file has its mtime updated. The same happens for the cached
+ * repos used by an output base before its server collects garbage. Cached repos whose recorded
+ * inputs file is older than {@code --repo_contents_cache_gc_max_age} are garbage collected.
  */
 public final class LocalRepoContentsCache {
   public static final String RECORDED_INPUTS_SUFFIX = ".recorded_inputs";
@@ -102,6 +106,11 @@ public final class LocalRepoContentsCache {
               0, recordedInputsFileBaseName.length() - RECORDED_INPUTS_SUFFIX.length());
       return new CandidateRepo(
           recordedInputsFile, recordedInputsFile.replaceName(contentsDirBaseName));
+    }
+
+    private static CandidateRepo fromContentsDir(Path contentsDir) {
+      return new CandidateRepo(
+          contentsDir.replaceName(contentsDir.getBaseName() + RECORDED_INPUTS_SUFFIX), contentsDir);
     }
 
     /** Updates the mtime of the recorded inputs file, to delay GC for this entry. */
@@ -203,12 +212,13 @@ public final class LocalRepoContentsCache {
   /**
    * Creates a garbage collection {@link IdleTask} that deletes cached repos who are last accessed
    * more than {@code maxAge} ago as well as duplicated repos, with an idle delay of {@code
-   * idleDelay}.
+   * idleDelay}. The cached repos that the repos under {@code externalRepoDir} use count as accessed
+   * when the task runs.
    *
    * @param maxAge the maximum age of cached repos to keep in the cache. If zero, no repo will be
    *     garbage collected due to age.
    */
-  public IdleTask createGcIdleTask(Duration maxAge, Duration idleDelay) {
+  public IdleTask createGcIdleTask(Duration maxAge, Duration idleDelay, Path externalRepoDir) {
     Preconditions.checkState(path != null);
     return new IdleTask() {
       @Override
@@ -225,6 +235,7 @@ public final class LocalRepoContentsCache {
       public void run() throws InterruptedException, IdleTaskException {
         try {
           Preconditions.checkState(path != null);
+          touchUsedRepos(externalRepoDir);
           runGc(maxAge);
           // Empty the trash dir outside the lock. No one is reading from these files, so it should
           // be safe. At worst, multiple servers performing GC will try to delete the same files,
@@ -235,6 +246,30 @@ public final class LocalRepoContentsCache {
         }
       }
     };
+  }
+
+  /** Touches the cached repos that the symlinks directly under {@code externalRepoDir} point to. */
+  private void touchUsedRepos(Path externalRepoDir) throws InterruptedException, IOException {
+    Collection<Dirent> dirents;
+    try {
+      dirents = externalRepoDir.readdir(Symlinks.NOFOLLOW);
+    } catch (FileNotFoundException _) {
+      return;
+    }
+    for (Dirent dirent : dirents) {
+      if (Thread.interrupted()) {
+        throw new InterruptedException();
+      }
+      if (dirent.getType() != Dirent.Type.SYMLINK) {
+        continue;
+      }
+      PathFragment target = externalRepoDir.getChild(dirent.getName()).readSymbolicLink();
+      // A cached repo is a symlink to a contents dir two levels below the cache root.
+      if (target.startsWith(path.asFragment())
+          && target.relativeTo(path.asFragment()).segmentCount() == 2) {
+        CandidateRepo.fromContentsDir(path.getRelative(target)).touch();
+      }
+    }
   }
 
   private void runGc(Duration maxAge) throws InterruptedException, IOException {
