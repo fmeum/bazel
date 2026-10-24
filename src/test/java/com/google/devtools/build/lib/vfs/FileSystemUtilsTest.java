@@ -17,6 +17,7 @@ import static com.google.common.truth.Truth.assertThat;
 import static com.google.devtools.build.lib.vfs.FileSystemUtils.appendWithoutExtension;
 import static com.google.devtools.build.lib.vfs.FileSystemUtils.commonAncestor;
 import static com.google.devtools.build.lib.vfs.FileSystemUtils.copyFile;
+import static com.google.devtools.build.lib.vfs.FileSystemUtils.copyToNewFile;
 import static com.google.devtools.build.lib.vfs.FileSystemUtils.moveFile;
 import static com.google.devtools.build.lib.vfs.FileSystemUtils.relativePath;
 import static com.google.devtools.build.lib.vfs.FileSystemUtils.removeExtension;
@@ -28,6 +29,7 @@ import static java.nio.charset.StandardCharsets.UTF_8;
 import static org.junit.Assert.assertThrows;
 import static org.junit.Assume.assumeTrue;
 
+import com.google.common.collect.ImmutableMap;
 import com.google.devtools.build.lib.testutil.BlazeTestUtils;
 import com.google.devtools.build.lib.testutil.ManualClock;
 import com.google.devtools.build.lib.testutil.TestUtils;
@@ -40,6 +42,7 @@ import com.google.testing.junit.testparameterinjector.TestParameter;
 import com.google.testing.junit.testparameterinjector.TestParameterInjector;
 import java.io.FileNotFoundException;
 import java.io.IOException;
+import java.nio.file.Files;
 import java.util.Arrays;
 import java.util.Collection;
 import org.junit.Before;
@@ -367,6 +370,19 @@ public class FileSystemUtilsTest {
     }
   }
 
+  // The method to copy a file with, for the tests of copyFile and copyToNewFile.
+  enum CopyMethod {
+    COPY_FILE,
+    COPY_TO_NEW_FILE;
+
+    void copy(Path from, Path to) throws IOException {
+      switch (this) {
+        case COPY_FILE -> copyFile(from, to);
+        case COPY_TO_NEW_FILE -> copyToNewFile(from, to);
+      }
+    }
+  }
+
   // The state of the source path for a copy or move operation.
   enum SourceState {
     // The source path is a regular file.
@@ -420,42 +436,69 @@ public class FileSystemUtilsTest {
   @Test
   public void testCopyFile(
       @TestParameter CopyFileSystem fs,
+      @TestParameter CopyMethod method,
       @TestParameter SourceState sourceState,
       @TestParameter TargetState targetState)
       throws IOException {
     Path root = fs.root();
     Path source = root.getRelative("source");
     Path target = root.getRelative("target");
+    Path newFile = root.getRelative("new-file");
 
     sourceState.create(source, "hello world", 0555, 12345L);
 
     targetState.create(target, "bad contents");
 
-    copyFile(source, target);
+    FileSystemUtils.writeContent(newFile, UTF_8, "hello world");
+
+    method.copy(source, target);
 
     assertThat(target.isFile(Symlinks.NOFOLLOW)).isTrue();
     assertThat(FileSystemUtils.readContent(target, UTF_8)).isEqualTo("hello world");
-    assertThat(target.stat().getPermissions()).isEqualTo(0555);
-    assertThat(target.getLastModifiedTime()).isEqualTo(12345L);
+    if (method == CopyMethod.COPY_FILE) {
+      assertThat(target.stat().getPermissions()).isEqualTo(0555);
+      assertThat(target.getLastModifiedTime()).isEqualTo(12345L);
+    } else {
+      assertThat(target.stat().getPermissions()).isEqualTo(newFile.stat().getPermissions());
+      assertThat(target.getLastModifiedTime()).isNotEqualTo(12345L);
+      if (fs == CopyFileSystem.ON_DISK) {
+        assertThat(readNewFileAttributes(target)).isEqualTo(readNewFileAttributes(newFile));
+      }
+    }
     assertThat(source.exists()).isTrue();
   }
 
+  /**
+   * Returns the native attributes that a file gets from the way it is created, which {@link
+   * FileSystemUtils#copyToNewFile} must not take from the source.
+   */
+  private static ImmutableMap<String, Object> readNewFileAttributes(Path path) throws IOException {
+    var nioPath = path.getFileSystem().getNioPath(path.asFragment());
+    if (OS.getCurrent() == OS.WINDOWS) {
+      return ImmutableMap.<String, Object>builder()
+          .putAll(Files.readAttributes(nioPath, "dos:readonly,hidden,system"))
+          .putAll(Files.readAttributes(nioPath, "acl:owner,acl"))
+          .buildOrThrow();
+    }
+    return ImmutableMap.copyOf(Files.readAttributes(nioPath, "posix:permissions,owner,group"));
+  }
+
   @Test
-  public void testCopyFileWithSourceDirectoryFails(@TestParameter CopyFileSystem fs)
-      throws Exception {
+  public void testCopyFileWithSourceDirectoryFails(
+      @TestParameter CopyFileSystem fs, @TestParameter CopyMethod method) throws Exception {
     Path root = fs.root();
     Path source = root.getRelative("source");
     Path target = root.getRelative("target");
 
     source.createDirectory();
 
-    IOException e = assertThrows(IOException.class, () -> copyFile(source, target));
+    IOException e = assertThrows(IOException.class, () -> method.copy(source, target));
     assertThat(e).hasMessageThat().contains("don't know how to copy");
   }
 
   @Test
-  public void testCopyFileIntoUnwritableDirectoryFails(@TestParameter CopyFileSystem fs)
-      throws Exception {
+  public void testCopyFileIntoUnwritableDirectoryFails(
+      @TestParameter CopyFileSystem fs, @TestParameter CopyMethod method) throws Exception {
     // Windows has no concept of read-only directories.
     assumeTrue(OS.getCurrent() != OS.WINDOWS);
 
@@ -468,12 +511,12 @@ public class FileSystemUtilsTest {
     FileSystemUtils.createEmptyFile(target);
     target.getParentDirectory().setWritable(false);
 
-    assertThrows(FileAccessException.class, () -> copyFile(source, target));
+    assertThrows(FileAccessException.class, () -> method.copy(source, target));
   }
 
   @Test
-  public void testCopyFileOntoNonEmptyDirectoryFails(@TestParameter CopyFileSystem fs)
-      throws Exception {
+  public void testCopyFileOntoNonEmptyDirectoryFails(
+      @TestParameter CopyFileSystem fs, @TestParameter CopyMethod method) throws Exception {
     Path root = fs.root();
     Path source = root.getRelative("source");
     Path target = root.getRelative("target");
@@ -482,42 +525,42 @@ public class FileSystemUtilsTest {
     target.createDirectory();
     FileSystemUtils.createEmptyFile(target.getChild("foo"));
 
-    IOException e = assertThrows(IOException.class, () -> copyFile(source, target));
+    IOException e = assertThrows(IOException.class, () -> method.copy(source, target));
     assertThat(e).hasMessageThat().contains("(Directory not empty)");
   }
 
   @Test
-  public void testCopyFileWithNonExistingSourceFails(@TestParameter CopyFileSystem fs)
-      throws Exception {
+  public void testCopyFileWithNonExistingSourceFails(
+      @TestParameter CopyFileSystem fs, @TestParameter CopyMethod method) throws Exception {
     Path root = fs.root();
     Path source = root.getRelative("/source");
     Path target = root.getRelative("/target");
 
-    assertThrows(FileNotFoundException.class, () -> copyFile(source, target));
+    assertThrows(FileNotFoundException.class, () -> method.copy(source, target));
   }
 
   @Test
-  public void testCopyFileWithDanglingSymlinkSourceFails(@TestParameter CopyFileSystem fs)
-      throws Exception {
+  public void testCopyFileWithDanglingSymlinkSourceFails(
+      @TestParameter CopyFileSystem fs, @TestParameter CopyMethod method) throws Exception {
     Path root = fs.root();
     Path source = root.getRelative("source");
     Path target = root.getRelative("target");
 
     source.createSymbolicLink(PathFragment.create("does-not-exist"));
 
-    assertThrows(FileNotFoundException.class, () -> copyFile(source, target));
+    assertThrows(FileNotFoundException.class, () -> method.copy(source, target));
   }
 
   @Test
-  public void testCopyFileWithNonExistingTargetParentFails(@TestParameter CopyFileSystem fs)
-      throws Exception {
+  public void testCopyFileWithNonExistingTargetParentFails(
+      @TestParameter CopyFileSystem fs, @TestParameter CopyMethod method) throws Exception {
     Path root = fs.root();
     Path source = root.getRelative("source");
     Path target = root.getRelative("subdir/target");
 
     FileSystemUtils.createEmptyFile(source);
 
-    assertThrows(FileNotFoundException.class, () -> copyFile(source, target));
+    assertThrows(FileNotFoundException.class, () -> method.copy(source, target));
   }
 
   @Test

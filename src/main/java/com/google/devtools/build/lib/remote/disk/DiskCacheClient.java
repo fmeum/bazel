@@ -173,8 +173,9 @@ public class DiskCacheClient {
           try {
             if (outPath != null) {
               // If the output stream is path-backed, the filesystem may be able to avoid copying
-              // the file.
-              FileSystemUtils.copyFile(path, outPath);
+              // the file. Just like a file written through the stream, it doesn't take on the
+              // attributes of the entry.
+              FileSystemUtils.copyToNewFile(path, outPath);
             } else {
               try (InputStream in = path.getInputStream()) {
                 ByteStreams.copy(in, out);
@@ -405,21 +406,17 @@ public class DiskCacheClient {
   /**
    * Saves an existing file into the cache.
    *
-   * <p>The contents are copied through {@link FileSystemUtils#copyFile}, so a filesystem with
-   * copy-on-write support (clonefile on macOS, copy_file_range on Linux) can serve the copy as a
-   * clone, leaving the entry sharing its blocks with the file it was saved from.
+   * <p>Just like an entry saved from a stream, the entry is created with the attributes of a new
+   * file rather than those of the file it was saved from (see {@link
+   * FileSystemUtils#copyToNewFile}). A shared cache relies on this to keep its entries writable by
+   * all of its users, which {@link #refresh} requires.
    */
   private void saveFile(Digest digest, Store store, Path file) throws IOException {
     save(
         digest,
         store,
         temp -> {
-          FileSystemUtils.copyFile(file, temp);
-          // copyFile preserves the source's permissions and mtime, neither of which suits a cache
-          // entry: an entry must remain readable by every user of a shared cache, and its mtime
-          // records when it was last stored or retrieved.
-          temp.chmod(0644);
-          temp.setLastModifiedTime(Path.NOW_SENTINEL_TIME);
+          FileSystemUtils.copyToNewFile(file, temp);
           // Fsync temp before we rename it to avoid data loss in the case of machine
           // crashes (the OS may reorder the writes and the rename).
           syncFile(temp);

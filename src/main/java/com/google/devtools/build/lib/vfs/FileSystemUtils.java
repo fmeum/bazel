@@ -27,12 +27,17 @@ import com.google.devtools.build.lib.concurrent.ThreadSafety.ConditionallyThread
 import com.google.devtools.build.lib.concurrent.ThreadSafety.ThreadSafe;
 import com.google.devtools.build.lib.util.OS;
 import com.google.devtools.build.lib.util.StringEncoding;
+import java.io.FileInputStream;
 import java.io.FileNotFoundException;
+import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.nio.channels.FileChannel;
 import java.nio.charset.Charset;
 import java.nio.file.Files;
+import java.nio.file.attribute.DosFileAttributeView;
+import java.nio.file.attribute.PosixFileAttributeView;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
@@ -401,6 +406,9 @@ public class FileSystemUtils {
    * Copies a file, potentially overwriting the destination. Preserves the modification time and
    * permissions.
    *
+   * <p>See {@link #copyToNewFile} for a copy that gets the attributes of a newly created file
+   * instead.
+   *
    * <p>If the source is a symbolic link, it will be followed. If the destination is a symbolic
    * link, it will be replaced.
    *
@@ -450,6 +458,158 @@ public class FileSystemUtils {
       to.setReadable(from.isReadable());
       to.setWritable(from.isWritable());
       to.setExecutable(from.isExecutable());
+    }
+  }
+
+  /**
+   * Copies a file into a newly created file, potentially replacing the destination.
+   *
+   * <p>Unlike {@link #copyFile}, this doesn't preserve the modification time and permissions of the
+   * source. Instead, just like a file written through a stream, the copy gets the current
+   * modification time as well as the permissions, owner and group (on Windows, the owner, ACL and
+   * file attributes) that a newly created file gets from the umask and its directory (for example,
+   * through a default ACL or the setgid bit). In particular, the copy is never executable on Unix.
+   *
+   * <p>This can't replace {@link #copyFile}, whose callers mostly need the copy to be a stand-in
+   * for the source: for example, a tool copied into a sandbox must remain executable, and {@link
+   * #moveFile} falls back to a copy to emulate a rename across filesystems. This method is meant
+   * for a copy that is a file in its own right, such as a disk cache entry, which must be
+   * accessible like any other file in the cache regardless of the file it was copied from.
+   *
+   * <p>The contents are copied in a way that lets a filesystem with copy-on-write support serve the
+   * copy as a clone, leaving it sharing its blocks with the source: through copy_file_range on
+   * Linux, clonefile on macOS and CopyFileEx on Windows (which clones on a Dev Drive as of Windows
+   * 11 24H2).
+   *
+   * <p>If the source is a symbolic link, it will be followed. If the destination is a symbolic
+   * link, it will be replaced.
+   *
+   * <p>Copying directories is not supported.
+   *
+   * @param from the source path
+   * @param to the destination path
+   * @throws FileNotFoundException if the source does not exist, or the parent directory of the
+   *     destination does not exist
+   * @throws IOException if the copy fails for any other reason
+   */
+  @ThreadSafe // but not atomic
+  public static void copyToNewFile(Path from, Path to) throws IOException {
+    if (!from.stat().isFile()) {
+      throw new IOException("don't know how to copy " + from);
+    }
+    // The destination must be a new file, and if it is a symlink, it must not be followed.
+    to.delete();
+    boolean copied =
+        switch (OS.getCurrent()) {
+          case DARWIN -> copyToNewFileOnMacOs(from, to);
+          case WINDOWS -> copyToNewFileOnWindows(from, to);
+          default -> false;
+        };
+    if (copied) {
+      return;
+    }
+    try (InputStream in = from.getInputStream();
+        OutputStream out = to.getOutputStream()) {
+      if (in instanceof FileInputStream fileIn && out instanceof FileOutputStream fileOut) {
+        // A transfer between file channels uses copy_file_range on Linux.
+        transferFully(fileIn.getChannel(), fileOut.getChannel());
+      } else {
+        in.transferTo(out);
+      }
+    }
+  }
+
+  /**
+   * Copies a file into a newly created file on macOS, giving the copy the attributes described in
+   * {@link #copyToNewFile}.
+   *
+   * <p>{@link Files#copy} only clones a file when asked to copy its attributes, so that the clone
+   * takes its permissions, owner and group from the source. They are reset to those of the file as
+   * created empty beforehand. (The extended attributes, which clonefile copies from the source as
+   * well, are left as they are, as is the ACL, which recent macOS versions inherit from the
+   * directory rather than copy from the source.)
+   *
+   * @return whether the copy was created; otherwise, the destination doesn't exist
+   */
+  private static boolean copyToNewFileOnMacOs(Path from, Path to) throws IOException {
+    var toNio = to.getFileSystem().getNioPath(to.asFragment());
+    if (toNio == null) {
+      return false;
+    }
+    createEmptyFile(to);
+    var view = Files.getFileAttributeView(toNio, PosixFileAttributeView.class);
+    var newFileAttributes = view.readAttributes();
+    copyFile(from, to);
+    var cloneAttributes = view.readAttributes();
+    try {
+      if (!cloneAttributes.owner().equals(newFileAttributes.owner())) {
+        view.setOwner(newFileAttributes.owner());
+      }
+      if (!cloneAttributes.group().equals(newFileAttributes.group())) {
+        view.setGroup(newFileAttributes.group());
+      }
+    } catch (IOException e) {
+      // A new file gets the group of its directory, but an unprivileged user can only give a file a
+      // group they are a member of. Fall back to a copy, which gets the group of the directory too.
+      to.delete();
+      return false;
+    }
+    view.setPermissions(newFileAttributes.permissions());
+    to.setLastModifiedTime(Path.NOW_SENTINEL_TIME);
+    return true;
+  }
+
+  /**
+   * Copies a file into a newly created file on Windows, giving the copy the attributes described in
+   * {@link #copyToNewFile}.
+   *
+   * <p>{@link Files#copy} uses CopyFileEx, which doesn't copy the owner and ACL of the source
+   * unless asked to copy its attributes, so that the copy gets them from its directory just like a
+   * new file. It does copy its file attributes and mtime, though, which are reset to those of a new
+   * file. (The alternate data streams, which CopyFileEx copies from the source as well, are left as
+   * they are.)
+   *
+   * @return whether the copy was created; otherwise, the destination doesn't exist
+   */
+  private static boolean copyToNewFileOnWindows(Path from, Path to) throws IOException {
+    var fromNio = from.getFileSystem().getNioPath(from.asFragment());
+    var toNio = to.getFileSystem().getNioPath(to.asFragment());
+    if (fromNio == null || toNio == null) {
+      return false;
+    }
+    try {
+      Files.copy(fromNio, toNio, REPLACE_EXISTING);
+    } catch (IOException e) {
+      throw translateNioToIoException(from.asFragment(), e);
+    }
+    // A new file is neither read-only, nor hidden, nor a system file.
+    var view = Files.getFileAttributeView(toNio, DosFileAttributeView.class);
+    var copyAttributes = view.readAttributes();
+    if (copyAttributes.isReadOnly()) {
+      view.setReadOnly(false);
+    }
+    if (copyAttributes.isHidden()) {
+      view.setHidden(false);
+    }
+    if (copyAttributes.isSystem()) {
+      view.setSystem(false);
+    }
+    to.setLastModifiedTime(Path.NOW_SENTINEL_TIME);
+    return true;
+  }
+
+  /**
+   * Transfers the contents of a file channel to another file channel.
+   *
+   * <p>Unlike {@link FileInputStream#transferTo}, this doesn't fall back to a copy through a buffer
+   * for the part of a file that exceeds the maximum size of a single transfer (about 2 GiB on
+   * Linux).
+   */
+  private static void transferFully(FileChannel source, FileChannel target) throws IOException {
+    long position = 0;
+    long transferred;
+    while ((transferred = source.transferTo(position, Long.MAX_VALUE, target)) > 0) {
+      position += transferred;
     }
   }
 

@@ -186,6 +186,30 @@ public class DiskCacheClientTest {
   }
 
   @Test
+  public void uploadFile_whenMissing_createsEntryWithPermissionsOfNewFile() throws Exception {
+    // A cache shared by the members of a group relies on a umask or default ACL that makes new
+    // files group-writable, so that each of them can refresh the entries stored by the others.
+    var sharedFs = new GroupWritableNewFilesFileSystem();
+    var sharedClient =
+        new DiskCacheClient(
+            sharedFs.getPath("/disk_cache"), DIGEST_UTIL, /* checkActionResultIntegrity= */ true);
+    try {
+      Path file = sharedFs.getPath("/file");
+      FileSystemUtils.writeContent(file, UTF_8, "contents");
+      file.chmod(0555);
+      Digest digest = getDigest("contents");
+
+      var unused = getFromFuture(sharedClient.uploadFile(digest, file));
+
+      Path path = sharedClient.toPath(digest, Store.CAS);
+      assertThat(FileSystemUtils.readContent(path, UTF_8)).isEqualTo("contents");
+      assertThat(path.stat().getPermissions()).isEqualTo(0664);
+    } finally {
+      sharedClient.close();
+    }
+  }
+
+  @Test
   public void uploadBlob_whenMissing_populatesCas() throws Exception {
     ByteString blob = ByteString.copyFromUtf8("contents");
     Digest digest = getDigest("contents");
@@ -324,6 +348,28 @@ public class DiskCacheClientTest {
     var e = assertThrows(IOException.class, () -> getFromFuture(client.downloadBlob(digest, out)));
 
     assertThat(e).isNotInstanceOf(CacheNotFoundException.class);
+  }
+
+  @Test
+  public void downloadBlob_toPathBackedStream_createsFileWithPermissionsOfNewFile()
+      throws Exception {
+    var sharedFs = new GroupWritableNewFilesFileSystem();
+    var sharedClient =
+        new DiskCacheClient(
+            sharedFs.getPath("/disk_cache"), DIGEST_UTIL, /* checkActionResultIntegrity= */ true);
+    try {
+      Digest digest = getDigest("contents");
+      populateCas(sharedClient, digest, "contents".getBytes(UTF_8)).chmod(0444);
+      Path outPath = sharedFs.getPath("/out");
+
+      var unused =
+          getFromFuture(sharedClient.downloadBlob(digest, new LazyFileOutputStream(outPath)));
+
+      assertThat(FileSystemUtils.readContent(outPath, UTF_8)).isEqualTo("contents");
+      assertThat(outPath.stat().getPermissions()).isEqualTo(0664);
+    } finally {
+      sharedClient.close();
+    }
   }
 
   @Test
@@ -680,6 +726,27 @@ public class DiskCacheClientTest {
 
   private Digest getDigest(Message m) {
     return DIGEST_UTIL.compute(m.toByteArray());
+  }
+
+  /**
+   * An in-memory filesystem that creates files with group write permission, as a umask of 002 or a
+   * default ACL granting it would.
+   */
+  private static final class GroupWritableNewFilesFileSystem extends InMemoryFileSystem {
+    GroupWritableNewFilesFileSystem() {
+      super(DigestHashFunction.SHA256);
+    }
+
+    @Override
+    public synchronized OutputStream getOutputStream(
+        PathFragment path, boolean append, boolean internal) throws IOException {
+      boolean isNew = !exists(path);
+      OutputStream out = super.getOutputStream(path, append, internal);
+      if (isNew) {
+        chmod(path, 0664);
+      }
+      return out;
+    }
   }
 
   /**
