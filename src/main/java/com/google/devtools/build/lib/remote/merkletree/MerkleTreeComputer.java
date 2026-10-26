@@ -76,12 +76,15 @@ import com.google.devtools.build.lib.remote.common.RemoteActionExecutionContext.
 import com.google.devtools.build.lib.remote.util.DigestUtil;
 import com.google.devtools.build.lib.remote.util.TracingMetadataUtils;
 import com.google.devtools.build.lib.skyframe.TreeArtifactValue;
+import com.google.devtools.build.lib.unsafe.StringUnsafe;
 import com.google.devtools.build.lib.util.TestType;
 import com.google.devtools.build.lib.vfs.Dirent;
 import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.build.lib.vfs.PathFragment;
 import com.google.devtools.build.lib.vfs.Root;
 import com.google.devtools.build.lib.vfs.Symlinks;
+import com.google.protobuf.ByteString;
+import com.google.protobuf.UnsafeByteOperations;
 import java.io.IOException;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
@@ -634,7 +637,7 @@ public final class MerkleTreeComputer {
       }
 
       Directory.Builder currentDirectory = checkNotNull(directoryStack.peek());
-      String name = internalToUnicode(path.getBaseName());
+      ByteString name = internalToUtf8(path.getBaseName());
       var nodeProperties = isToolInput.test(path) ? TOOL_NODE_PROPERTIES : null;
 
       switch (input) {
@@ -644,7 +647,10 @@ public final class MerkleTreeComputer {
               Preconditions.checkNotNull(
                   subTreeRoots.get(rawInput), "missing subtree for %s", input);
           currentDirectory.addDirectories(
-              DirectoryNode.newBuilder().setName(name).setDigest(subTreeRoot.digest()).build());
+              DirectoryNode.newBuilder()
+                  .setNameBytes(name)
+                  .setDigest(subTreeRoot.digest())
+                  .build());
           inputFiles += subTreeRoot.inputFiles();
           inputBytes += subTreeRoot.inputBytes();
         }
@@ -654,8 +660,8 @@ public final class MerkleTreeComputer {
                   metadataProvider.getInputMetadata(symlink), "missing metadata: %s", symlink);
           var builder =
               SymlinkNode.newBuilder()
-                  .setName(name)
-                  .setTarget(internalToUnicode(metadata.getUnresolvedSymlinkTarget()));
+                  .setNameBytes(name)
+                  .setTargetBytes(internalToUtf8(metadata.getUnresolvedSymlinkTarget()));
           if (nodeProperties != null) {
             builder.setNodeProperties(nodeProperties);
           }
@@ -673,7 +679,10 @@ public final class MerkleTreeComputer {
                 Preconditions.checkNotNull(
                     subTreeRoots.get(rawInput), "missing subtree for %s", input);
             currentDirectory.addDirectories(
-                DirectoryNode.newBuilder().setName(name).setDigest(subTreeRoot.digest()).build());
+                DirectoryNode.newBuilder()
+                    .setNameBytes(name)
+                    .setDigest(subTreeRoot.digest())
+                    .build());
             inputFiles += subTreeRoot.inputFiles();
             inputBytes += subTreeRoot.inputBytes();
             // The source directory subsumes all children paths, which may be staged separately as
@@ -720,7 +729,7 @@ public final class MerkleTreeComputer {
         }
         case EmptyInputDirectory ignored ->
             currentDirectory.addDirectories(
-                DirectoryNode.newBuilder().setName(name).setDigest(emptyDigest).build());
+                DirectoryNode.newBuilder().setNameBytes(name).setDigest(emptyDigest).build());
         case null -> {
           // This is a sentinel value for an empty file. This case only occurs when this method is
           // called from computeForRunfilesTreeIfAbsent.
@@ -786,7 +795,7 @@ public final class MerkleTreeComputer {
       checkNotNull(directoryStack.peek())
           .addDirectories(
               DirectoryNode.newBuilder()
-                  .setName(internalToUnicode(currentParentString.substring(start, end)))
+                  .setNameBytes(internalToUtf8(currentParentString, start, end))
                   .setDigest(directoryBlobDigest)
                   .build());
       end = max(0, start - 1);
@@ -1130,12 +1139,12 @@ public final class MerkleTreeComputer {
 
   private static void addFile(
       Directory.Builder directory,
-      String name,
+      ByteString name,
       Digest digest,
       @Nullable NodeProperties nodeProperties) {
     var builder =
         FileNode.newBuilder()
-            .setName(name)
+            .setNameBytes(name)
             .setDigest(digest)
             // We always treat files as executable since Bazel will `chmod 555` on the output
             // files of an action within ActionOutputMetadataStore#getMetadata after action
@@ -1147,6 +1156,31 @@ public final class MerkleTreeComputer {
       builder.setNodeProperties(nodeProperties);
     }
     directory.addFiles(builder.build());
+  }
+
+  /**
+   * Returns the UTF-8 encoding of an internal string for use in a proto {@code string} field.
+   *
+   * <p>Internal strings already consist of UTF-8 bytes (see {@link
+   * com.google.devtools.build.lib.util.StringEncoding}), so they can be wrapped directly instead of
+   * being decoded into a Unicode string that protobuf then encodes back into UTF-8.
+   */
+  private static ByteString internalToUtf8(String s) {
+    return internalToUtf8(s, 0, s.length());
+  }
+
+  /**
+   * Like {@link #internalToUtf8(String)}, but for the substring from {@code start} to {@code end}.
+   */
+  private static ByteString internalToUtf8(String s, int start, int end) {
+    var utf8 =
+        UnsafeByteOperations.unsafeWrap(StringUnsafe.getInternalStringBytes(s), start, end - start);
+    if (utf8.isValidUtf8()) {
+      return utf8;
+    }
+    // Proto string fields reject invalid UTF-8, which file names on Linux may contain. Fall back
+    // to replacing malformed byte sequences with U+FFFD.
+    return ByteString.copyFromUtf8(internalToUnicode(s.substring(start, end)));
   }
 
   /** Equivalent to {@code parent.equals(path.getParentDirectory())} for relative paths. */

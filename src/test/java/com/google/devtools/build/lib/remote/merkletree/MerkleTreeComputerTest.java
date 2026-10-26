@@ -578,6 +578,45 @@ public class MerkleTreeComputerTest {
   }
 
   @Test
+  public void buildForSpawn_nonAsciiNames() throws Exception {
+    var sourceRoot = ArtifactRoot.asSourceRoot(Root.fromPath(execRoot));
+    var fakeFileCache = new FakeActionInputFileCache();
+    var spawnBuilder = new SpawnBuilder();
+    // As internal strings, "\u00fe" and "\u00ff" are single bytes that are never valid UTF-8.
+    for (String execPath :
+        ImmutableList.of(unicodeToInternal("dir/ü.txt"), "dir/\u00fe", "\u00ff/file")) {
+      var artifact =
+          ActionsTestUtil.createArtifactWithExecPath(sourceRoot, PathFragment.create(execPath));
+      artifact.getPath().getParentDirectory().createDirectoryAndParents();
+      FileSystemUtils.writeContentAsLatin1(artifact.getPath(), "content");
+      fakeFileCache.put(artifact, FileArtifactValue.createForTesting(artifact));
+      spawnBuilder.withInputs(artifact);
+    }
+    var spawn = spawnBuilder.build();
+
+    var merkleTree =
+        (MerkleTree.Uploadable)
+            createMerkleTreeComputer(/* uploader= */ null)
+                .buildForSpawn(
+                    spawn,
+                    ImmutableSet.of(),
+                    /* scrubber= */ null,
+                    createSpawnExecutionContext(spawn, fakeFileCache),
+                    MerkleTreeComputer.BlobPolicy.KEEP);
+
+    // Names that aren't valid UTF-8 can't be represented in a proto string field and have their
+    // malformed bytes replaced with U+FFFD.
+    assertThat(findDirectory(merkleTree).getDirectoriesList().stream().map(DirectoryNode::getName))
+        .containsExactly("dir", "\ufffd")
+        .inOrder();
+    assertThat(findDirectory(merkleTree, "dir").getFilesList().stream().map(FileNode::getName))
+        .containsExactly("ü.txt", "\ufffd")
+        .inOrder();
+    assertThat(findDirectory(merkleTree, "\ufffd").getFilesList().stream().map(FileNode::getName))
+        .containsExactly("file");
+  }
+
+  @Test
   public void duplicateTreeArtifactInput_stagedOnce() throws Exception {
     var fakeFileCache = new FakeActionInputFileCache();
     var treeArtifact =

@@ -32,6 +32,7 @@ java_library(
         "//src/main/java/com/google/devtools/build/lib/remote/util:digest_util",
         "//src/main/java/com/google/devtools/build/lib/remote/util:tracing_metadata_utils",
         "//src/main/java/com/google/devtools/build/lib/skyframe:tree_artifact_value",
+        "//src/main/java/com/google/devtools/build/lib/unsafe:string",
         "//src/main/java/com/google/devtools/build/lib/util:TestType",
         "//src/main/java/com/google/devtools/build/lib/util:deterministic_writer",
         "//src/main/java/com/google/devtools/build/lib/util:string_encoding",
@@ -44,6 +45,7 @@ java_library(
         "//third_party/java/guava:concurrent",
         "//third_party/java/guava:primitives",
         "//third_party/java/jsr305_annotations",
+        "//third_party/java/protobuf",
         "@remoteapis//:build_bazel_remote_execution_v2_remote_execution_java_proto",
     ],
 )
