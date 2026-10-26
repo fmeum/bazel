@@ -26,6 +26,7 @@ import static org.junit.Assert.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.reset;
@@ -438,6 +439,42 @@ public abstract class ActionInputPrefetcherTestBase {
     verify(fs, never()).delete(link.asFragment());
     assertThat(link.readSymbolicLink()).isEqualTo(PathFragment.create("../target"));
     assertThat(FileSystemUtils.readContent(link, UTF_8)).isEqualTo("hello world");
+  }
+
+  @Test
+  public void prefetchFiles_externalFile_preservesExecutableBit() throws Exception {
+    Map<HashCode, byte[]> cas = new HashMap<>();
+    ImmutableMap.Builder<ActionInput, FileArtifactValue> metadata = ImmutableMap.builder();
+    for (String name : ImmutableList.of("executable", "not_executable")) {
+      byte[] contents = name.getBytes(UTF_8);
+      HashCode hashCode = HASH_FUNCTION.getHashFunction().hashBytes(contents);
+      cas.put(hashCode, contents);
+      metadata.put(
+          ActionInputHelper.fromPath(PathFragment.create("/external/repo/" + name)),
+          FileArtifactValue.createForRemoteFileWithMaterializationData(
+              hashCode.asBytes(),
+              contents.length,
+              /* locationIndex= */ 1,
+              /* expirationTime= */ null,
+              /* inMemoryOutput= */ false));
+    }
+    Path executable = fs.getPath("/external/repo/executable");
+    Path notExecutable = fs.getPath("/external/repo/not_executable");
+    // The file system that backs an external repo knows whether its files are executable before
+    // they are materialized.
+    doReturn(true).when(fs).isExecutable(executable.asFragment());
+    doReturn(false).when(fs).isExecutable(notExecutable.asFragment());
+    var metadataMap = metadata.buildOrThrow();
+    AbstractActionInputPrefetcher prefetcher = createPrefetcher(cas);
+
+    wait(
+        prefetcher.prefetchFilesInterruptibly(
+            action, metadataMap.keySet(), metadataMap::get, Priority.MEDIUM, Reason.INPUTS));
+
+    assertThat(FileSystemUtils.readContent(executable, UTF_8)).isEqualTo("executable");
+    assertThat(executable.stat().getPermissions() & 0777).isEqualTo(0555);
+    assertThat(FileSystemUtils.readContent(notExecutable, UTF_8)).isEqualTo("not_executable");
+    assertThat(notExecutable.stat().getPermissions() & 0777).isEqualTo(0444);
   }
 
   @Test

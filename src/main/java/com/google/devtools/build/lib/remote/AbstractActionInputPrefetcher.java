@@ -738,6 +738,7 @@ public abstract class AbstractActionInputPrefetcher implements ActionInputPrefet
       return Completable.error(e);
     }
 
+    int permissionsMode = getPermissionsMode(path);
     // Downloads are written to the actual host file system, not any overlays.
     Path finalPath = path.forHostFileSystem();
 
@@ -778,7 +779,11 @@ public abstract class AbstractActionInputPrefetcher implements ActionInputPrefet
                     .doOnComplete(
                         () -> {
                           finalizeDownload(
-                              metadata, tempPath.forHostFileSystem(), finalPath, finalTreeRoot);
+                              metadata,
+                              tempPath.forHostFileSystem(),
+                              finalPath,
+                              finalTreeRoot,
+                              permissionsMode);
                           alreadyDeleted.set(true);
                         }));
 
@@ -794,13 +799,39 @@ public abstract class AbstractActionInputPrefetcher implements ActionInputPrefet
         forceRefetch(finalPath));
   }
 
+  /**
+   * Returns the permissions to set on a download of the given path.
+   *
+   * <p>These are the output permissions, matching SkyframeActionExecutor#checkOutputs for artifacts
+   * produced by local actions. Files in external repos backed by the remote repo contents cache
+   * additionally preserve whether they are executable, which their path reports before they are
+   * materialized.
+   */
+  private int getPermissionsMode(Path path) {
+    int mode = outputPermissions.getPermissionsMode();
+    if (path.asFragment().startsWith(execRoot.asFragment())) {
+      return mode;
+    }
+    try {
+      if (!path.isExecutable()) {
+        mode &= ~0111;
+      }
+    } catch (IOException e) {
+      // The file isn't known to the file system yet, so there is nothing to preserve.
+    }
+    return mode;
+  }
+
   private void finalizeDownload(
-      FileArtifactValue metadata, Path tmpPath, Path finalPath, @Nullable Path treeRoot)
+      FileArtifactValue metadata,
+      Path tmpPath,
+      Path finalPath,
+      @Nullable Path treeRoot,
+      int permissionsMode)
       throws IOException {
-    // Set file output permissions, matching SkyframeActionExecutor#checkOutputs for artifacts
-    // produced by local actions. The temporary path is outside the output tree, so this can happen
-    // before entering the tree artifact root's critical section.
-    tmpPath.chmod(outputPermissions.getPermissionsMode());
+    // The temporary path is outside the output tree, so this can happen before entering the tree
+    // artifact root's critical section.
+    tmpPath.chmod(permissionsMode);
 
     Path parentDir = checkNotNull(finalPath.getParentDirectory());
     @Nullable
