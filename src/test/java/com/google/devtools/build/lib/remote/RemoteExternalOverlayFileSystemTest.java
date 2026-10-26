@@ -203,6 +203,84 @@ public final class RemoteExternalOverlayFileSystemTest {
   }
 
   @Test
+  public void ensureSubtreeMaterialized_onlyOncePerCommandAndInjection() throws Exception {
+    var digestUtil = new DigestUtil(SyscallCache.NO_CACHE, DigestHashFunction.SHA256);
+    var cache = new InMemoryCombinedCache(digestUtil);
+    var nativeFs = new InMemoryFileSystem(DigestHashFunction.SHA256);
+    var externalRoot = PathFragment.create("/output/external");
+    var overlay = new RemoteExternalOverlayFileSystem(externalRoot, nativeFs);
+    var reporter = new Reporter();
+    var repo = RepositoryName.create("cached_repo");
+    var file = externalRoot.getRelative("cached_repo/dir/file");
+    var fileFetches = new AtomicInteger();
+    var prefetcher = mock(AbstractActionInputPrefetcher.class);
+    when(prefetcher.prefetchFilesInterruptibly(isNull(), any(), any(), any(), any()))
+        .thenAnswer(
+            invocation -> {
+              Iterable<? extends ActionInput> inputs = invocation.getArgument(1);
+              for (var input : inputs) {
+                if (input.getExecPath().equals(file)) {
+                  fileFetches.incrementAndGet();
+                }
+              }
+              return immediateVoidFuture();
+            });
+    var subDir =
+        Directory.newBuilder()
+            .addFiles(
+                FileNode.newBuilder()
+                    .setName("file")
+                    .setDigest(digestUtil.compute("contents".getBytes(UTF_8))))
+            .build();
+    var rootDir =
+        Directory.newBuilder()
+            .addDirectories(
+                DirectoryNode.newBuilder().setName("dir").setDigest(digestUtil.compute(subDir)))
+            .build();
+    var tree = Tree.newBuilder().setRoot(rootDir).addChildren(subDir).build();
+
+    overlay.beforeCommand(
+        cache,
+        prefetcher,
+        reporter,
+        "build-request",
+        "command",
+        () -> mock(MemoizingEvaluator.class),
+        Duration.ofMinutes(1));
+    try {
+      assertThat(overlay.injectRemoteRepo(repo, tree, "marker")).isTrue();
+
+      // Further actions consuming the source directory don't have to materialize it again.
+      overlay.ensureSubtreeMaterialized(file.getParentDirectory());
+      overlay.ensureSubtreeMaterialized(file.getParentDirectory());
+      assertThat(fileFetches.get()).isEqualTo(1);
+
+      // Injecting the repo again, e.g. after a refetch, deletes it.
+      assertThat(overlay.injectRemoteRepo(repo, tree, "marker")).isTrue();
+      overlay.ensureSubtreeMaterialized(file.getParentDirectory());
+      assertThat(fileFetches.get()).isEqualTo(2);
+    } finally {
+      overlay.afterCommand();
+    }
+
+    overlay.beforeCommand(
+        cache,
+        prefetcher,
+        reporter,
+        "build-request",
+        "command2",
+        () -> mock(MemoizingEvaluator.class),
+        Duration.ofMinutes(1));
+    try {
+      // The materialized files may have been modified in between commands.
+      overlay.ensureSubtreeMaterialized(file.getParentDirectory());
+      assertThat(fileFetches.get()).isEqualTo(3);
+    } finally {
+      overlay.afterCommand();
+    }
+  }
+
+  @Test
   public void ensureMaterialized_nativeRepoWithSymlinkIntoCachedRepo_materializesTargetRepo()
       throws Exception {
     var digestUtil = new DigestUtil(SyscallCache.NO_CACHE, DigestHashFunction.SHA256);

@@ -100,6 +100,11 @@ public final class RemoteExternalOverlayFileSystem extends FileSystem implements
   // externalFs.
   private final ConcurrentHashMap<String, String> markerFileContents = new ConcurrentHashMap<>();
   private final Set<String> reposWithLostFiles = ConcurrentHashMap.newKeySet();
+  private final TaskDeduplicator<PathFragment, Void, Void> subtreeMaterializations =
+      new TaskDeduplicator<>();
+  // The subtrees of in-memory repos that have been materialized to nativeFs during the current
+  // command. These don't have to be materialized again for each action that consumes them.
+  private final Set<PathFragment> materializedSubtrees = ConcurrentHashMap.newKeySet();
 
   // Per-build information that is set in beforeCommand and cleared in afterCommand.
   @Nullable private CombinedCache cache;
@@ -174,6 +179,8 @@ public final class RemoteExternalOverlayFileSystem extends FileSystem implements
     // refetching is not atomic.
     materializedRepos.forEach(this::evictInMemoryRepo);
     reposWithLostFiles.forEach(this::evictInMemoryRepo);
+    // The materialized files may be modified or deleted between commands.
+    materializedSubtrees.clear();
     // The evaluator may have been replaced during the command.
     invalidateRepoDirectories(evaluator.get(), reposWithLostFiles);
     reposWithLostFiles.clear();
@@ -189,6 +196,19 @@ public final class RemoteExternalOverlayFileSystem extends FileSystem implements
     }
     materializedRepos.remove(repoName);
     markerFileContents.remove(repoName);
+    forgetMaterializedSubtrees(externalDirectory.getChild(repoName));
+  }
+
+  /**
+   * Forgets about the materialization of all subtrees that contain or lie below the given path,
+   * which may no longer be complete after it has been deleted.
+   */
+  private void forgetMaterializedSubtrees(PathFragment path) {
+    if (materializedSubtrees.isEmpty()
+        || !(path.startsWith(externalDirectory) || externalDirectory.startsWith(path))) {
+      return;
+    }
+    materializedSubtrees.removeIf(subtree -> subtree.startsWith(path) || path.startsWith(subtree));
   }
 
   /** Invalidates the {@link SkyFunctions#REPOSITORY_DIRECTORY} nodes of the given repos. */
@@ -532,10 +552,29 @@ public final class RemoteExternalOverlayFileSystem extends FileSystem implements
   @Override
   public void ensureSubtreeMaterialized(PathFragment path)
       throws IOException, InterruptedException {
-    if (fsForPath(path) != externalFs) {
+    if (fsForPath(path) != externalFs || materializedSubtrees.contains(path)) {
       return;
     }
-    materializeSubtree(path);
+    // A source directory is typically consumed by many actions, which would otherwise all walk
+    // and check the entire subtree.
+    var unused =
+        getFromFuture(
+            subtreeMaterializations.execute(
+                path,
+                /* attributes= */ null,
+                /* canJoin= */ unusedAttributes -> true,
+                () -> {
+                  // Another caller may have finished since the check above.
+                  if (materializedSubtrees.contains(path)) {
+                    return immediateVoidFuture();
+                  }
+                  return materializationExecutor.submit(
+                      () -> {
+                        materializeSubtree(path);
+                        materializedSubtrees.add(path);
+                        return null;
+                      });
+                }));
   }
 
   private void materializeSubtree(PathFragment path) throws IOException, InterruptedException {
@@ -623,14 +662,22 @@ public final class RemoteExternalOverlayFileSystem extends FileSystem implements
 
   @Override
   public void deleteTree(PathFragment path) throws IOException {
-    nativeFs.deleteTree(path);
-    externalFs.deleteTree(path);
+    try {
+      nativeFs.deleteTree(path);
+      externalFs.deleteTree(path);
+    } finally {
+      forgetMaterializedSubtrees(path);
+    }
   }
 
   @Override
   public void deleteTreesBelow(PathFragment dir) throws IOException {
-    nativeFs.deleteTreesBelow(dir);
-    externalFs.deleteTreesBelow(dir);
+    try {
+      nativeFs.deleteTreesBelow(dir);
+      externalFs.deleteTreesBelow(dir);
+    } finally {
+      forgetMaterializedSubtrees(dir);
+    }
   }
 
   // All other methods delegate to the file system given by this method. It is important to override
@@ -665,7 +712,11 @@ public final class RemoteExternalOverlayFileSystem extends FileSystem implements
 
   @Override
   public boolean delete(PathFragment path) throws IOException {
-    return fsForPath(path).delete(path);
+    try {
+      return fsForPath(path).delete(path);
+    } finally {
+      forgetMaterializedSubtrees(path);
+    }
   }
 
   @Override
