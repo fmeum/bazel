@@ -896,6 +896,14 @@ public abstract class AbstractActionInputPrefetcher implements ActionInputPrefet
                 // exist yet.
                 checkNotNull(linkPath.getParentDirectory()).createDirectoryAndParents();
               }
+              // Keep a symlink that is already in place, as replacing it would make it briefly
+              // disappear for concurrently running actions. This is the case for symlinks in
+              // external repos, which are planted again whenever a source directory containing
+              // them is prefetched.
+              if (linkPath.isSymbolicLink()
+                  && linkPath.readSymbolicLink().equals(symlink.targetPath())) {
+                return Completable.complete();
+              }
               // Delete the link path if it already exists. This is the case for tree artifacts,
               // whose root directory is created before the action runs.
               linkPath.delete();
