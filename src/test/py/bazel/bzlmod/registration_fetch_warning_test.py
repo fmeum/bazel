@@ -14,9 +14,13 @@
 """Tests for --experimental_warn_on_expensive_registration_fetches."""
 
 import pathlib
+import tempfile
 
 from absl.testing import absltest
 from src.test.py.bazel import test_base
+from src.test.py.bazel.bzlmod.test_utils import BazelRegistry
+from src.test.py.bazel.bzlmod.test_utils import Module
+from src.test.py.bazel.bzlmod.test_utils import scratchFile
 
 _WARNING = 'is required by the registered'
 
@@ -73,7 +77,9 @@ class RegistrationFetchWarningTest(test_base.TestBase):
         ],
     )
 
-  def writeModuleFile(self, toolchain_repo, toolchain_type, download=True):
+  def writeModuleFile(
+      self, toolchain_repo, toolchain_type, download=True, extra_lines=()
+  ):
     """Declares an expensive repo @heavy and a cheap repo @light.
 
     Args:
@@ -81,6 +87,7 @@ class RegistrationFetchWarningTest(test_base.TestBase):
         implementation is always @heavy//:impl.
       toolchain_type: the toolchain type in the main repo.
       download: whether @heavy is expensive.
+      extra_lines: additional lines for the MODULE.bazel file.
     """
     build_files = {
         'heavy': ['filegroup(name = "impl")'],
@@ -105,6 +112,7 @@ class RegistrationFetchWarningTest(test_base.TestBase):
       lines += build_files[name]
       lines += ['""",', ')']
     lines.append('register_toolchains("@%s//:all")' % toolchain_repo)
+    lines += extra_lines
     self.ScratchFile('MODULE.bazel', lines)
 
   def testWarnsAboutRepoWithUnusedToolchain(self):
@@ -158,6 +166,57 @@ class RegistrationFetchWarningTest(test_base.TestBase):
         '//:target',
     ])
     self.assertNotIn(_WARNING, '\n'.join(stderr))
+
+  def testNoWarningForModuleRepo(self):
+    # A module that registers an unused toolchain from its own repo, which is
+    # fetched with http_archive and thus download_and_extract.
+    registry = BazelRegistry(tempfile.mkdtemp(dir=self._test_cwd))
+    src_dir = registry.projects.joinpath('tc_module')
+    src_dir.mkdir()
+    module_file = src_dir.joinpath('MODULE.bazel')
+    scratchFile(
+        module_file,
+        [
+            'module(name = "tc_module", version = "1.0")',
+            'register_toolchains("//:all")',
+        ],
+    )
+    scratchFile(
+        src_dir.joinpath('BUILD'),
+        [
+            'toolchain_type(name = "type")',
+            'filegroup(name = "impl")',
+            'toolchain(',
+            '  name = "tc",',
+            '  toolchain_type = ":type",',
+            '  toolchain = ":impl",',
+            ')',
+        ],
+    )
+    archive = registry.createArchive('tc_module', '1.0', src_dir)
+    registry.addModule(
+        Module('tc_module', '1.0')
+        .set_source(archive.resolve().as_uri())
+        .set_module_dot_bazel(module_file)
+    )
+    self.writeModuleFile(
+        toolchain_repo='heavy',
+        toolchain_type='unused_type',
+        extra_lines=['bazel_dep(name = "tc_module", version = "1.0")'],
+    )
+
+    _, _, stderr = self.RunBazel([
+        'build',
+        '--registry=' + registry.getLocalURL(),
+        '--registry=https://bcr.bazel.build',
+        # Ensure that the module repo is actually fetched.
+        '--repo_contents_cache=',
+        '//:target',
+    ])
+    stderr = '\n'.join(stderr)
+    self.assertIn("Repository '@heavy' " + _WARNING, stderr)
+    self.assertNotIn("Repository '@tc_module'", stderr)
+    self.assertEqual(stderr.count(_WARNING), 1)
 
   def testWarnsAboutRepoWithExecutionPlatform(self):
     self.ScratchFile(

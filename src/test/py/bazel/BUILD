@@ -414,7 +414,10 @@ py_test(
     srcs = ["bzlmod/registration_fetch_warning_test.py"],
     shard_count = 2,
     tags = ["requires-network"],
-    deps = [":test_base"],
+    deps = [
+        ":bzlmod_test_utils",
+        ":test_base",
+    ],
 )
 
 py_test(

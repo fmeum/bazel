@@ -405,8 +405,9 @@ public abstract class RepositoryOptions extends OptionsBase {
           `execute_wasm`). Since toolchain resolution loads all registered toolchains and
           execution platforms, such repositories have to be fetched for every build that uses
           toolchain resolution, even if none of their toolchains or execution platforms are used.
-          Repositories whose contents are reused from a previous fetch or a cache are not
-          reported. Has no effect with `--notrack_incremental_state`.
+          Repositories of Bazel modules (`bazel_dep`) and repositories whose contents are reused
+          from a previous fetch or a cache are not reported. Has no effect with
+          `--notrack_incremental_state`.
           """)
   public abstract boolean getWarnOnExpensiveRegistrationFetches();
 

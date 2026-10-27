@@ -14,6 +14,7 @@
 
 package com.google.devtools.build.lib.bazel;
 
+import static com.google.common.collect.ImmutableList.toImmutableList;
 import static com.google.common.collect.ImmutableSet.toImmutableSet;
 import static java.util.Comparator.comparing;
 
@@ -22,6 +23,7 @@ import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.eventbus.AllowConcurrentEvents;
 import com.google.common.eventbus.Subscribe;
+import com.google.devtools.build.lib.bazel.bzlmod.BazelDepGraphValue;
 import com.google.devtools.build.lib.bazel.repository.RepositoryOptions;
 import com.google.devtools.build.lib.buildtool.buildevent.BuildCompleteEvent;
 import com.google.devtools.build.lib.cmdline.RepositoryMapping;
@@ -43,6 +45,9 @@ import javax.annotation.Nullable;
 /**
  * Warns about fetched repositories that are required to load registered toolchains or execution
  * platforms even though their repository rules call expensive {@code repository_ctx} methods.
+ *
+ * <p>Repositories of Bazel modules are not reported since modules commonly register toolchains
+ * declared in their own repositories, which are typically small.
  *
  * <p>Since toolchain resolution loads all registered toolchains and execution platforms, such
  * repositories are fetched by every build that uses toolchain resolution, even if none of their
@@ -82,16 +87,22 @@ public final class RegistrationFetchWarningModule extends BlazeModule {
     }
     // The graph is no longer being modified at this point.
     InMemoryGraph graph = env.getSkyframeExecutor().getEvaluator().getInMemoryGraph();
+    ImmutableSet<RepositoryName> moduleRepos = getModuleRepos(graph);
+    ImmutableList<RepositoryName> repos =
+        expensiveFetches.keySet().stream()
+            .filter(repo -> !moduleRepos.contains(repo))
+            .sorted(comparing(RepositoryName::getName))
+            .collect(toImmutableList());
+    if (repos.isEmpty()) {
+      return;
+    }
     RepositoryMapping mainRepoMapping = getMainRepoMapping(graph);
     ImmutableMap<SkyKey, String> registrations =
         RegistrationDependencyFinder.findRegistrationsRequiring(
             graph,
             mainRepoMapping,
-            expensiveFetches.keySet().stream()
-                .map(RepositoryDirectoryValue::key)
-                .collect(toImmutableSet()));
-    for (RepositoryName repo :
-        ImmutableList.sortedCopyOf(comparing(RepositoryName::getName), expensiveFetches.keySet())) {
+            repos.stream().map(RepositoryDirectoryValue::key).collect(toImmutableSet()));
+    for (RepositoryName repo : repos) {
       String registration = registrations.get(RepositoryDirectoryValue.key(repo));
       if (registration != null) {
         env.getReporter()
@@ -126,6 +137,16 @@ public final class RegistrationFetchWarningModule extends BlazeModule {
         .append(" separate repository that is cheap to fetch and referring to this repository")
         .append(" only via the 'toolchain' attribute of toolchain().")
         .toString();
+  }
+
+  private static ImmutableSet<RepositoryName> getModuleRepos(InMemoryGraph graph) {
+    InMemoryNodeEntry entry = graph.getIfPresent(BazelDepGraphValue.KEY);
+    if (entry != null
+        && entry.isDone()
+        && entry.getValue() instanceof BazelDepGraphValue depGraph) {
+      return depGraph.getCanonicalRepoNameLookup().keySet();
+    }
+    return ImmutableSet.of();
   }
 
   @Nullable

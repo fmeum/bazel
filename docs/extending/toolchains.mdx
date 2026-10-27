@@ -519,7 +519,8 @@ attribute, which is only loaded if the toolchain is selected. The same applies
 to registered execution platforms. Pass
 `--experimental_warn_on_expensive_registration_fetches` to get warnings about
 repositories that are required by registered toolchains or execution platforms
-even though they download files or execute programs.
+even though they download files or execute programs. Repositories of Bazel
+modules aren't reported.
 
 Now when you build a target that depends on a toolchain type, an appropriate
 toolchain will be selected based on the target and execution platforms.
