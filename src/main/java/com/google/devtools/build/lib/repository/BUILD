@@ -24,6 +24,7 @@ java_library(
 java_library(
     name = "repository_events",
     srcs = [
+        "ExpensiveRepositoryFetchEvent.java",
         "RepositoryFailedEvent.java",
         "RepositoryFetchProgress.java",
     ],

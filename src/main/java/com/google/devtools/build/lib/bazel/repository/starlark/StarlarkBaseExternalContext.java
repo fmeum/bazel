@@ -24,6 +24,7 @@ import com.google.common.base.Splitter;
 import com.google.common.base.Strings;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
+import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.ImmutableSortedMap;
 import com.google.common.collect.Maps;
 import com.google.common.flogger.GoogleLogger;
@@ -160,6 +161,7 @@ public abstract class StarlarkBaseExternalContext implements AutoCloseable, Star
   protected final String identifyingStringForLogging;
   protected final Label.RepoMappingRecorder repoMappingRecorder;
   private final LinkedHashMap<RepoRecordedInput, String> recordedInputs = new LinkedHashMap<>();
+  private final Set<String> expensiveCalls = new LinkedHashSet<>();
   private final RepositoryRemoteExecutor remoteExecutor;
   private final List<AsyncTask> asyncTasks;
   private final boolean allowWatchingPathsOutsideWorkspace;
@@ -292,6 +294,19 @@ public abstract class StarlarkBaseExternalContext implements AutoCloseable, Star
 
   @ForOverride
   protected abstract boolean shouldDeleteWorkingDirectoryOnClose(boolean successful);
+
+  /**
+   * Records a call to a method that is expensive regardless of the inputs: it may access the
+   * network, run arbitrary processes or write a potentially large number of files.
+   */
+  private void recordExpensiveCall(String methodName) {
+    expensiveCalls.add(methodName);
+  }
+
+  /** Returns the names of all expensive methods called so far, in the order of their first call. */
+  public ImmutableSet<String> getExpensiveCalls() {
+    return ImmutableSet.copyOf(expensiveCalls);
+  }
 
   /** Returns all recorded inputs in the order they were recorded. */
   public ImmutableList<RepoRecordedInput.WithValue> getRecordedInputs() {
@@ -812,6 +827,7 @@ When <code>sha256</code> or <code>integrity</code> is user specified, setting an
     }
 
     StarlarkPath outputPath = getPath(output);
+    recordExpensiveCall("download");
     WorkspaceRuleEvent w =
         WorkspaceRuleEvent.newDownloadEvent(
             urls,
@@ -1083,6 +1099,7 @@ Strip the given number of leading components from file paths on extraction. Only
     Map<String, String> renameFilesMap =
         Dict.cast(renameFiles, String.class, String.class, "rename_files");
 
+    recordExpensiveCall("download_and_extract");
     WorkspaceRuleEvent w =
         WorkspaceRuleEvent.newDownloadAndExtractEvent(
             urls,
@@ -1350,6 +1367,7 @@ Strip the given number of leading components from file paths on extraction. Only
     Map<String, String> renameFilesMap =
         Dict.cast(renameFiles, String.class, String.class, "rename_files");
 
+    recordExpensiveCall("extract");
     WorkspaceRuleEvent w =
         WorkspaceRuleEvent.newExtractEvent(
             archive.toString(),
@@ -2023,6 +2041,7 @@ Strip the given number of leading components from file paths on extraction. Only
       }
     }
 
+    recordExpensiveCall("execute");
     if (canExecuteRemote()) {
       // Remote execution only sees the explicitly set environment variables, so removing env vars
       // isn't necessary.
@@ -2286,6 +2305,7 @@ func(
     int timeoutSeconds = timeoutI.toInt("timeout");
     long memLimit = memLimitI.toLong("memory_limit");
 
+    recordExpensiveCall("execute_wasm");
     WorkspaceRuleEvent w =
         WorkspaceRuleEvent.newExecuteWasmEvent(
             path.toString(),

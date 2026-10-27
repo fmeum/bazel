@@ -21,6 +21,7 @@ import com.google.common.base.Preconditions;
 import com.google.common.base.Throwables;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
+import com.google.common.collect.ImmutableSet;
 import com.google.devtools.build.lib.actions.FileStateValue;
 import com.google.devtools.build.lib.actions.FileValue;
 import com.google.devtools.build.lib.analysis.BlazeDirectories;
@@ -45,6 +46,7 @@ import com.google.devtools.build.lib.pkgcache.PathPackageLocator;
 import com.google.devtools.build.lib.profiler.Profiler;
 import com.google.devtools.build.lib.profiler.ProfilerTask;
 import com.google.devtools.build.lib.profiler.SilentCloseable;
+import com.google.devtools.build.lib.repository.ExpensiveRepositoryFetchEvent;
 import com.google.devtools.build.lib.repository.RepositoryFailedEvent;
 import com.google.devtools.build.lib.repository.RepositoryFetchProgress;
 import com.google.devtools.build.lib.rules.repository.RepoRecordedInput;
@@ -583,7 +585,11 @@ public final class RepositoryFetchFunction implements SkyFunction {
       return null;
     }
     env.getListener().post(RepositoryFetchProgress.finished(repoName));
-    return Preconditions.checkNotNull(result);
+    Preconditions.checkNotNull(result);
+    if (!result.expensiveCalls().isEmpty()) {
+      env.getListener().post(new ExpensiveRepositoryFetchEvent(repoName, result.expensiveCalls()));
+    }
+    return result;
   }
 
   private static void setupRepoRoot(Path repoRoot) throws RepositoryFunctionException {
@@ -601,10 +607,13 @@ public final class RepositoryFetchFunction implements SkyFunction {
    * @param recordedInputValues Any recorded inputs (and their values) encountered during the fetch
    *     of the repo. Changes to these inputs will result in the repo being refetched in the future.
    * @param reproducible Whether the fetched repo contents are reproducible, hence cacheable.
+   * @param expensiveCalls The names of the expensive {@code repository_ctx} methods called during
+   *     the fetch.
    */
   private record FetchResult(
       ImmutableList<RepoRecordedInput.WithValue> recordedInputValues,
-      Reproducibility reproducible) {}
+      Reproducibility reproducible,
+      ImmutableSet<String> expensiveCalls) {}
 
   @Nullable
   private FetchResult fetch(
@@ -654,6 +663,7 @@ public final class RepositoryFetchFunction implements SkyFunction {
     }
 
     ImmutableList<RepoRecordedInput.WithValue> recordedInputValues;
+    ImmutableSet<String> expensiveCalls;
     RepoMetadata repoMetadata;
     try (Mutability mu = Mutability.create("Starlark repository");
         StarlarkRepositoryContext starlarkRepositoryContext =
@@ -729,6 +739,7 @@ public final class RepositoryFetchFunction implements SkyFunction {
       }
 
       recordedInputValues = starlarkRepositoryContext.getRecordedInputs();
+      expensiveCalls = starlarkRepositoryContext.getExpensiveCalls();
     } catch (NeedsSkyframeRestartException e) {
       return null;
     } catch (EvalException e) {
@@ -793,7 +804,7 @@ public final class RepositoryFetchFunction implements SkyFunction {
       }
     }
 
-    return new FetchResult(recordedInputValues, repoMetadata.reproducible());
+    return new FetchResult(recordedInputValues, repoMetadata.reproducible(), expensiveCalls);
   }
 
   private static boolean shouldRequireRepoMetadata(

@@ -409,6 +409,15 @@ py_test(
 )
 
 py_test(
+    name = "registration_fetch_warning_test",
+    size = "medium",
+    srcs = ["bzlmod/registration_fetch_warning_test.py"],
+    shard_count = 2,
+    tags = ["requires-network"],
+    deps = [":test_base"],
+)
+
+py_test(
     name = "remote_repo_contents_cache_test",
     size = "large",
     srcs = ["bzlmod/remote_repo_contents_cache_test.py"],

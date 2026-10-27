@@ -107,6 +107,21 @@ java_test(
 )
 
 java_test(
+    name = "RegistrationOnlyDependencyFinderTest",
+    srcs = ["RegistrationOnlyDependencyFinderTest.java"],
+    deps = [
+        "//src/main/java/com/google/devtools/build/lib/cmdline",
+        "//src/main/java/com/google/devtools/build/lib/skyframe:skyframe_cluster",
+        "//src/main/java/com/google/devtools/build/lib/skyframe/toolchains:registration_only_dependency_finder",
+        "//src/main/java/com/google/devtools/build/skyframe",
+        "//src/test/java/com/google/devtools/build/lib/analysis/util",
+        "//third_party/java/guava:collect",
+        "//third_party/java/junit",
+        "//third_party/java/truth",
+    ],
+)
+
+java_test(
     name = "SingleToolchainResolutionFunctionTest",
     srcs = ["SingleToolchainResolutionFunctionTest.java"],
     deps = [

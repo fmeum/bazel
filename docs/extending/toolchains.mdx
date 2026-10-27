@@ -510,6 +510,17 @@ individual toolchains are registered is determined by the following rules:
 * Within a package, toolchains are registered in the lexicographical order of
   their names.
 
+Note: Toolchain resolution loads all registered toolchains, so any repository
+containing a registered `toolchain` target (or one of its constraints or
+settings) is fetched by every build that uses toolchain resolution. Keep these
+targets in repositories that are cheap to fetch and refer to expensive
+repositories, such as ones that download a compiler, only via the `toolchain`
+attribute, which is only loaded if the toolchain is selected. The same applies
+to registered execution platforms. Pass
+`--experimental_warn_on_expensive_registration_fetches` to get warnings about
+repositories that are only fetched because of registration even though they
+download files or execute programs.
+
 Now when you build a target that depends on a toolchain type, an appropriate
 toolchain will be selected based on the target and execution platforms.
 

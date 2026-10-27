@@ -67,6 +67,7 @@ public final class Bazel {
           com.google.devtools.build.lib.bazel.coverage.BazelCoverageReportModule.class,
           com.google.devtools.build.lib.starlarkdebug.module.StarlarkDebuggerModule.class,
           CacheHitReportingModule.class,
+          RegistrationFetchWarningModule.class,
           com.google.devtools.build.lib.bazel.SpawnLogModule.class,
           com.google.devtools.build.lib.bazel.bzlmod.BazelLockFileModule.class,
           com.google.devtools.build.lib.outputfilter.OutputFilteringModule.class,

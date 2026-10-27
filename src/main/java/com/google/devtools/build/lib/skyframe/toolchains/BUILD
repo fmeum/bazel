@@ -234,6 +234,30 @@ java_library(
 )
 
 java_library(
+    name = "registration_only_dependency_finder",
+    srcs = ["RegistrationOnlyDependencyFinder.java"],
+    deps = [
+        ":registered_execution_platforms_value",
+        ":single_toolchain_resolution_value",
+        ":toolchain_context_key",
+        ":unloaded_toolchain_context",
+        "//src/main/java/com/google/devtools/build/lib/analysis:platform_configuration",
+        "//src/main/java/com/google/devtools/build/lib/analysis:toolchain_context",
+        "//src/main/java/com/google/devtools/build/lib/analysis/config:build_configuration",
+        "//src/main/java/com/google/devtools/build/lib/analysis/platform",
+        "//src/main/java/com/google/devtools/build/lib/cmdline",
+        "//src/main/java/com/google/devtools/build/lib/skyframe:configured_target_key",
+        "//src/main/java/com/google/devtools/build/lib/skyframe:sky_functions",
+        "//src/main/java/com/google/devtools/build/lib/skyframe:target_pattern_value",
+        "//src/main/java/com/google/devtools/build/lib/skyframe/config",
+        "//src/main/java/com/google/devtools/build/skyframe",
+        "//src/main/java/com/google/devtools/build/skyframe:skyframe-objects",
+        "//third_party/java/guava:collect",
+        "//third_party/java/jsr305_annotations",
+    ],
+)
+
+java_library(
     name = "single_toolchain_resolution_function",
     srcs = [
         "SingleToolchainResolutionDebugPrinter.java",

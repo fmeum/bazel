@@ -390,6 +390,26 @@ public abstract class RepositoryOptions extends OptionsBase {
   public abstract boolean getCheckExternalRepositoryFiles();
 
   @Option(
+      name = "experimental_warn_on_expensive_registration_fetches",
+      defaultValue = "false",
+      documentationCategory = OptionDocumentationCategory.BZLMOD,
+      effectTags = {OptionEffectTag.TERMINAL_OUTPUT},
+      metadataTags = {OptionMetadataTag.EXPERIMENTAL},
+      help =
+          """
+          If set, a successful build warns about each repository that it had to fetch only to load
+          registered toolchains and execution platforms (via `register_toolchains`,
+          `register_execution_platforms`, `--extra_toolchains` or
+          `--extra_execution_platforms`) if its repository rule called an expensive
+          `repository_ctx` method (`download`, `download_and_extract`, `extract`, `execute` or
+          `execute_wasm`). Such repositories have to be fetched for every build that uses
+          toolchain resolution, even if none of their toolchains or execution platforms are used.
+          Repositories whose contents are reused from a previous fetch or a cache are not
+          reported. Has no effect with `--notrack_incremental_state`.
+          """)
+  public abstract boolean getWarnOnExpensiveRegistrationFetches();
+
+  @Option(
       name = "check_bazel_compatibility",
       defaultValue = "error",
       converter = BazelCompatibilityMode.Converter.class,
