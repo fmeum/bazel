@@ -18,9 +18,7 @@ import pathlib
 from absl.testing import absltest
 from src.test.py.bazel import test_base
 
-_WARNING = (
-    'was fetched only to load registered toolchains or execution platforms'
-)
+_WARNING = 'is required by the registered'
 
 
 class RegistrationFetchWarningTest(test_base.TestBase):
@@ -53,7 +51,6 @@ class RegistrationFetchWarningTest(test_base.TestBase):
             'load(":rules.bzl", "my_rule")',
             'toolchain_type(name = "used_type")',
             'toolchain_type(name = "unused_type")',
-            'platform(name = "good_platform")',
             'my_rule(name = "target")',
         ],
     )
@@ -66,65 +63,94 @@ class RegistrationFetchWarningTest(test_base.TestBase):
             '  if rctx.attr.download:',
             '    rctx.download(url = "%s", output = "data.txt")' % data_url,
             '  rctx.file("BUILD", rctx.attr.build_file_content)',
-            'heavy_repo = repository_rule(',
+            'test_repo = repository_rule(',
             '  implementation = _impl,',
             '  attrs = {',
             '    "build_file_content": attr.string(),',
-            '    "download": attr.bool(default = True),',
+            '    "download": attr.bool(),',
             '  },',
             ')',
         ],
     )
 
-  def writeModuleFile(self, toolchain_type, download=True):
-    self.ScratchFile(
-        'MODULE.bazel',
-        [
-            'heavy_repo = use_repo_rule("//:repo.bzl", "heavy_repo")',
-            'heavy_repo(',
-            '  name = "heavy",',
-            '  download = %s,' % download,
-            '  build_file_content = """',
-            'toolchain(',
-            '  name = "tc",',
-            '  toolchain_type = "@@//:%s",' % toolchain_type,
-            '  toolchain = ":impl",',
-            ')',
-            'filegroup(name = "impl")',
-            '""",',
-            ')',
-            'register_toolchains("@heavy//:all")',
-        ],
-    )
+  def writeModuleFile(self, toolchain_repo, toolchain_type, download=True):
+    """Declares an expensive repo @heavy and a cheap repo @light.
 
-  def testWarnsAboutRepoOnlyNeededForUnusedToolchain(self):
-    self.writeModuleFile(toolchain_type='unused_type')
+    Args:
+      toolchain_repo: the repo that contains the registered toolchain, whose
+        implementation is always @heavy//:impl.
+      toolchain_type: the toolchain type in the main repo.
+      download: whether @heavy is expensive.
+    """
+    build_files = {
+        'heavy': ['filegroup(name = "impl")'],
+        'light': [],
+    }
+    impl = ':impl' if toolchain_repo == 'heavy' else '@heavy//:impl'
+    build_files[toolchain_repo] += [
+        'toolchain(',
+        '  name = "tc",',
+        '  toolchain_type = "@@//:%s",' % toolchain_type,
+        '  toolchain = "%s",' % impl,
+        ')',
+    ]
+    lines = ['test_repo = use_repo_rule("//:repo.bzl", "test_repo")']
+    for name, repo_download in [('heavy', download), ('light', False)]:
+      lines += [
+          'test_repo(',
+          '  name = "%s",' % name,
+          '  download = %s,' % repo_download,
+          '  build_file_content = """',
+      ]
+      lines += build_files[name]
+      lines += ['""",', ')']
+    lines.append('register_toolchains("@%s//:all")' % toolchain_repo)
+    self.ScratchFile('MODULE.bazel', lines)
+
+  def testWarnsAboutRepoWithUnusedToolchain(self):
+    self.writeModuleFile(toolchain_repo='heavy', toolchain_type='unused_type')
 
     _, _, stderr = self.RunBazel(['build', '//:target'])
     stderr = '\n'.join(stderr)
-    self.assertIn("Repository '@heavy' " + _WARNING, stderr)
-    self.assertIn('expensive repository_ctx methods download.', stderr)
-    self.assertIn('  toolchain @heavy//:tc', stderr)
-    self.assertIn('  toolchain target pattern @heavy//:all', stderr)
+    self.assertIn(
+        "Repository '@heavy' is required by the registered toolchain"
+        ' @heavy//:tc, but its repository rule called the expensive'
+        ' repository_ctx methods download.',
+        stderr,
+    )
 
     # The repo isn't fetched again, so there is no warning.
     _, _, stderr = self.RunBazel(['build', '//:target'])
     self.assertNotIn(_WARNING, '\n'.join(stderr))
 
-  def testNoWarningIfToolchainIsUsed(self):
-    self.writeModuleFile(toolchain_type='used_type')
+  def testWarnsAboutRepoWithUsedToolchain(self):
+    self.writeModuleFile(toolchain_repo='heavy', toolchain_type='used_type')
 
+    _, _, stderr = self.RunBazel(['build', '//:target'])
+    self.assertIn(
+        "Repository '@heavy' is required by the registered toolchain"
+        ' @heavy//:tc',
+        '\n'.join(stderr),
+    )
+
+  def testNoWarningIfOnlyToolchainImplementationIsExpensive(self):
+    self.writeModuleFile(toolchain_repo='light', toolchain_type='used_type')
+
+    # @heavy is fetched because the toolchain is used, not because the
+    # toolchain is registered.
     _, _, stderr = self.RunBazel(['build', '//:target'])
     self.assertNotIn(_WARNING, '\n'.join(stderr))
 
   def testNoWarningIfRepoRuleIsCheap(self):
-    self.writeModuleFile(toolchain_type='unused_type', download=False)
+    self.writeModuleFile(
+        toolchain_repo='heavy', toolchain_type='unused_type', download=False
+    )
 
     _, _, stderr = self.RunBazel(['build', '//:target'])
     self.assertNotIn(_WARNING, '\n'.join(stderr))
 
   def testNoWarningWithoutFlag(self):
-    self.writeModuleFile(toolchain_type='unused_type')
+    self.writeModuleFile(toolchain_repo='heavy', toolchain_type='unused_type')
 
     _, _, stderr = self.RunBazel([
         'build',
@@ -133,46 +159,26 @@ class RegistrationFetchWarningTest(test_base.TestBase):
     ])
     self.assertNotIn(_WARNING, '\n'.join(stderr))
 
-  def testWarnsAboutRepoOnlyNeededForUnselectedExecutionPlatform(self):
+  def testWarnsAboutRepoWithExecutionPlatform(self):
     self.ScratchFile(
         'MODULE.bazel',
         [
-            'heavy_repo = use_repo_rule("//:repo.bzl", "heavy_repo")',
-            'heavy_repo(',
+            'test_repo = use_repo_rule("//:repo.bzl", "test_repo")',
+            'test_repo(',
             '  name = "heavy",',
+            '  download = True,',
             '  build_file_content = "platform(name = \'platform\')",',
             ')',
-            # The first registered platform is selected.
-            'register_execution_platforms(',
-            '  "//:good_platform",',
-            '  "@heavy//:platform",',
-            ')',
+            'register_execution_platforms("@heavy//:platform")',
         ],
     )
 
     _, _, stderr = self.RunBazel(['build', '//:target'])
-    stderr = '\n'.join(stderr)
-    self.assertIn("Repository '@heavy' " + _WARNING, stderr)
-    self.assertIn('  execution platform @heavy//:platform', stderr)
-
-  def testNoWarningIfExecutionPlatformIsSelected(self):
-    self.ScratchFile(
-        'MODULE.bazel',
-        [
-            'heavy_repo = use_repo_rule("//:repo.bzl", "heavy_repo")',
-            'heavy_repo(',
-            '  name = "heavy",',
-            '  build_file_content = "platform(name = \'platform\')",',
-            ')',
-            'register_execution_platforms(',
-            '  "@heavy//:platform",',
-            '  "//:good_platform",',
-            ')',
-        ],
+    self.assertIn(
+        "Repository '@heavy' is required by the registered execution platform"
+        ' @heavy//:platform',
+        '\n'.join(stderr),
     )
-
-    _, _, stderr = self.RunBazel(['build', '//:target'])
-    self.assertNotIn(_WARNING, '\n'.join(stderr))
 
 
 if __name__ == '__main__':

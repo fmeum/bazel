@@ -518,8 +518,8 @@ repositories, such as ones that download a compiler, only via the `toolchain`
 attribute, which is only loaded if the toolchain is selected. The same applies
 to registered execution platforms. Pass
 `--experimental_warn_on_expensive_registration_fetches` to get warnings about
-repositories that are only fetched because of registration even though they
-download files or execute programs.
+repositories that are required by registered toolchains or execution platforms
+even though they download files or execute programs.
 
 Now when you build a target that depends on a toolchain type, an appropriate
 toolchain will be selected based on the target and execution platforms.

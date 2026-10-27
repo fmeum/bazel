@@ -14,11 +14,12 @@
 
 package com.google.devtools.build.lib.bazel;
 
+import static com.google.common.collect.ImmutableSet.toImmutableSet;
 import static java.util.Comparator.comparing;
 
 import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
-import com.google.common.collect.ImmutableSortedSet;
 import com.google.common.eventbus.AllowConcurrentEvents;
 import com.google.common.eventbus.Subscribe;
 import com.google.devtools.build.lib.bazel.repository.RepositoryOptions;
@@ -31,15 +32,16 @@ import com.google.devtools.build.lib.rules.repository.RepositoryDirectoryValue;
 import com.google.devtools.build.lib.runtime.BlazeModule;
 import com.google.devtools.build.lib.runtime.CommandEnvironment;
 import com.google.devtools.build.lib.skyframe.RepositoryMappingValue;
-import com.google.devtools.build.lib.skyframe.toolchains.RegistrationOnlyDependencyFinder;
+import com.google.devtools.build.lib.skyframe.toolchains.RegistrationDependencyFinder;
 import com.google.devtools.build.skyframe.InMemoryGraph;
 import com.google.devtools.build.skyframe.InMemoryNodeEntry;
+import com.google.devtools.build.skyframe.SkyKey;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import javax.annotation.Nullable;
 
 /**
- * Warns about repositories that were fetched only to load registered toolchains and execution
+ * Warns about fetched repositories that are required to load registered toolchains or execution
  * platforms even though their repository rules call expensive {@code repository_ctx} methods.
  *
  * <p>Since toolchain resolution loads all registered toolchains and execution platforms, such
@@ -75,23 +77,28 @@ public final class RegistrationFetchWarningModule extends BlazeModule {
 
   @Subscribe
   public void buildComplete(BuildCompleteEvent event) {
-    // The graph may not be complete if the build failed.
-    if (!event.getResult().getSuccess() || expensiveFetches.isEmpty()) {
+    if (expensiveFetches.isEmpty()) {
       return;
     }
+    // The graph is no longer being modified at this point.
     InMemoryGraph graph = env.getSkyframeExecutor().getEvaluator().getInMemoryGraph();
     RepositoryMapping mainRepoMapping = getMainRepoMapping(graph);
-    var finder = new RegistrationOnlyDependencyFinder(graph, mainRepoMapping);
+    ImmutableMap<SkyKey, String> registrations =
+        RegistrationDependencyFinder.findRegistrationsRequiring(
+            graph,
+            mainRepoMapping,
+            expensiveFetches.keySet().stream()
+                .map(RepositoryDirectoryValue::key)
+                .collect(toImmutableSet()));
     for (RepositoryName repo :
         ImmutableList.sortedCopyOf(comparing(RepositoryName::getName), expensiveFetches.keySet())) {
-      ImmutableSortedSet<String> registrations =
-          finder.findRegistrationsRequiring(RepositoryDirectoryValue.key(repo));
-      if (!registrations.isEmpty()) {
+      String registration = registrations.get(RepositoryDirectoryValue.key(repo));
+      if (registration != null) {
         env.getReporter()
             .handle(
                 Event.warn(
                     formatWarning(
-                        repo, graph, mainRepoMapping, expensiveFetches.get(repo), registrations)));
+                        repo, graph, mainRepoMapping, expensiveFetches.get(repo), registration)));
       }
     }
   }
@@ -101,26 +108,24 @@ public final class RegistrationFetchWarningModule extends BlazeModule {
       InMemoryGraph graph,
       @Nullable RepositoryMapping mainRepoMapping,
       ImmutableSet<String> expensiveCalls,
-      ImmutableSortedSet<String> registrations) {
+      String registration) {
     StringBuilder message =
         new StringBuilder("Repository '").append(repo.getDisplayForm(mainRepoMapping)).append("'");
     String module = getAssociatedModule(graph, repo);
     if (module != null) {
       message.append(" (from module '").append(module).append("')");
     }
-    message
-        .append(" was fetched only to load registered toolchains or execution platforms, but its")
-        .append(" repository rule called the expensive repository_ctx methods ")
+    return message
+        .append(" is required by the registered ")
+        .append(registration)
+        .append(", but its repository rule called the expensive repository_ctx methods ")
         .append(String.join(", ", expensiveCalls))
-        .append(". As a result, every build that uses toolchain resolution has to fetch it, even")
-        .append(" if none of these toolchains or platforms are used. Consider declaring the")
-        .append(" toolchain() and platform() targets in a separate repository that is cheap to")
-        .append(" fetch and referring to this repository only via the 'toolchain' attribute of")
-        .append(" toolchain(). The repository was required by:");
-    for (String registration : registrations) {
-      message.append("\n  ").append(registration);
-    }
-    return message.toString();
+        .append(". Toolchain resolution loads all registered toolchains and execution platforms,")
+        .append(" so every build that uses it has to fetch this repository, even if it doesn't")
+        .append(" use them. Consider declaring the toolchain() and platform() targets in a")
+        .append(" separate repository that is cheap to fetch and referring to this repository")
+        .append(" only via the 'toolchain' attribute of toolchain().")
+        .toString();
   }
 
   @Nullable

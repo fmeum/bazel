@@ -397,12 +397,13 @@ public abstract class RepositoryOptions extends OptionsBase {
       metadataTags = {OptionMetadataTag.EXPERIMENTAL},
       help =
           """
-          If set, a successful build warns about each repository that it had to fetch only to load
-          registered toolchains and execution platforms (via `register_toolchains`,
+          If set, a build warns about each repository that it fetched and that is required to
+          load the registered toolchains and execution platforms (via `register_toolchains`,
           `register_execution_platforms`, `--extra_toolchains` or
           `--extra_execution_platforms`) if its repository rule called an expensive
           `repository_ctx` method (`download`, `download_and_extract`, `extract`, `execute` or
-          `execute_wasm`). Such repositories have to be fetched for every build that uses
+          `execute_wasm`). Since toolchain resolution loads all registered toolchains and
+          execution platforms, such repositories have to be fetched for every build that uses
           toolchain resolution, even if none of their toolchains or execution platforms are used.
           Repositories whose contents are reused from a previous fetch or a cache are not
           reported. Has no effect with `--notrack_incremental_state`.
