@@ -15,9 +15,37 @@ windows_resources(
     resources = ["win_manifest.xml"],
 )
 
+config_setting(
+    name = "windows_clang",
+    constraint_values = ["@platforms//os:windows"],
+    flag_values = {"@rules_cc//cc/compiler:compiler": "clang"},
+    visibility = ["//visibility:private"],
+)
+
+config_setting(
+    name = "windows_gcc",
+    constraint_values = ["@platforms//os:windows"],
+    flag_values = {"@rules_cc//cc/compiler:compiler": "gcc"},
+    visibility = ["//visibility:private"],
+)
+
+config_setting(
+    name = "windows_mingw_gcc",
+    constraint_values = ["@platforms//os:windows"],
+    flag_values = {"@rules_cc//cc/compiler:compiler": "mingw-gcc"},
+    visibility = ["//visibility:private"],
+)
+
 win_cc_binary(
     name = "launcher",
     srcs = ["launcher_main.cc"],
+    # MinGW requires -municode to use wmain as the entry point.
+    linkopts = select({
+        ":windows_clang": ["-municode"],
+        ":windows_gcc": ["-municode"],
+        ":windows_mingw_gcc": ["-municode"],
+        "//conditions:default": [],
+    }),
     visibility = [
         "//src:__pkg__",
         "//tools/launcher:__pkg__",
