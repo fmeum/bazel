@@ -15,6 +15,7 @@ package com.google.devtools.build.lib.skyframe.toolchains;
 
 import static com.google.common.truth.Truth.assertThat;
 import static com.google.devtools.build.lib.analysis.testing.ToolchainContextSubject.assertThat;
+import static com.google.devtools.build.lib.bazel.bzlmod.BzlmodTestUtil.createModuleKey;
 import static com.google.devtools.build.skyframe.EvaluationResultSubjectFactory.assertThatEvaluationResult;
 
 import com.google.common.collect.ImmutableList;
@@ -91,6 +92,57 @@ public class ToolchainResolutionFunctionTest extends ToolchainTestCase {
     assertThat(unloadedToolchainContext).hasResolvedToolchain("//extra:extra_toolchain_mac_impl");
     assertThat(unloadedToolchainContext).hasExecutionPlatform("//platforms:mac");
     assertThat(unloadedToolchainContext).hasTargetPlatform("//platforms:linux");
+  }
+
+  @Test
+  public void resolve_restrictNonRootRegistrations() throws Exception {
+    registry
+        .addModule(
+            createModuleKey("aaa", "1.0"),
+            """
+            module(name = "aaa", version = "1.0")
+            register_toolchains("//:bbb_tool")
+            bazel_dep(name = "bbb", version = "1.0")
+            """)
+        .addModule(
+            createModuleKey("bbb", "1.0"),
+            """
+            module(name = "bbb", version = "1.0")
+            register_toolchains("//:bbb_tool")
+            """);
+    scratch.file(moduleRoot.getRelative("aaa+1.0").getRelative("REPO.bazel").getPathString());
+    scratch.file(
+        moduleRoot.getRelative("aaa+1.0").getRelative("BUILD").getPathString(),
+        """
+        toolchain(name = "bbb_tool", toolchain = ":bbb_tool_impl", toolchain_type = "@bbb//:type")
+        """);
+    scratch.file(moduleRoot.getRelative("bbb+1.0").getRelative("REPO.bazel").getPathString());
+    scratch.file(
+        moduleRoot.getRelative("bbb+1.0").getRelative("BUILD").getPathString(),
+        """
+        toolchain_type(name = "type", visibility = ["//visibility:public"])
+
+        toolchain(name = "bbb_tool", toolchain = ":bbb_tool_impl", toolchain_type = ":type")
+        """);
+    rewriteModuleDotBazel(
+        """
+        bazel_dep(name = "aaa", version = "1.0")
+        bazel_dep(name = "bbb", version = "1.0")
+        """);
+    ToolchainContextKey key =
+        ToolchainContextKey.key()
+            .configurationKey(targetConfigKey)
+            .toolchainTypes(ToolchainTypeRequirement.create(Label.parseCanonical("@@bbb+//:type")))
+            .build();
+
+    EvaluationResult<UnloadedToolchainContext> result = invokeToolchainResolution(key);
+    assertThatEvaluationResult(result).hasNoError();
+    assertThat(result.get(key)).hasResolvedToolchain("@@aaa+//:bbb_tool_impl");
+
+    setBuildLanguageOptions("--incompatible_restrict_non_root_registrations");
+    result = invokeToolchainResolution(key);
+    assertThatEvaluationResult(result).hasNoError();
+    assertThat(result.get(key)).hasResolvedToolchain("@@bbb+//:bbb_tool_impl");
   }
 
   @Test
@@ -462,7 +514,7 @@ public class ToolchainResolutionFunctionTest extends ToolchainTestCase {
         .hasExceptionThat()
         .hasMessageThat()
         .isEqualTo(
-"""
+            """
 No matching toolchains found for target platform //platforms:linux:
   //toolchain:test_toolchain
     Closest candidate: //toolchain:toolchain_2
@@ -494,7 +546,7 @@ For more information on platforms or toolchains see https://bazel.build/concepts
         .hasExceptionThat()
         .hasMessageThat()
         .isEqualTo(
-"""
+            """
 No matching toolchains found for target platform //platforms:linux:
   //toolchain:test_toolchain
     Closest candidate: //toolchain:toolchain_1
@@ -532,7 +584,7 @@ For more information on platforms or toolchains see https://bazel.build/concepts
         .hasExceptionThat()
         .hasMessageThat()
         .isEqualTo(
-"""
+            """
 No matching toolchains found for target platform //platforms:linux:
   //toolchain:test_toolchain
     Closest candidate: //extra:extra_toolchain_multi
@@ -580,7 +632,7 @@ For more information on platforms or toolchains see https://bazel.build/concepts
         .hasExceptionThat()
         .hasMessageThat()
         .isEqualTo(
-"""
+            """
 No matching toolchains found for target platform //platforms:linux:
   //toolchain:test_toolchain
     Closest candidate: //extra:extra_toolchain_no_exec
@@ -610,7 +662,7 @@ For more information on platforms or toolchains see https://bazel.build/concepts
     assertThat(exception)
         .hasMessageThat()
         .isEqualTo(
-"""
+            """
 No matching toolchains found for target platform //platforms:test_platform:
   @@repo+//toolchain:test_toolchain
 To debug, rerun with --toolchain_resolution_debug='\\Q@@repo+//toolchain:test_toolchain\\E'
