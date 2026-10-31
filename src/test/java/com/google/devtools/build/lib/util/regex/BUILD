@@ -38,7 +38,10 @@ java_binary(
 )
 
 # Start fuzzing via
-#   bazel run //src/test/java/com/google/devtools/build/lib/util/regex:RegexUtilFuzzTest_run
+#   bazel run --java_language_version=21 --java_runtime_version=remotejdk_21 \
+#     //src/test/java/com/google/devtools/build/lib/util/regex:RegexUtilFuzzTest_run
+# Jazzer can't instrument Java 25 class files yet, so fuzzing with the default Java language and
+# runtime version doesn't get any coverage feedback.
 java_fuzz_test(
     name = "RegexUtilFuzzTest",
     srcs = ["RegexUtilFuzzTest.java"],

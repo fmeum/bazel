@@ -55,6 +55,7 @@ public class RegexUtilTest {
             "aa",
             "foo/test/x",
             "foo/coverage1dat/x",
+            "foobar",
           })
           String haystack,
       @TestParameter({
@@ -103,6 +104,9 @@ public class RegexUtilTest {
             ".*(?=foo)(foo|bar)",
             ".*(?<=/)(foo|bar)",
             ".*(?<n>foo|bar)",
+            ".*(?x)foo #comment",
+            ".*(?ix)foo",
+            ".*(?x:foo)#bar",
           })
           String needle) {
     Pattern originalPattern = Pattern.compile(needle, Pattern.DOTALL);
