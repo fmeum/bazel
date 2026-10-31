@@ -16,9 +16,12 @@ package com.google.devtools.build.lib.remote;
 import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.base.Preconditions.checkState;
 import static com.google.common.collect.ImmutableList.toImmutableList;
+import static com.google.common.collect.ImmutableSet.toImmutableSet;
 import static com.google.devtools.build.lib.packages.TargetUtils.isTestRuleName;
 import static com.google.devtools.build.lib.skyframe.CoverageReportValue.COVERAGE_REPORT_KEY;
 
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
@@ -41,9 +44,11 @@ import com.google.devtools.build.lib.analysis.test.TestProvider;
 import com.google.devtools.build.lib.clock.Clock;
 import com.google.devtools.build.lib.remote.options.RemoteOutputsMode;
 import com.google.devtools.build.lib.skyframe.SkyFunctions;
+import com.google.devtools.build.lib.skyframe.TreeArtifactValue;
 import com.google.devtools.build.lib.vfs.PathFragment;
 import com.google.devtools.build.skyframe.MemoizingEvaluator;
 import com.google.devtools.common.options.RegexPatternOption;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Predicate;
@@ -73,6 +78,14 @@ public class RemoteOutputChecker implements OutputChecker {
   private final ImmutableList<Predicate<String>> patternsToDownload;
   private final ConcurrentArtifactPathTrie pathsToDownload = new ConcurrentArtifactPathTrie();
   private final Set<PathFragment> pathsToSkip = ConcurrentHashMap.newKeySet();
+
+  // Matching a path against the download regexes can be expensive and tree artifacts, e.g. those in
+  // the runfiles of many tests, are often checked many times per build. The results of matching
+  // the path of a tree artifact and the paths of its children are thus cached. The latter cache
+  // uses weak keys, which are compared by identity.
+  private final Map<PathFragment, Boolean> treeMatchesPatternCache = new ConcurrentHashMap<>();
+  private final Cache<TreeArtifactValue, ImmutableSet<TreeFileArtifact>>
+      treeChildrenMatchingPatternCache = Caffeine.newBuilder().weakKeys().build();
 
   public RemoteOutputChecker(
       String commandName,
@@ -309,6 +322,26 @@ public class RemoteOutputChecker implements OutputChecker {
     return false;
   }
 
+  private boolean treeMatchesPattern(PathFragment treeExecPath) {
+    if (patternsToDownload.isEmpty()) {
+      return false;
+    }
+    return treeMatchesPatternCache.computeIfAbsent(treeExecPath, this::matchesPattern);
+  }
+
+  private ImmutableSet<TreeFileArtifact> getTreeChildrenMatchingPattern(
+      TreeArtifactValue treeValue) {
+    if (patternsToDownload.isEmpty()) {
+      return ImmutableSet.of();
+    }
+    return treeChildrenMatchingPatternCache.get(
+        treeValue,
+        value ->
+            value.getChildren().stream()
+                .filter(child -> matchesPattern(child.getExecPath()))
+                .collect(toImmutableSet()));
+  }
+
   /**
    * Returns whether this {@link ActionInput} could conceivably be only available remotely.
    *
@@ -347,10 +380,41 @@ public class RemoteOutputChecker implements OutputChecker {
     if (pathsToSkip.contains(execPath)) {
       return false;
     }
-    return outputsMode == RemoteOutputsMode.ALL
-        || pathsToDownload.contains(execPath)
-        || matchesPattern(execPath)
-        || (treeRootExecPath != null && matchesPattern(treeRootExecPath));
+    return isRequestedForDownload(execPath)
+        || (treeRootExecPath != null && treeMatchesPattern(treeRootExecPath))
+        || matchesPattern(execPath);
+  }
+
+  /**
+   * Returns the children of the given tree artifact that should be downloaded.
+   *
+   * <p>This is equivalent to calling {@link #shouldDownloadOutput(ActionInput, FileArtifactValue)}
+   * for every child, but the result of matching the children against the download regexes is cached
+   * per {@link TreeArtifactValue}. Use this for tree artifacts that are likely to be checked many
+   * times, such as tree artifacts in the runfiles of many top-level targets.
+   */
+  public ImmutableList<TreeFileArtifact> getTreeChildrenToDownload(
+      PathFragment treeExecPath, TreeArtifactValue treeValue) {
+    boolean treeMatchesPattern = treeMatchesPattern(treeExecPath);
+    ImmutableSet<TreeFileArtifact> childrenMatchingPattern =
+        treeMatchesPattern ? ImmutableSet.of() : getTreeChildrenMatchingPattern(treeValue);
+    var childrenToDownload = ImmutableList.<TreeFileArtifact>builder();
+    for (var entry : treeValue.getChildValues().entrySet()) {
+      TreeFileArtifact child = entry.getKey();
+      PathFragment childExecPath = child.getExecPath();
+      if (entry.getValue().isRemote()
+          && !pathsToSkip.contains(childExecPath)
+          && (treeMatchesPattern
+              || isRequestedForDownload(childExecPath)
+              || childrenMatchingPattern.contains(child))) {
+        childrenToDownload.add(child);
+      }
+    }
+    return childrenToDownload.build();
+  }
+
+  private boolean isRequestedForDownload(PathFragment execPath) {
+    return outputsMode == RemoteOutputsMode.ALL || pathsToDownload.contains(execPath);
   }
 
   @Override
