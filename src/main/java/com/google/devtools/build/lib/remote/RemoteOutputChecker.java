@@ -125,6 +125,16 @@ public class RemoteOutputChecker implements OutputChecker {
     lastRemoteOutputChecker = null;
   }
 
+  /**
+   * Clears the caches of pattern matching results. Call this when the command ends: afterwards,
+   * this checker is only retained to provide its download policy to the next command, which doesn't
+   * need the caches.
+   */
+  void clearCaches() {
+    treeMatchesPatternCache.clear();
+    treeChildrenMatchingPatternCache.invalidateAll();
+  }
+
   /** Sets this checker to check the TTL of remote metadata when deciding whether to trust it. */
   public void setCheckMetadataTtl(Clock clock) {
     this.clock = clock;

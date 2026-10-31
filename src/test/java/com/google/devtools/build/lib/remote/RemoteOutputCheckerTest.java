@@ -379,6 +379,29 @@ public class RemoteOutputCheckerTest {
         .containsExactly("out/foo/tree", "out/foo/tree/a.txt", "out/foo/tree/b.bin");
   }
 
+  @Test
+  public void clearCaches_matchesPathsAgain() throws Exception {
+    List<String> matchedPaths = new ArrayList<>();
+    var checker =
+        new RemoteOutputChecker(
+            "build",
+            RemoteOutputsMode.MINIMAL,
+            ImmutableList.of(recordingRegex(".*\\.txt", matchedPaths)));
+    var tree = ActionsTestUtil.createTreeArtifactWithGeneratingAction(execRoot, "foo/tree");
+    var treeValue =
+        TreeArtifactValue.newBuilder(tree)
+            .putChild(TreeFileArtifact.createTreeOutput(tree, "a.bin"), REMOTE_METADATA)
+            .build();
+
+    assertThat(checker.getTreeChildrenToDownload(tree.getExecPath(), treeValue)).isEmpty();
+    checker.clearCaches();
+    assertThat(checker.getTreeChildrenToDownload(tree.getExecPath(), treeValue)).isEmpty();
+
+    assertThat(matchedPaths)
+        .containsExactly(
+            "out/foo/tree", "out/foo/tree/a.bin", "out/foo/tree", "out/foo/tree/a.bin");
+  }
+
   /** Returns a regex option that records every path it is matched against. */
   private static RegexPatternOption recordingRegex(String regex, List<String> matchedPaths)
       throws Exception {
