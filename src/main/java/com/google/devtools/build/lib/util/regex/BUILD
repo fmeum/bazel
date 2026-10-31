@@ -16,5 +16,6 @@ java_library(
     srcs = ["RegexUtil.java"],
     deps = [
         "//src/main/java/com/google/devtools/build/lib/util:string_encoding",
+        "//third_party/java/jsr305_annotations",
     ],
 )

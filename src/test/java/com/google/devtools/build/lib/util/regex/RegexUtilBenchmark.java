@@ -44,7 +44,12 @@ public class RegexUtilBenchmark {
     ".*/coverage\\.dat",
     ".*/my_action.outputs/.*",
     ".*/testlogs/.*/test\\.xml",
-    ".*/testlogs/.*/attempt_[0-9]+\\.xml"
+    ".*/testlogs/.*/attempt_[0-9]+\\.xml",
+    ".*/(test\\.xml|test\\.log)",
+    // https://github.com/bazelbuild/bazel/issues/32287
+    ".*(((synced_folder_failure|model_configuration_markers|personal_api_keys)_browser_test"
+        + "|run_admin_panel_e2e)/test.outputs(/.*)?"
+        + "|build/vulnerability/repository_report[.](grype[.]json|summary(/.*)?))"
   })
   public String needle;
 
