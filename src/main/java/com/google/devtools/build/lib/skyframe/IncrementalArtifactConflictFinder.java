@@ -13,29 +13,17 @@
 // limitations under the License.
 package com.google.devtools.build.lib.skyframe;
 
-import static com.google.common.util.concurrent.MoreExecutors.directExecutor;
-import static com.google.devtools.build.lib.skyframe.ArtifactConflictFinder.NUM_JOBS;
-
 import com.google.common.base.Preconditions;
 import com.google.common.collect.ImmutableMap;
-import com.google.common.collect.Sets;
-import com.google.common.util.concurrent.Futures;
-import com.google.common.util.concurrent.ListenableFuture;
-import com.google.common.util.concurrent.ListeningExecutorService;
-import com.google.common.util.concurrent.MoreExecutors;
-import com.google.common.util.concurrent.ThreadFactoryBuilder;
+import com.google.common.collect.ImmutableSet;
 import com.google.devtools.build.lib.actions.ActionAnalysisMetadata;
 import com.google.devtools.build.lib.actions.ActionConflictException;
 import com.google.devtools.build.lib.actions.ActionLookupKey;
 import com.google.devtools.build.lib.actions.ActionLookupValue;
 import com.google.devtools.build.lib.actions.Actions;
 import com.google.devtools.build.lib.actions.Artifact;
+import com.google.devtools.build.lib.actions.Artifact.DerivedArtifact;
 import com.google.devtools.build.lib.actions.MutableActionGraph;
-import com.google.devtools.build.lib.concurrent.AbstractQueueVisitor;
-import com.google.devtools.build.lib.concurrent.AbstractQueueVisitor.ExceptionHandlingMode;
-import com.google.devtools.build.lib.concurrent.ErrorClassifier;
-import com.google.devtools.build.lib.concurrent.ExecutorUtil;
-import com.google.devtools.build.lib.concurrent.QuiescingExecutor;
 import com.google.devtools.build.lib.concurrent.ThreadSafety.ThreadSafe;
 import com.google.devtools.build.lib.profiler.Profiler;
 import com.google.devtools.build.lib.profiler.ProfilerTask;
@@ -45,18 +33,15 @@ import com.google.devtools.build.lib.vfs.PathFragment;
 import com.google.devtools.build.skyframe.SkyKey;
 import com.google.devtools.build.skyframe.SkyValue;
 import com.google.devtools.build.skyframe.WalkableGraph;
-import java.util.Collection;
+import java.util.ArrayDeque;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Iterator;
+import java.util.Map;
 import java.util.Set;
-import java.util.concurrent.Callable;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.ConcurrentMap;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.ExecutionException;
-import java.util.concurrent.Executors;
-import java.util.concurrent.RejectedExecutionException;
-import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.locks.ReentrantLock;
 import javax.annotation.Nullable;
 import javax.annotation.concurrent.GuardedBy;
 
@@ -71,256 +56,231 @@ import javax.annotation.concurrent.GuardedBy;
 public final class IncrementalArtifactConflictFinder {
   private final MutableActionGraph threadSafeMutableActionGraph;
   private final ConcurrentMap<String, Object> pathFragmentTrieRoot;
-  private final QuiescingExecutor exclusivePool;
-  private final ListeningExecutorService freeForAllPool;
   private final WalkableGraph walkableGraph;
-  private final AtomicBoolean conflictFound = new AtomicBoolean(false);
-  private Set<ActionLookupKey> globalVisited = Sets.newConcurrentHashSet();
 
-  @GuardedBy("exclusivePortionLock")
-  private CountDownLatch nextSignalToWaitFor = null;
+  // The lock serializing the traversal-based conflict checks of top level keys.
+  private final ReentrantLock lock = new ReentrantLock();
 
-  // The common lock for the portions of the process where top level targets need to be processed
-  // exclusively.
-  private final Object exclusivePortionLock = new Object();
+  /** The keys whose actions have already been registered with the action graph. */
+  @GuardedBy("lock")
+  private final Set<ActionLookupKey> visited = new HashSet<>();
+
+  /** All conflicts found so far, keyed by the owner of the conflicting action. */
+  @GuardedBy("lock")
+  private final Map<ActionLookupKey, Map<ActionAnalysisMetadata, ActionConflictException>>
+      badActionsByOwner = new HashMap<>();
+
+  /**
+   * Memoizes, for a key, the owners of conflicting actions in its transitive closure. Only valid
+   * for the current contents of {@link #badActionsByOwner}: it is cleared whenever a new conflict
+   * is found.
+   */
+  @GuardedBy("lock")
+  private final Map<ActionLookupKey, ImmutableSet<ActionLookupKey>> reachableBadOwners =
+      new HashMap<>();
 
   public IncrementalArtifactConflictFinder(
       MutableActionGraph threadSafeMutableActionGraph, WalkableGraph walkableGraph) {
     this.threadSafeMutableActionGraph = threadSafeMutableActionGraph;
     this.pathFragmentTrieRoot = new ConcurrentHashMap<>();
     this.walkableGraph = walkableGraph;
-    this.exclusivePool =
-        AbstractQueueVisitor.createWithExecutorService(
-            Executors.newFixedThreadPool(
-                NUM_JOBS, new ThreadFactoryBuilder().setNameFormat("ALV collector %d").build()),
-            ExceptionHandlingMode.KEEP_GOING,
-            ErrorClassifier.DEFAULT);
-    this.freeForAllPool =
-        MoreExecutors.listeningDecorator(
-            Executors.newFixedThreadPool(
-                NUM_JOBS,
-                new ThreadFactoryBuilder().setNameFormat("Action conflict finder %d").build()));
   }
 
   public int getOutputArtifactCount() {
     return threadSafeMutableActionGraph.getSize();
   }
 
+  /**
+   * Checks the actions in the transitive closure of a top level key for conflicts.
+   *
+   * <p>With Skymeld, conflict checking has to be done incrementally the moment each top level
+   * target's analysis is finished. The checks of different top level keys are serialized and each
+   * check consists of two steps:
+   *
+   * <ol>
+   *   <li>The actions of all keys in the transitive closure that haven't been visited by a previous
+   *       check are registered with the action graph. Since the checks are serialized, by the time
+   *       a check returns, the actions of the entire transitive closure of its key have been
+   *       registered and checked against each other as well as against the actions registered by
+   *       previous checks. Any conflicts found are recorded globally, keyed by the owner of the
+   *       conflicting action.
+   *   <li>If any conflict has been found so far in this build, the transitive closure of the key
+   *       is traversed again to collect the conflicting actions that it contains. This step is
+   *       necessary since an action registered by a previous check may have been found to conflict
+   *       only later and the result of the first step is thus not sufficient to decide whether
+   *       the key is free of conflicts. Its cost is amortized across top level keys by memoizing
+   *       the result for every visited key, which is only invalidated by a new conflict.
+   * </ol>
+   *
+   * <p>Since each step is linear in the number of keys not yet visited by it, the total cost of
+   * conflict checking is linear in the size of the analysis graph as long as the number of
+   * distinct conflicts found is small.
+   *
+   * @return the conflicts found while registering the actions of {@code actionLookupKey}'s
+   *     transitive closure as well as the conflicting actions contained in it, mapped to their
+   *     exceptions. The key can only be executed if the map is empty. Both actions involved in a
+   *     newly found conflict are included even if only one of them is contained in the transitive
+   *     closure, so that the union of the results of all checks covers all conflicting actions.
+   */
   ActionConflictsAndStats findArtifactConflicts(ActionLookupKey actionLookupKey)
       throws InterruptedException {
-    return findArtifactConflicts(actionLookupKey, /* inRerun= */ false);
+    lock.lockInterruptibly();
+    try {
+      Map<ActionAnalysisMetadata, ActionConflictException> conflicts = new HashMap<>();
+      try (SilentCloseable c =
+          Profiler.instance().profile(ProfilerTask.CONFLICT_CHECK, "Register actions")) {
+        registerActionsInClosure(actionLookupKey, conflicts);
+      }
+      if (!conflicts.isEmpty()) {
+        for (Map.Entry<ActionAnalysisMetadata, ActionConflictException> entry :
+            conflicts.entrySet()) {
+          badActionsByOwner
+              .computeIfAbsent(getOwner(entry.getKey()), unused -> new HashMap<>())
+              .put(entry.getKey(), entry.getValue());
+        }
+        reachableBadOwners.clear();
+      }
+
+      if (!badActionsByOwner.isEmpty()) {
+        try (SilentCloseable c =
+            Profiler.instance().profile(ProfilerTask.CONFLICT_CHECK, "Find transitive conflicts")) {
+          for (ActionLookupKey owner : findReachableBadOwners(actionLookupKey)) {
+            conflicts.putAll(badActionsByOwner.get(owner));
+          }
+        }
+      }
+      return ActionConflictsAndStats.create(
+          ImmutableMap.copyOf(conflicts), threadSafeMutableActionGraph.getSize());
+    } finally {
+      lock.unlock();
+    }
   }
 
   /**
-   * The following scenario would be used for the rest of this section:
-   *
-   * <ul>
-   *   <li>topA depends on C1 and C2,
-   *   <li>topB also depends on C1 and C2,
-   *   <li>C1 and C2 conflict
-   *   <li>--keep_going
-   * </ul>
-   *
-   * With Skymeld, conflict checking has to be done incrementally the moment each top level target's
-   * analysis is finished. We're essentially trying to ensure 2 goals: (goal#1) for the "happy
-   * path", no extra ALV is traversed and (goal#2) for the conflict case, no top level target is
-   * allowed to enter execution without making sure that there's no conflict in its actions. Some
-   * past solutions that didn't quite work:
-   *
-   * <ul>
-   *   <li>If we use a naive global set of visited ALKs to prune traversal, we achieve (goal#1) but
-   *       fail (goal#2). Explanation below [1].
-   *   <li>If we only add ALKs to this set when we know these ALKs are conflict-free, we achieve
-   *       (goal#2) but fail (goal#1): if conflict_check(topA) and conflict_check(topB) happen
-   *       around the same time, we essentially get no ALV pruning. Also covered below [1].
-   * </ul>
-   *
-   * To achieve both, we use the following algorithm:
-   *
-   * <pre>{@code
-   * 1. [Sequential portion] Sequentially collect the ALVs in the transitive closure of a top level
-   *    target. Store the visited keys in a set and use that to exclude them from traversals by
-   *    other top level targets.
-   *    - The strict sequential ordering ensures that by the time we're done with the conflict check
-   *      of a top level target, its full transitive closure is covered and therefore avoiding
-   *      missing possible conflicts. More explanation in [2].
-   *
-   * 2. [Concurrent portion] Concurrently check the actions in the collected ALVs.
-   *
-   * 3. Finalizing the conflict checking of the ith top level key only if that of the (i - 1)th key
-   *    is finalized. Once a key is finalized, we can be sure that it contains no conflict.
-   *    - Finalizing, in practice, simply means allowing the conflict checking method to return and
-   *      essentially starting the execution.
-   *    - The ordering is the order in which top level targets start checking for conflicts.
-   *    - The ordering is important for correctness reasons: a top level target needs to wait until
-   *      the ALVs that were in the visited set when it started checking for conflicts to have
-   *      actually been checked for conflicts.
-   *
-   * 4. If there's a conflict detected at any point, rerun the check for the unfinished keys without
-   *    pruning (the full transitive closure would be visited).
-   * }</pre>
-   *
-   * <p>#1 would ensure (goal#1) since there's pruning. #3 and #4 would ensure (goal#2). #2 is for
-   * performance.
-   *
-   * <p>Why do we need #1 to be sequential? See [2].
-   *
-   * <p>Why do we need #2 to be a separate concurrent section? Without it, we'd essentially be doing
-   * the entire conflict checking sequentially. Our benchmark has shown that this was very slow.
-   *
-   * <p>Why do we need the ordering in #3? See [3].
-   *
-   * <p>Why do we need the rerun in #4? Without it, we can't really proceed. Should a top level
-   * target topC be stopped from executing by a conflict discovered in topA? We don't have enough
-   * information to know without rerunning.
-   *
-   * <p>=== Footnotes ===
-   *
-   * <p>[1] Assume the following sequence:
-   *
-   * <pre>{@code
-   * conflict_check(topA)
-   * topA visits C1
-   * topA visits C2
-   *
-   * conflict_check(topB)
-   * topB doesn't visit C1 & C2 since they're in the visited set
-   * check_actions(topB) returns with no conflict
-   *
-   * check_actions(topA) finally recognizes the conflict, but it's too late. topB already started
-   * executing.
-   * }</pre>
-   *
-   * <p>To avoid this issue, we have been only updating the global set with conflict-free keys. This
-   * however comes with a heavy performance penalty: if the top level targets start to check for
-   * conflicts at roughly the same time, this pruning mechanism is ineffective and would result in a
-   * lot more extra work.
-   *
-   * <p>[2] If #1 isn't sequential, the following can happen:
-   *
-   * <pre>{@code
-   * # conflict_check = collect_alv (concurrent) + check_actions (concurrent)
-   * collect_alv(topA)
-   * collect_alv(topB)
-   *
-   * topA visits C1
-   * topB visits C2. Since C2 is visited, topA doesn't visit it anymore
-   *
-   * check_actions(topA) returns with no conflict
-   * check_actions(topB) finally recognizes the conflict, but it's too late. topA already started
-   * executing.
-   * }</pre>
-   *
-   * What we've ensured here is: if we discover a conflict foo, there's no chance of it being
-   * executed by a top level target that's already confirmed to be conflict-free.
-   *
-   * <p>[3] If the ith key doesn't wait for the (i - 1)th key, the following can happen:
-   *
-   * <pre>{@code
-   * # conflict_check = collect_alv (sequential) + check_actions (concurrent)
-   * collect_alv(topA)
-   * topA visits C1
-   * topA visits C2
-   *
-   * collect_alv(topB)
-   * check_actions(topB) does not wait for top A and returns with no conflict
-   *
-   * check_actions(topA) finally recognizes the conflict, but it's too late. topB already started
-   * executing.
-   * }</pre>
+   * Registers the actions of all keys in the transitive closure of {@code root} that haven't been
+   * visited yet and collects the conflicts found while doing so.
    */
-  ActionConflictsAndStats findArtifactConflicts(ActionLookupKey actionLookupKey, boolean inRerun)
+  @GuardedBy("lock")
+  private void registerActionsInClosure(
+      ActionLookupKey root, Map<ActionAnalysisMetadata, ActionConflictException> badActionMap)
       throws InterruptedException {
-    ConcurrentMap<ActionAnalysisMetadata, ActionConflictException> temporaryBadActionMap =
-        new ConcurrentHashMap<>();
-
-    Collection<ListenableFuture<Void>> actionCheckingFutures = new ConcurrentLinkedQueue<>();
-
-    CountDownLatch toWaitFor = null;
-    CountDownLatch mySignal = null;
-
-    // Only allow 1 top-level target to do ALV collection at a time.
-    try (SilentCloseable c =
-        Profiler.instance().profile(ProfilerTask.CONFLICT_CHECK, "ALV collection")) {
-      synchronized (exclusivePortionLock) {
-        if (!inRerun) {
-          toWaitFor = nextSignalToWaitFor;
-          mySignal = new CountDownLatch(1);
-          nextSignalToWaitFor = mySignal;
-        }
-        exclusivePool.execute(
-            new CheckForConflictsUnderKey(
-                actionLookupKey,
-                actionCheckingFutures,
-                temporaryBadActionMap,
-                // While rerunning, we only keep a local set of visited ALKs.
-                /* dedupSet= */ inRerun ? Sets.newConcurrentHashSet() : globalVisited));
-        exclusivePool.awaitQuiescenceWithoutShutdown(true);
-      }
+    if (!visited.add(root)) {
+      return;
     }
-
-    try (SilentCloseable c =
-        Profiler.instance().profile(ProfilerTask.CONFLICT_CHECK, "Go through actions")) {
-      try {
-        Futures.whenAllSucceed(actionCheckingFutures).call(() -> null, directExecutor()).get();
-      } catch (ExecutionException e) {
-        throw new IllegalStateException("Unexpected exception", e);
+    ArrayDeque<ActionLookupKey> queue = new ArrayDeque<>();
+    queue.add(root);
+    while (!queue.isEmpty()) {
+      if (Thread.interrupted()) {
+        throw new InterruptedException();
       }
-
-      if (!temporaryBadActionMap.isEmpty()) {
-        conflictFound.set(true);
-        // We can drop the globalVisited set now.
-        globalVisited = Sets.newConcurrentHashSet();
+      ActionLookupKey key = queue.poll();
+      SkyValue value = walkableGraph.getValue(key);
+      if (value == null) { // The value failed to evaluate.
+        continue;
       }
-    }
-
-    if (!inRerun) {
-      // Wait for the previous check in the queue.
-      try (SilentCloseable c =
-          Profiler.instance()
-              .profile(ProfilerTask.CONFLICT_CHECK, "Awaiting signal from a prior key.")) {
-        if (toWaitFor != null) {
-          toWaitFor.await();
+      for (SkyKey dep : walkableGraph.getDirectDeps(key)) {
+        // The subgraph of dependencies of ActionLookupKeys never has a non-ActionLookupKey
+        // depending on an ActionLookupKey. So we can skip any non-ActionLookupKeys in the
+        // traversal as an optimization.
+        if (dep instanceof ActionLookupKey depKey && visited.add(depKey)) {
+          queue.add(depKey);
         }
       }
-
-      // Signal the next check in the queue to continue.
-      mySignal.countDown();
-
-      // Rerun if there's a conflict and this isn't the rerun already.
-      // No need to rerun if the temporaryBadActionMap is non-empty: this means a conflict has
-      // been detected for this top level target and it won't be executed. That's all we want.
-      if (conflictFound.get() && toWaitFor != null && temporaryBadActionMap.isEmpty()) {
-        return findArtifactConflicts(actionLookupKey, /* inRerun= */ true);
-      }
-    }
-
-    return ActionConflictsAndStats.create(
-        ImmutableMap.copyOf(temporaryBadActionMap), threadSafeMutableActionGraph.getSize());
-  }
-
-  void shutdown() {
-    try {
-      synchronized (exclusivePortionLock) {
-        exclusivePool.awaitQuiescence(true);
-      }
-    } catch (InterruptedException e) {
-      // Preserve the interrupt status.
-      Thread.currentThread().interrupt();
-    }
-    synchronized (freeForAllPool) {
-      if (!freeForAllPool.isShutdown() && ExecutorUtil.interruptibleShutdown(freeForAllPool)) {
-        // Preserve the interrupt status.
-        Thread.currentThread().interrupt();
+      // The value can be a non ActionLookupValue e.g. NonRuleConfiguredTargetValue.
+      if (value instanceof ActionLookupValue alv) {
+        actionRegistration(alv, threadSafeMutableActionGraph, pathFragmentTrieRoot, badActionMap);
       }
     }
   }
 
-  private static Void actionRegistration(
+  /**
+   * Returns the owners of conflicting actions in the transitive closure of {@code root}, memoizing
+   * the result for every key visited along the way.
+   */
+  @GuardedBy("lock")
+  private ImmutableSet<ActionLookupKey> findReachableBadOwners(ActionLookupKey root)
+      throws InterruptedException {
+    ImmutableSet<ActionLookupKey> memoized = reachableBadOwners.get(root);
+    if (memoized != null) {
+      return memoized;
+    }
+    // A post-order traversal with an explicit stack: the result for a key is computed once the
+    // results for all of its dependencies are known.
+    ArrayDeque<VisitState> stack = new ArrayDeque<>();
+    stack.push(new VisitState(root, walkableGraph.getValue(root) == null));
+    while (true) {
+      if (Thread.interrupted()) {
+        throw new InterruptedException();
+      }
+      VisitState state = stack.peek();
+      if (state.deps == null && !state.failed) {
+        state.deps = walkableGraph.getDirectDeps(state.key).iterator();
+      }
+      ActionLookupKey unvisitedDep = null;
+      while (state.deps != null && state.deps.hasNext()) {
+        if (!(state.deps.next() instanceof ActionLookupKey depKey)) {
+          continue;
+        }
+        ImmutableSet<ActionLookupKey> depResult = reachableBadOwners.get(depKey);
+        if (depResult == null) {
+          unvisitedDep = depKey;
+          break;
+        }
+        state.accumulate(depResult);
+      }
+      if (unvisitedDep != null) {
+        stack.push(new VisitState(unvisitedDep, walkableGraph.getValue(unvisitedDep) == null));
+        continue;
+      }
+      if (badActionsByOwner.containsKey(state.key)) {
+        state.accumulate(ImmutableSet.of(state.key));
+      }
+      ImmutableSet<ActionLookupKey> result = state.result;
+      reachableBadOwners.put(state.key, result);
+      stack.pop();
+      if (stack.isEmpty()) {
+        return result;
+      }
+      stack.peek().accumulate(result);
+    }
+  }
+
+  /** The state of an in-progress visit of a key by {@link #findReachableBadOwners}. */
+  private static final class VisitState {
+    private final ActionLookupKey key;
+    // Whether the key failed to evaluate, in which case it has neither deps nor actions.
+    private final boolean failed;
+    @Nullable private Iterator<SkyKey> deps = null;
+    private ImmutableSet<ActionLookupKey> result = ImmutableSet.of();
+
+    private VisitState(ActionLookupKey key, boolean failed) {
+      this.key = key;
+      this.failed = failed;
+    }
+
+    private void accumulate(ImmutableSet<ActionLookupKey> owners) {
+      if (owners.isEmpty() || result.containsAll(owners)) {
+        return;
+      }
+      if (result.isEmpty()) {
+        // Share the set with the dependency it came from: most keys reach the same few owners.
+        result = owners;
+        return;
+      }
+      result = ImmutableSet.<ActionLookupKey>builder().addAll(result).addAll(owners).build();
+    }
+  }
+
+  private static ActionLookupKey getOwner(ActionAnalysisMetadata action) {
+    return ((DerivedArtifact) action.getPrimaryOutput()).getArtifactOwner();
+  }
+
+  private static void actionRegistration(
       ActionLookupValue alv,
       MutableActionGraph actionGraph,
       ConcurrentMap<String, Object> pathFragmentTrieRoot,
-      ConcurrentMap<ActionAnalysisMetadata, ActionConflictException> badActionMap) {
+      Map<ActionAnalysisMetadata, ActionConflictException> badActionMap)
+      throws InterruptedException {
     for (ActionAnalysisMetadata action : alv.getActions()) {
       try {
         actionGraph.registerAction(action);
@@ -333,10 +293,6 @@ public final class IncrementalArtifactConflictFinder {
         // artifact below -- we don't need to check it since this action is already in
         // error.
         continue;
-      } catch (InterruptedException e) {
-        // Bail.
-        Thread.currentThread().interrupt();
-        return null;
       }
       try {
         for (Artifact output : action.getOutputs()) {
@@ -347,7 +303,6 @@ public final class IncrementalArtifactConflictFinder {
             "ActionConflictException aren't expected to be thrown here.", e);
       }
     }
-    return null;
   }
 
   public void conflictCheckPerAction(ActionAnalysisMetadata action)
@@ -379,7 +334,7 @@ public final class IncrementalArtifactConflictFinder {
       MutableActionGraph actionGraph,
       ConcurrentMap<String, Object> root,
       Artifact newArtifact,
-      @Nullable ConcurrentMap<ActionAnalysisMetadata, ActionConflictException> badActionMap)
+      @Nullable Map<ActionAnalysisMetadata, ActionConflictException> badActionMap)
       throws ActionConflictException {
     Object existingTrieNode = root;
     PathFragment newArtifactPathFragment = newArtifact.getExecPath();
@@ -392,12 +347,17 @@ public final class IncrementalArtifactConflictFinder {
       ConcurrentMap<String, Object> existingNonLeafNode =
           (ConcurrentMap<String, Object>) existingTrieNode;
 
-      Object matchingChildNode =
-          existingNonLeafNode.computeIfAbsent(
-              newSegment,
-              isFinalSegmentOfNewPath
-                  ? unused -> newArtifact
-                  : unused -> new ConcurrentHashMap<String, Object>());
+      // Look up the segment before attempting to insert it: the vast majority of segments are
+      // already present and a plain get doesn't lock the map's bin.
+      Object matchingChildNode = existingNonLeafNode.get(newSegment);
+      if (matchingChildNode == null) {
+        matchingChildNode =
+            existingNonLeafNode.computeIfAbsent(
+                newSegment,
+                isFinalSegmentOfNewPath
+                    ? unused -> newArtifact
+                    : unused -> new ConcurrentHashMap<String, Object>());
+      }
 
       // By the time we arrive in this method, we know for sure that there can't be any exact
       // matches in the paths since that would have been an ActionConflictException.
@@ -463,77 +423,5 @@ public final class IncrementalArtifactConflictFinder {
       }
     }
     return (Artifact) nodeIter;
-  }
-
-  /** Visit the transitive closure of {@code key} and check for conflicts among the actions. */
-  private final class CheckForConflictsUnderKey implements Runnable {
-    private final ActionLookupKey key;
-    private final Collection<ListenableFuture<Void>> actionCheckingFutures;
-    private final ConcurrentMap<ActionAnalysisMetadata, ActionConflictException> badActionMap;
-
-    private final Set<ActionLookupKey> dedupSet;
-
-    private CheckForConflictsUnderKey(
-        ActionLookupKey key,
-        Collection<ListenableFuture<Void>> actionCheckingFutures,
-        ConcurrentMap<ActionAnalysisMetadata, ActionConflictException> badActionMap,
-        Set<ActionLookupKey> dedupSet) {
-      this.key = key;
-      this.actionCheckingFutures = actionCheckingFutures;
-      this.badActionMap = badActionMap;
-      this.dedupSet = dedupSet;
-    }
-
-    @Override
-    public void run() {
-      SkyValue value = null;
-      try {
-        value = walkableGraph.getValue(key);
-      } catch (InterruptedException e) {
-        Thread.currentThread().interrupt();
-      }
-      if (value == null) { // The value failed to evaluate.
-        return;
-      }
-
-      Iterable<SkyKey> directDeps;
-      try {
-        directDeps = walkableGraph.getDirectDeps(key);
-      } catch (InterruptedException e) {
-        Thread.currentThread().interrupt();
-        return;
-      }
-      for (SkyKey dep : directDeps) {
-        if (!(dep instanceof ActionLookupKey depKey)) {
-          // The subgraph of dependencies of ActionLookupKeys never has a non-ActionLookupKey
-          // depending on an ActionLookupKey. So we can skip any non-ActionLookupKeys in the
-          // traversal as an optimization.
-          continue;
-        }
-        if (dedupSet.add(depKey)) {
-          exclusivePool.execute(
-              new CheckForConflictsUnderKey(depKey, actionCheckingFutures, badActionMap, dedupSet));
-        }
-      }
-      var finalValue = value;
-      // The value can be a non ActionLookupValue e.g. NonRuleConfiguredTargetValue.
-      if (!(finalValue instanceof ActionLookupValue)) {
-        return;
-      }
-      Callable<Void> goThroughActions =
-          () ->
-              actionRegistration(
-                  (ActionLookupValue) finalValue,
-                  threadSafeMutableActionGraph,
-                  pathFragmentTrieRoot,
-                  badActionMap);
-      try {
-        var actionCheckingFuture = freeForAllPool.submit(goThroughActions);
-        actionCheckingFutures.add(actionCheckingFuture);
-      } catch (RejectedExecutionException e) {
-        // Some other thread shut down the executor, exit now. This can happen in the case of an
-        // analysis error.
-      }
-    }
   }
 }
