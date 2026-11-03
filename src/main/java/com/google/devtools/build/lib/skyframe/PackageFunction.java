@@ -19,11 +19,13 @@ import static com.google.common.base.Preconditions.checkState;
 import com.google.common.base.Throwables;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
+import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Lists;
 import com.google.common.collect.Maps;
 import com.google.devtools.build.lib.actions.FileValue;
 import com.google.devtools.build.lib.actions.ThreadStateReceiver;
 import com.google.devtools.build.lib.clock.BlazeClock;
+import com.google.devtools.build.lib.cmdline.ExtensionRepositoryMapping;
 import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.cmdline.LabelConstants;
 import com.google.devtools.build.lib.cmdline.LabelSyntaxException;
@@ -355,6 +357,12 @@ public abstract class PackageFunction implements SkyFunction {
   private static class State implements SkyKeyComputeState {
     @Nullable private CompiledBuildFile compiledBuildFile;
     @Nullable private LoadedPackage loadedPackage;
+
+    /**
+     * Repos that were resolved structurally without verification while loading {@link
+     * #loadedPackage}, see {@link ExtensionRepoNameVerifier}.
+     */
+    private ImmutableSet<ExtensionRepoNameValue.Key> unverifiedRepoNames = ImmutableSet.of();
   }
 
   /**
@@ -510,20 +518,40 @@ public abstract class PackageFunction implements SkyFunction {
     // .bzl dependencies change.
 
     State state = env.getState(State::new);
+    if (state.loadedPackage != null && !state.unverifiedRepoNames.isEmpty()) {
+      // The package has been loaded in a previous attempt while some repo names couldn't be
+      // verified yet. If they all exist, the package is the same as if they had been verified right
+      // away. Otherwise, load it again, which now resolves them exactly.
+      Boolean allExist = ExtensionRepoNameVerifier.allExist(env, state.unverifiedRepoNames);
+      if (allExist == null) {
+        return null;
+      }
+      if (!allExist) {
+        state.loadedPackage = null;
+      }
+      state.unverifiedRepoNames = ImmutableSet.of();
+    }
     if (state.loadedPackage == null) {
-      state.loadedPackage =
-          loadPackage(
-              packageLookupValue,
-              packagePieceId,
-              packageId,
-              starlarkBuiltinsValue,
-              packageLookupValue.getRoot(),
-              env,
-              key,
-              state);
+      var verifier = new ExtensionRepoNameVerifier(env);
+      try (var unused = ExtensionRepositoryMapping.installVerifier(verifier)) {
+        state.loadedPackage =
+            loadPackage(
+                packageLookupValue,
+                packagePieceId,
+                packageId,
+                starlarkBuiltinsValue,
+                packageLookupValue.getRoot(),
+                env,
+                key,
+                state,
+                verifier);
+      }
+      verifier.throwIfInterrupted();
       if (state.loadedPackage == null) {
         return null;
       }
+      // If non-empty, env.valuesMissing() is true and the package will be verified after a restart.
+      state.unverifiedRepoNames = verifier.unverifiedKeys();
     }
     PackageFunctionException pfeFromNonSkyframeGlobbing = null;
     Package.AbstractBuilder pkgBuilder = state.loadedPackage.builder;
@@ -999,7 +1027,8 @@ public abstract class PackageFunction implements SkyFunction {
       Root packageRoot,
       Environment env,
       SkyKey keyForMetrics,
-      State state)
+      State state,
+      ExtensionRepoNameVerifier repoNameVerifier)
       throws InterruptedException, PackageFunctionException {
     RepositoryMappingValue repositoryMappingValue =
         (RepositoryMappingValue)
@@ -1117,6 +1146,11 @@ public abstract class PackageFunction implements SkyFunction {
               .setMessage("malformed load statements")
               .setPackageLoadingCode(PackageLoading.Code.IMPORT_STARLARK_FILE_ERROR)
               .build();
+        }
+        if (repoNameVerifier.hasUnverifiedKeys()) {
+          // Some repo names in load labels couldn't be verified yet. Don't request loads of repos
+          // that may turn out to not be visible.
+          return null;
         }
 
         // Compute key for each label in loads.

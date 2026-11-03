@@ -59,6 +59,7 @@ import com.google.devtools.build.lib.skyframe.BzlLoadValue;
 import com.google.devtools.build.lib.skyframe.ContainingPackageLookupFunction;
 import com.google.devtools.build.lib.skyframe.DefaultSyscallCache;
 import com.google.devtools.build.lib.skyframe.EvalMacroFunction;
+import com.google.devtools.build.lib.skyframe.ExtensionRepoNameFunction;
 import com.google.devtools.build.lib.skyframe.ExternalFilesHelper;
 import com.google.devtools.build.lib.skyframe.ExternalFilesHelper.ExternalFileAction;
 import com.google.devtools.build.lib.skyframe.FileFunction;
@@ -586,6 +587,7 @@ public abstract class AbstractPackageLoader implements PackageLoader {
                 Root.fromPath(directories.getWorkspace())))
         .put(SkyFunctions.REPO_PACKAGE_ARGS, RepoPackageArgsFunction.INSTANCE)
         .put(SkyFunctions.REPOSITORY_MAPPING, new RepositoryMappingFunction(ruleClassProvider))
+        .put(SkyFunctions.EXTENSION_REPO_NAME, new ExtensionRepoNameFunction())
         .put(
             SkyFunctions.PACKAGE,
             PackageFunction.newBuilder()

@@ -69,6 +69,7 @@ java_library(
         "//src/main/java/com/google/devtools/build/lib/skyframe:containing_package_lookup_function",
         "//src/main/java/com/google/devtools/build/lib/skyframe:default_syscall_cache",
         "//src/main/java/com/google/devtools/build/lib/skyframe:eval_macro_function",
+        "//src/main/java/com/google/devtools/build/lib/skyframe:extension_repo_name_function",
         "//src/main/java/com/google/devtools/build/lib/skyframe:external_files_helper",
         "//src/main/java/com/google/devtools/build/lib/skyframe:file_function",
         "//src/main/java/com/google/devtools/build/lib/skyframe:file_state_function",

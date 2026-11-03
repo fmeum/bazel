@@ -2144,6 +2144,7 @@ java_library(
     name = "repo_package_args_function",
     srcs = ["RepoPackageArgsFunction.java"],
     deps = [
+        ":extension_repo_name_value",
         ":repo_file_function",
         ":repo_file_value",
         ":repository_mapping_value",
@@ -2208,6 +2209,38 @@ java_library(
         "//src/main/java/com/google/devtools/build/lib/vfs:pathfragment",
         "//src/main/java/com/google/devtools/build/skyframe:skyframe-objects",
         "//src/main/java/net/starlark/java/eval",
+        "//third_party/java/jsr305_annotations",
+    ],
+)
+
+java_library(
+    name = "extension_repo_name_value",
+    srcs = [
+        "ExtensionRepoNameValue.java",
+        "ExtensionRepoNameVerifier.java",
+    ],
+    deps = [
+        ":sky_functions",
+        "//src/main/java/com/google/devtools/build/lib/cmdline",
+        "//src/main/java/com/google/devtools/build/lib/skyframe/serialization/autocodec",
+        "//src/main/java/com/google/devtools/build/skyframe:skyframe-objects",
+        "//third_party/java/guava:collect",
+        "//third_party/java/jsr305_annotations",
+    ],
+)
+
+java_library(
+    name = "extension_repo_name_function",
+    srcs = ["ExtensionRepoNameFunction.java"],
+    deps = [
+        ":extension_repo_name_value",
+        ":repository_mapping_value",
+        "//src/main/java/com/google/devtools/build/lib/bazel/bzlmod:common",
+        "//src/main/java/com/google/devtools/build/lib/bazel/bzlmod:module_extension",
+        "//src/main/java/com/google/devtools/build/lib/bazel/bzlmod:resolution",
+        "//src/main/java/com/google/devtools/build/lib/cmdline",
+        "//src/main/java/com/google/devtools/build/skyframe:skyframe-objects",
+        "//src/main/java/net/starlark/java/spelling",
         "//third_party/java/jsr305_annotations",
     ],
 )
@@ -3122,6 +3155,7 @@ java_library(
         ":containing_package_lookup_value",
         ":cycle_utils",
         ":detailed_exceptions",
+        ":extension_repo_name_value",
         ":precomputed_value",
         ":repository_mapping_value",
         ":starlark_builtins_value",
@@ -3293,6 +3327,7 @@ java_library(
         ":bzl_load_function",
         ":bzl_load_value",
         ":eval_macro_function",
+        ":extension_repo_name_value",
         ":glob_descriptor",
         ":glob_value",
         ":globs_value",
@@ -3993,6 +4028,7 @@ java_library(
         ":eval_macro_function",
         ":exclusive_test_build_driver_value",
         ":execution_finished_event",
+        ":extension_repo_name_function",
         ":external_files_helper",
         ":file_function",
         ":file_state_function",
