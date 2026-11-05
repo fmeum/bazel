@@ -76,21 +76,34 @@ public class ToolchainResolutionFunction implements SkyFunction {
       PlatformConfiguration platformConfiguration =
           Preconditions.checkNotNull(configuration.getFragment(PlatformConfiguration.class));
 
-      // Check if debug output should be generated.
+      // Load the configured target for the toolchain types to ensure that they are valid and
+      // resolve aliases.
+      ImmutableMap<Label, ToolchainTypeInfo> resolvedToolchainTypeInfos =
+          loadToolchainTypeInfos(env, configuration, key.toolchainTypes());
+      builder.setRequestedLabelToToolchainType(resolvedToolchainTypeInfos);
+      ImmutableSet<ToolchainType> resolvedToolchainTypes =
+          loadToolchainTypes(resolvedToolchainTypeInfos, key.toolchainTypes());
+
+      // Check if debug output should be generated. Since a toolchain type may be requested via an
+      // alias, both the requested labels and the labels of the actual types are matched.
+      ImmutableSet<ToolchainTypeInfo> debuggedToolchainTypes =
+          resolvedToolchainTypeInfos.entrySet().stream()
+              .filter(entry -> platformConfiguration.debugToolchainResolution(entry.getKey()))
+              .map(Map.Entry::getValue)
+              .collect(toImmutableSet());
       boolean debug =
           key.debugTarget()
-              || configuration
-                  .getFragment(PlatformConfiguration.class)
-                  .debugToolchainResolution(
-                      key.toolchainTypes().stream()
-                          .map(ToolchainTypeRequirement::toolchainType)
-                          .collect(toImmutableSet()));
+              || !debuggedToolchainTypes.isEmpty()
+              || platformConfiguration.debugToolchainResolution(
+                  key.toolchainTypes().stream()
+                      .map(ToolchainTypeRequirement::toolchainType)
+                      .collect(toImmutableSet()));
 
       ToolchainResolutionDebugPrinter debugPrinter =
           ToolchainResolutionDebugPrinter.create(debug, env.getListener());
 
-      // Create keys for all platforms that will be used, and validate them early.
-      // Do this early, to catch platform errors early.
+      // Create keys for all platforms that will be used, and validate them before resolving
+      // toolchains.
       PlatformKeys platformKeys =
           PlatformKeys.load(
               env,
@@ -102,14 +115,6 @@ public class ToolchainResolutionFunction implements SkyFunction {
         return null;
       }
 
-      // Load the configured target for the toolchain types to ensure that they are valid and
-      // resolve aliases.
-      ImmutableMap<Label, ToolchainTypeInfo> resolvedToolchainTypeInfos =
-          loadToolchainTypeInfos(env, configuration, key.toolchainTypes());
-      builder.setRequestedLabelToToolchainType(resolvedToolchainTypeInfos);
-      ImmutableSet<ToolchainType> resolvedToolchainTypes =
-          loadToolchainTypes(resolvedToolchainTypeInfos, key.toolchainTypes());
-
       // Determine the actual toolchain implementations to use.
       determineToolchainImplementations(
           env,
@@ -118,7 +123,8 @@ public class ToolchainResolutionFunction implements SkyFunction {
           key.forceExecutionPlatform().map(platformKeys::find),
           builder,
           platformKeys,
-          key.debugTarget());
+          key.debugTarget(),
+          debuggedToolchainTypes);
 
       UnloadedToolchainContext unloadedToolchainContext = builder.build();
       debugPrinter.reportSelectedToolchains(
@@ -200,7 +206,8 @@ public class ToolchainResolutionFunction implements SkyFunction {
       Optional<ConfiguredTargetKey> forcedExecutionPlatform,
       UnloadedToolchainContextImpl.Builder builder,
       PlatformKeys platformKeys,
-      boolean debugTarget)
+      boolean debugTarget,
+      ImmutableSet<ToolchainTypeInfo> debuggedToolchainTypes)
       throws InterruptedException,
           ValueMissingException,
           InvalidPlatformException,
@@ -218,7 +225,9 @@ public class ToolchainResolutionFunction implements SkyFunction {
               toolchainType.toolchainTypeInfo(),
               platformKeys.targetPlatformKey(),
               platformKeys.executionPlatformKeys(),
-              debugTarget));
+              // The single toolchain resolution only sees the actual type, so also enable debug
+              // output if the type was requested via an alias that matches the debug filter.
+              debugTarget || debuggedToolchainTypes.contains(toolchainType.toolchainTypeInfo())));
     }
 
     SkyframeLookupResult results = environment.getValuesAndExceptions(registeredToolchainKeys);

@@ -476,7 +476,11 @@ final class AspectFunction implements SkyFunction {
       try {
         baseTargetToolchainContexts =
             getBaseTargetToolchainContexts(
-                baseTargetUnloadedToolchainContexts, aspect, target, depValueMap);
+                baseTargetUnloadedToolchainContexts,
+                aspect,
+                target,
+                depValueMap,
+                computeDependenciesState.toolchainTypeAliases());
       } catch (MergingException e) {
         env.getListener().handle(Event.error(target.getLocation(), e.getMessage()));
         throw new AspectFunctionException(
@@ -548,7 +552,8 @@ final class AspectFunction implements SkyFunction {
           ToolchainCollection<UnloadedToolchainContext> baseTargetUnloadedToolchainContexts,
           Aspect aspect,
           Target target,
-          OrderedSetMultimap<DependencyKind, ConfiguredTargetAndData> depValueMap)
+          OrderedSetMultimap<DependencyKind, ConfiguredTargetAndData> depValueMap,
+          ImmutableMap<Label, ToolchainTypeInfo> toolchainTypeAliases)
           throws MergingException {
     if (baseTargetUnloadedToolchainContexts == null) {
       return null;
@@ -580,7 +585,10 @@ final class AspectFunction implements SkyFunction {
       targetContextsBuilder.addContext(
           unloadedContext.getKey(),
           AspectBaseTargetResolvedToolchainContext.load(
-              unloadedContext.getValue(), description, toolchainsDeps.build()));
+              unloadedContext.getValue(),
+              description,
+              toolchainsDeps.build(),
+              toolchainTypeAliases));
     }
 
     return targetContextsBuilder.build();

@@ -23,15 +23,20 @@ import com.google.common.base.Preconditions;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableMultimap;
+import com.google.common.collect.ImmutableSet;
+import com.google.common.collect.ImmutableSetMultimap;
 import com.google.common.collect.Lists;
 import com.google.devtools.build.lib.analysis.DependencyKind;
 import com.google.devtools.build.lib.analysis.config.DependencyEvaluationException;
 import com.google.devtools.build.lib.analysis.config.transitions.ConfigurationTransition;
 import com.google.devtools.build.lib.analysis.config.transitions.TransitionCollector;
+import com.google.devtools.build.lib.analysis.platform.ToolchainTypeInfo;
 import com.google.devtools.build.lib.cmdline.Label;
+import com.google.devtools.build.lib.cmdline.RepositoryName;
 import com.google.devtools.build.lib.collect.ImmutableSortedKeyListMultimap;
 import com.google.devtools.build.lib.events.Event;
 import com.google.devtools.build.lib.packages.Aspect;
+import com.google.devtools.build.lib.packages.AspectPropagationEdgesSupplier;
 import com.google.devtools.build.lib.packages.Attribute;
 import com.google.devtools.build.lib.packages.BuildType;
 import com.google.devtools.build.lib.packages.MaterializingDefault;
@@ -42,11 +47,13 @@ import com.google.devtools.build.lib.packages.RuleClass;
 import com.google.devtools.build.lib.packages.Target;
 import com.google.devtools.build.lib.packages.Type.LabelClass;
 import com.google.devtools.build.lib.skyframe.ConfiguredTargetAndData;
+import com.google.devtools.build.lib.skyframe.toolchains.UnloadedToolchainContext;
 import com.google.devtools.build.lib.util.OrderedSetMultimap;
 import com.google.devtools.build.skyframe.state.StateMachine;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.TreeMap;
@@ -62,13 +69,25 @@ import net.starlark.java.syntax.Location;
  * replacing {@link Label} values with the corresponding computed {@link ConfiguredTargetAndData}
  * dependency values.
  */
-public final class DependencyMapProducer implements StateMachine, DependencyProducer.ResultSink {
+public final class DependencyMapProducer
+    implements StateMachine,
+        DependencyProducer.ResultSink,
+        ToolchainTypeAliasesProducer.ResultSink {
   /** Receiver for output of {@link DependencyMapProducer}. */
   public interface ResultSink extends TransitionCollector {
     void acceptDependencyMap(OrderedSetMultimap<DependencyKind, ConfiguredTargetAndData> value);
 
     void acceptMaterializerTargets(
         OrderedSetMultimap<DependencyKind, ConfiguredTargetAndData> value);
+
+    /**
+     * Accepts the labels in the {@code toolchains_aspects} of the aspects that are aliases of
+     * toolchain types, mapped to these types.
+     *
+     * <p>Only called if there are such labels. Not all of the types are necessarily requested by
+     * the base target.
+     */
+    void acceptToolchainTypeAliases(ImmutableMap<Label, ToolchainTypeInfo> aliases);
 
     void acceptDependencyMapError(DependencyError error);
 
@@ -428,6 +447,84 @@ public final class DependencyMapProducer implements StateMachine, DependencyProd
           DependencyError.of(new DependencyEvaluationException(e, parameters.location())));
       return DONE;
     }
+    ImmutableSet<Label> possibleToolchainTypeAliases = computePossibleToolchainTypeAliases();
+    if (possibleToolchainTypeAliases.isEmpty()) {
+      return evaluateDependenciesForMaterializers(tasks);
+    }
+    return new ToolchainTypeAliasesProducer(
+        possibleToolchainTypeAliases,
+        parameters.configurationKey(),
+        parameters.transitiveState(),
+        (ToolchainTypeAliasesProducer.ResultSink) this,
+        this::evaluateDependenciesForMaterializers);
+  }
+
+  /**
+   * Returns the labels in the {@code toolchains_aspects} of the aspects that may be aliases of the
+   * toolchain types requested by the base target.
+   *
+   * <p>Users may refer to a toolchain type via an {@code alias}, for example, after the type moved
+   * to another repository. In that case, the base target may request the actual type while an
+   * aspect lists the alias in its {@code toolchains_aspects} (or vice versa). Aliases used by the
+   * base target are already resolved during toolchain resolution, but those that only appear in
+   * {@code toolchains_aspects} have to be resolved here.
+   *
+   * <p>To avoid fetching repositories just to check for aliases, only labels in repositories that
+   * are already required are considered: the main repository, {@code @bazel_tools} and the
+   * repositories of the toolchain types requested by the base target.
+   */
+  private ImmutableSet<Label> computePossibleToolchainTypeAliases() {
+    var baseTargetToolchainContexts = parameters.baseTargetToolchainContexts();
+    if (computedToolchainsAspects == null
+        || computedToolchainsAspects.isEmpty()
+        || baseTargetToolchainContexts == null) {
+      return ImmutableSet.of();
+    }
+    var requestedLabels = new HashSet<Label>();
+    for (UnloadedToolchainContext context : baseTargetToolchainContexts.contextMap().values()) {
+      // Contains both the requested labels and the labels of the actual toolchain types.
+      requestedLabels.addAll(context.requestedLabelToToolchainType().keySet());
+    }
+    if (requestedLabels.isEmpty()) {
+      return ImmutableSet.of();
+    }
+    var availableRepos = new HashSet<RepositoryName>();
+    availableRepos.add(RepositoryName.MAIN);
+    availableRepos.add(RepositoryName.BAZEL_TOOLS);
+    for (Label label : requestedLabels) {
+      availableRepos.add(label.getRepository());
+    }
+    var result = ImmutableSet.<Label>builder();
+    for (Label label : computedToolchainsAspects.values()) {
+      if (!label.equals(AspectPropagationEdgesSupplier.ALL_TOOLCHAINS)
+          && !requestedLabels.contains(label)
+          && availableRepos.contains(label.getRepository())) {
+        result.add(label);
+      }
+    }
+    return result.build();
+  }
+
+  @Override
+  public void acceptToolchainTypeAliases(ImmutableMap<Label, ToolchainTypeInfo> aliases) {
+    if (aliases.isEmpty()) {
+      return;
+    }
+    // Let the aspects that list an alias also propagate to the toolchains of the actual type.
+    var toolchainsAspects =
+        ImmutableSetMultimap.<Aspect, Label>builder().putAll(computedToolchainsAspects);
+    for (Map.Entry<Aspect, Label> entry : computedToolchainsAspects.entries()) {
+      ToolchainTypeInfo toolchainType = aliases.get(entry.getValue());
+      if (toolchainType != null) {
+        toolchainsAspects.put(entry.getKey(), toolchainType.typeLabel());
+      }
+    }
+    computedToolchainsAspects = toolchainsAspects.build();
+    sink.acceptToolchainTypeAliases(aliases);
+  }
+
+  private StateMachine evaluateDependenciesForMaterializers(Tasks tasks)
+      throws InterruptedException {
     return attributeResolutionStep(tasks, true, this::evaluateMaterializersIfNeeded);
   }
 

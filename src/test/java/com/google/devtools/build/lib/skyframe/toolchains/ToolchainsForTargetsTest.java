@@ -364,8 +364,10 @@ public final class ToolchainsForTargetsTest extends AnalysisTestCase {
         "test/defs.bzl",
         """
         def _impl(ctx):
-            print(ctx.toolchains["//test/alias:alias_toolchain_type"])
-            print(ctx.toolchains["//toolchain:test_toolchain"])
+            if ctx.toolchains["//test/alias:alias_toolchain_type"].data != "foo":
+                fail("unexpected toolchain for alias")
+            if ctx.toolchains["//toolchain:test_toolchain"].data != "foo":
+                fail("unexpected toolchain for actual type")
             return []
 
         custom_rule = rule(
@@ -401,8 +403,10 @@ public final class ToolchainsForTargetsTest extends AnalysisTestCase {
         "test/defs.bzl",
         """
         def _impl(ctx):
-            print(ctx.toolchains["//test/alias:alias_toolchain_type"])
-            print(ctx.toolchains["//toolchain:test_toolchain"])
+            if ctx.toolchains["//test/alias:alias_toolchain_type"].data != "foo":
+                fail("unexpected toolchain for alias")
+            if ctx.toolchains["//toolchain:test_toolchain"].data != "foo":
+                fail("unexpected toolchain for actual type")
             return []
 
         custom_rule = rule(
@@ -457,6 +461,142 @@ public final class ToolchainsForTargetsTest extends AnalysisTestCase {
     useConfiguration("--incompatible_auto_exec_groups");
 
     assertThat(update("//a:a").hasError()).isFalse();
+  }
+
+  @Test
+  public void execGroupToolchainsWithAlias() throws Exception {
+    scratch.file(
+        "test/alias/BUILD",
+        """
+        alias(
+            name = "alias_toolchain_type",
+            actual = "//toolchain:test_toolchain",
+        )
+        """);
+    scratch.file(
+        "test/defs.bzl",
+        """
+        def _impl(ctx):
+            toolchains = ctx.exec_groups["temp"].toolchains
+            if "//test/alias:alias_toolchain_type" not in toolchains:
+                fail("alias not found")
+            if "//toolchain:test_toolchain" not in toolchains:
+                fail("actual type not found")
+            if toolchains["//test/alias:alias_toolchain_type"].data != "foo":
+                fail("unexpected toolchain for alias")
+            if toolchains["//toolchain:test_toolchain"].data != "foo":
+                fail("unexpected toolchain for actual type")
+            return []
+
+        custom_rule = rule(
+            implementation = _impl,
+            exec_groups = {
+                "temp": exec_group(
+                    toolchains = ["//test/alias:alias_toolchain_type"],
+                ),
+            },
+        )
+        """);
+    scratch.file(
+        "test/BUILD",
+        """
+        load("//test:defs.bzl", "custom_rule")
+
+        custom_rule(
+            name = "custom_rule_name",
+        )
+        """);
+
+    assertThat(update("//test:custom_rule_name").hasError()).isFalse();
+  }
+
+  @Test
+  public void optionalToolchainTypeAliasWithoutToolchain() throws Exception {
+    scratch.file(
+        "test/alias/BUILD",
+        """
+        toolchain_type(name = "unregistered_type")
+
+        alias(
+            name = "alias_unregistered_type",
+            actual = ":unregistered_type",
+        )
+        """);
+    scratch.file(
+        "test/defs.bzl",
+        """
+        def _impl(ctx):
+            if ctx.toolchains["//test/alias:alias_unregistered_type"] != None:
+                fail("expected no toolchain for alias")
+            if ctx.toolchains["//test/alias:unregistered_type"] != None:
+                fail("expected no toolchain for actual type")
+            return []
+
+        custom_rule = rule(
+            implementation = _impl,
+            toolchains = [
+                config_common.toolchain_type(
+                    "//test/alias:alias_unregistered_type",
+                    mandatory = False,
+                ),
+            ],
+        )
+        """);
+    scratch.file(
+        "test/BUILD",
+        """
+        load("//test:defs.bzl", "custom_rule")
+
+        custom_rule(
+            name = "custom_rule_name",
+        )
+        """);
+
+    assertThat(update("//test:custom_rule_name").hasError()).isFalse();
+  }
+
+  @Test
+  public void aliasAndActualToolchainTypeWithDifferentMandatoriness() throws Exception {
+    scratch.file(
+        "test/alias/BUILD",
+        """
+        alias(
+            name = "alias_toolchain_type",
+            actual = "//toolchain:test_toolchain",
+        )
+        """);
+    scratch.file(
+        "test/defs.bzl",
+        """
+        def _impl(ctx):
+            if ctx.toolchains["//test/alias:alias_toolchain_type"].data != "foo":
+                fail("unexpected toolchain for alias")
+            if ctx.toolchains["//toolchain:test_toolchain"].data != "foo":
+                fail("unexpected toolchain for actual type")
+            return []
+
+        custom_rule = rule(
+            implementation = _impl,
+            toolchains = [
+                config_common.toolchain_type(
+                    "//test/alias:alias_toolchain_type",
+                    mandatory = False,
+                ),
+                "//toolchain:test_toolchain",
+            ],
+        )
+        """);
+    scratch.file(
+        "test/BUILD",
+        """
+        load("//test:defs.bzl", "custom_rule")
+
+        custom_rule(
+            name = "custom_rule_name",
+        )
+        """);
+
+    assertThat(update("//test:custom_rule_name").hasError()).isFalse();
   }
 
   @Test

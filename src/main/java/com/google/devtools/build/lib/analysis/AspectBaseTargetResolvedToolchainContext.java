@@ -49,10 +49,18 @@ public abstract class AspectBaseTargetResolvedToolchainContext
 
   public abstract ImmutableMap<ToolchainTypeInfo, ToolchainAspectsProviders> toolchains();
 
+  /**
+   * Creates the toolchain context for the base target of an aspect.
+   *
+   * @param toolchainTypeAliases labels that are aliases of toolchain types, such as those listed
+   *     in the {@code toolchains_aspects} of the aspect. Those that resolve to a toolchain type of
+   *     this context can be used in addition to the requested labels to look up its toolchains.
+   */
   public static AspectBaseTargetResolvedToolchainContext load(
       UnloadedToolchainContext unloadedToolchainContext,
       String targetDescription,
-      ImmutableMultimap<ToolchainTypeInfo, ConfiguredTargetAndData> toolchainTargets)
+      ImmutableMultimap<ToolchainTypeInfo, ConfiguredTargetAndData> toolchainTargets,
+      ImmutableMap<Label, ToolchainTypeInfo> toolchainTypeAliases)
       throws MergingException {
 
     ImmutableMap.Builder<ToolchainTypeInfo, ToolchainAspectsProviders> toolchainsBuilder =
@@ -92,6 +100,20 @@ public abstract class AspectBaseTargetResolvedToolchainContext
     ImmutableMap<ToolchainTypeInfo, ToolchainAspectsProviders> toolchains =
         toolchainsBuilder.buildOrThrow();
 
+    ImmutableMap<Label, ToolchainTypeInfo> requestedToolchainTypeLabels =
+        unloadedToolchainContext.requestedLabelToToolchainType();
+    if (!toolchainTypeAliases.isEmpty()) {
+      var requestedToolchainTypeLabelsBuilder =
+          ImmutableMap.<Label, ToolchainTypeInfo>builder().putAll(requestedToolchainTypeLabels);
+      for (var alias : toolchainTypeAliases.entrySet()) {
+        if (!requestedToolchainTypeLabels.containsKey(alias.getKey())
+            && requestedToolchainTypeLabels.containsValue(alias.getValue())) {
+          requestedToolchainTypeLabelsBuilder.put(alias);
+        }
+      }
+      requestedToolchainTypeLabels = requestedToolchainTypeLabelsBuilder.buildOrThrow();
+    }
+
     return new AutoValue_AspectBaseTargetResolvedToolchainContext(
         // ToolchainContext:
         unloadedToolchainContext.key(),
@@ -101,7 +123,7 @@ public abstract class AspectBaseTargetResolvedToolchainContext
         unloadedToolchainContext.resolvedToolchainLabels(),
         // ResolvedToolchainsDataInterface:
         targetDescription,
-        unloadedToolchainContext.requestedLabelToToolchainType(),
+        requestedToolchainTypeLabels,
         // this:
         toolchains);
   }

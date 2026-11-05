@@ -2765,6 +2765,170 @@ var_supplier(
     assertThat(t3AspectResult).containsExactly("my_aspect on @@//test:t3");
   }
 
+  @Test
+  public void toolchainsAspectsAlias_propagatesToToolchainOfActualTypeRequestedByRule(
+      @TestParameter boolean autoExecGroups) throws Exception {
+    scratch.file(
+        "test/defs.bzl",
+        """
+        AspectInfo = provider()
+
+        def _impl(target, ctx):
+          res = ['my_aspect on ' + str(target.label)]
+          if '//rule:toolchain_type_1_alias' in ctx.rule.toolchains:
+            res.extend(ctx.rule.toolchains['//rule:toolchain_type_1_alias'][AspectInfo].res)
+          return [AspectInfo(res = res)]
+
+        toolchain_aspect = aspect(
+          implementation = _impl,
+          toolchains_aspects = ['//rule:toolchain_type_1_alias'],
+        )
+
+        def _rule_impl(ctx):
+          pass
+
+        r1 = rule(
+          implementation = _rule_impl,
+          toolchains = ['//rule:toolchain_type_1'],
+        )
+        """);
+    scratch.file(
+        "test/BUILD",
+        """
+        load('//test:defs.bzl', 'r1')
+        r1(name = 't1')
+        """);
+    useConfiguration(
+        "--extra_toolchains=//toolchain:foo_toolchain",
+        "--incompatible_auto_exec_groups=" + autoExecGroups);
+
+    var analysisResult = update(ImmutableList.of("//test:defs.bzl%toolchain_aspect"), "//test:t1");
+
+    assertThat(getAspectKeys("//test:defs.bzl%toolchain_aspect"))
+        .containsExactly(
+            "//test:defs.bzl%toolchain_aspect on //test:t1",
+            "//test:defs.bzl%toolchain_aspect on //toolchain:foo");
+    assertThat(
+            getAspectResult(
+                analysisResult.getAspectsMap(), "toolchain_aspect", "//test:t1", "AspectInfo"))
+        .containsExactly("my_aspect on @@//test:t1", "my_aspect on @@//toolchain:foo");
+  }
+
+  @Test
+  public void toolchainTypesFuncReturnsAlias_propagatesToToolchainOfActualTypeRequestedByRule(
+      @TestParameter boolean autoExecGroups) throws Exception {
+    scratch.file(
+        "test/defs.bzl",
+        """
+        AspectInfo = provider()
+
+        def _toolchains_aspects(ctx):
+          return [Label('//rule:toolchain_type_1_alias')]
+
+        def _impl(target, ctx):
+          res = ['my_aspect on ' + str(target.label)]
+          if '//rule:toolchain_type_1_alias' in ctx.rule.toolchains:
+            res.extend(ctx.rule.toolchains['//rule:toolchain_type_1_alias'][AspectInfo].res)
+          return [AspectInfo(res = res)]
+
+        toolchain_aspect = aspect(
+          implementation = _impl,
+          toolchains_aspects = _toolchains_aspects,
+        )
+
+        def _rule_impl(ctx):
+          pass
+
+        r1 = rule(
+          implementation = _rule_impl,
+          toolchains = ['//rule:toolchain_type_1'],
+        )
+        """);
+    scratch.file(
+        "test/BUILD",
+        """
+        load('//test:defs.bzl', 'r1')
+        r1(name = 't1')
+        """);
+    useConfiguration(
+        "--extra_toolchains=//toolchain:foo_toolchain",
+        "--incompatible_auto_exec_groups=" + autoExecGroups);
+
+    var analysisResult = update(ImmutableList.of("//test:defs.bzl%toolchain_aspect"), "//test:t1");
+
+    assertThat(getAspectKeys("//test:defs.bzl%toolchain_aspect"))
+        .containsExactly(
+            "//test:defs.bzl%toolchain_aspect on //test:t1",
+            "//test:defs.bzl%toolchain_aspect on //toolchain:foo");
+    assertThat(
+            getAspectResult(
+                analysisResult.getAspectsMap(), "toolchain_aspect", "//test:t1", "AspectInfo"))
+        .containsExactly("my_aspect on @@//test:t1", "my_aspect on @@//toolchain:foo");
+  }
+
+  @Test
+  public void toolchainsAspectsWithLabelsThatAreNotToolchainTypeAliases_ignored(
+      @TestParameter boolean autoExecGroups) throws Exception {
+    scratch.file(
+        "test/defs.bzl",
+        """
+        AspectInfo = provider()
+
+        def _impl(target, ctx):
+          res = ['my_aspect on ' + str(target.label)]
+          if '//rule:toolchain_type_1_alias' in ctx.rule.toolchains:
+            res.extend(ctx.rule.toolchains['//rule:toolchain_type_1_alias'][AspectInfo].res)
+          return [AspectInfo(res = res)]
+
+        toolchain_aspect = aspect(
+          implementation = _impl,
+          toolchains_aspects = [
+            # Package doesn't exist.
+            '//nonexistent:toolchain_type',
+            # Target doesn't exist.
+            '//rule:nonexistent_toolchain_type',
+            # Target isn't an alias.
+            '//toolchain:a_tool',
+            # Alias of a target that isn't a toolchain type.
+            '//test:not_a_toolchain_type',
+            # Toolchain type that isn't requested by the rule.
+            '//rule:toolchain_type_2',
+            '//rule:toolchain_type_1_alias',
+          ],
+        )
+
+        def _rule_impl(ctx):
+          pass
+
+        r1 = rule(
+          implementation = _rule_impl,
+          toolchains = ['//rule:toolchain_type_1'],
+        )
+        """);
+    scratch.file(
+        "test/BUILD",
+        """
+        load('//test:defs.bzl', 'r1')
+        r1(name = 't1')
+        filegroup(name = 'not_a_toolchain_type_target')
+        alias(name = 'not_a_toolchain_type', actual = ':not_a_toolchain_type_target')
+        """);
+    useConfiguration(
+        "--extra_toolchains=//toolchain:foo_toolchain",
+        "--incompatible_auto_exec_groups=" + autoExecGroups);
+
+    var analysisResult = update(ImmutableList.of("//test:defs.bzl%toolchain_aspect"), "//test:t1");
+
+    assertThat(getAspectKeys("//test:defs.bzl%toolchain_aspect"))
+        .containsExactly(
+            "//test:defs.bzl%toolchain_aspect on //test:t1",
+            "//test:defs.bzl%toolchain_aspect on //toolchain:foo");
+    assertThat(
+            getAspectResult(
+                analysisResult.getAspectsMap(), "toolchain_aspect", "//test:t1", "AspectInfo"))
+        .containsExactly("my_aspect on @@//test:t1", "my_aspect on @@//toolchain:foo");
+  }
+
   private Sequence<?> getAspectResult(
       Map<AspectKey, ConfiguredAspect> aspectsMap,
       String aspectName,

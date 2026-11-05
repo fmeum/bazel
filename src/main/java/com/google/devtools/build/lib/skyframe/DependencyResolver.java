@@ -51,6 +51,7 @@ import com.google.devtools.build.lib.analysis.config.transitions.TransitionColle
 import com.google.devtools.build.lib.analysis.config.transitions.TransitionFactory.TransitionCreationException;
 import com.google.devtools.build.lib.analysis.constraints.IncompatibleTargetChecker.IncompatibleTargetException;
 import com.google.devtools.build.lib.analysis.platform.PlatformInfo;
+import com.google.devtools.build.lib.analysis.platform.ToolchainTypeInfo;
 import com.google.devtools.build.lib.analysis.producers.DependencyContext;
 import com.google.devtools.build.lib.analysis.producers.DependencyContextError;
 import com.google.devtools.build.lib.analysis.producers.DependencyContextProducer;
@@ -178,6 +179,12 @@ public final class DependencyResolver {
     @Nullable
     private OrderedSetMultimap<DependencyKind, ConfiguredTargetAndData> materializerTargets;
 
+    /**
+     * Labels in the {@code toolchains_aspects} of the aspects that are aliases of toolchain types,
+     * mapped to these types.
+     */
+    private ImmutableMap<Label, ToolchainTypeInfo> toolchainTypeAliases = ImmutableMap.of();
+
     final TransitiveDependencyState transitiveState;
     private final TransitionCollector transitionCollector;
 
@@ -231,6 +238,16 @@ public final class DependencyResolver {
       return transitiveState.transitivePackages();
     }
 
+    /**
+     * Returns the labels in the {@code toolchains_aspects} of the aspects that are aliases of
+     * toolchain types, mapped to these types.
+     *
+     * <p>Only populated after {@link #computeDependencies} has completed.
+     */
+    public ImmutableMap<Label, ToolchainTypeInfo> toolchainTypeAliases() {
+      return toolchainTypeAliases;
+    }
+
     @Override
     public void acceptDependencyContext(DependencyContext value) {
       this.dependencyContext = value;
@@ -251,6 +268,11 @@ public final class DependencyResolver {
     public void acceptMaterializerTargets(
         OrderedSetMultimap<DependencyKind, ConfiguredTargetAndData> value) {
       this.materializerTargets = value;
+    }
+
+    @Override
+    public void acceptToolchainTypeAliases(ImmutableMap<Label, ToolchainTypeInfo> aliases) {
+      this.toolchainTypeAliases = aliases;
     }
 
     @Override

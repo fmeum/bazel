@@ -815,6 +815,59 @@ EOF
   expect_log 'Using toolchain: rule message: "this is the rule", toolchain extra_str: "foo from test_toolchain"'
 }
 
+function test_toolchain_debug_messages_toolchain_type_alias {
+  local -r pkg="${FUNCNAME[0]}"
+  write_test_toolchain "${pkg}"
+  write_register_toolchain "${pkg}"
+
+  # Create an alias for the toolchain type.
+  mkdir -p "${pkg}/alias"
+  cat > "${pkg}/alias/BUILD" <<EOF
+package(default_visibility = ["//visibility:public"])
+
+alias(
+    name = 'toolchain_type',
+    actual = '//${pkg}/toolchain:test_toolchain',
+)
+EOF
+
+  # Request the toolchain type via the alias.
+  mkdir -p "${pkg}/demo"
+  cat > "${pkg}/demo/aliased_rule.bzl" <<EOF
+def _impl(ctx):
+  toolchain = ctx.toolchains['//${pkg}/alias:toolchain_type']
+  return []
+
+aliased_rule = rule(
+    implementation = _impl,
+    toolchains = ['//${pkg}/alias:toolchain_type'],
+)
+EOF
+  cat > "${pkg}/demo/BUILD" <<EOF
+load(':aliased_rule.bzl', 'aliased_rule')
+
+aliased_rule(name = 'use')
+EOF
+
+  # The filter matches the requested alias, but not the actual toolchain type.
+  bazel build \
+    --toolchain_resolution_debug=alias:toolchain_type \
+    --platform_mappings= \
+    "//${pkg}/demo:use" &> $TEST_log || fail "Build failed"
+  expect_log "Performing resolution of //${pkg}/toolchain:test_toolchain for target platform ${default_host_platform}"
+  expect_log "Selected //register/${pkg}:test_toolchain_impl_1 to run on execution platform ${default_host_platform}"
+  expect_log "ToolchainResolution: Target platform ${default_host_platform}: Selected execution platform ${default_host_platform}, type //${pkg}/toolchain:test_toolchain -> toolchain //register/${pkg}:test_toolchain_impl_1"
+
+  # The filter matches the actual toolchain type, but not the requested alias.
+  bazel build \
+    --toolchain_resolution_debug=toolchain:test_toolchain \
+    --platform_mappings= \
+    "//${pkg}/demo:use" &> $TEST_log || fail "Build failed"
+  expect_log "Performing resolution of //${pkg}/toolchain:test_toolchain for target platform ${default_host_platform}"
+  expect_log "Selected //register/${pkg}:test_toolchain_impl_1 to run on execution platform ${default_host_platform}"
+  expect_log "ToolchainResolution: Target platform ${default_host_platform}: Selected execution platform ${default_host_platform}, type //${pkg}/toolchain:test_toolchain -> toolchain //register/${pkg}:test_toolchain_impl_1"
+}
+
 function test_toolchain_use_in_aspect {
   local -r pkg="${FUNCNAME[0]}"
   write_test_toolchain "${pkg}"
