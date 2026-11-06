@@ -1,0 +1,125 @@
+pass1: 13275 classes, 0.6s
+pass2: 366505 PF, 165003 RFAV, 1.3s
+pass3: 3.0s
+pass4: 3.5s
+PathFragment string contents: 366,505 PFs, 366,494 String objects, 216,454 distinct contents; redundant PF+String+byte[] copies cost ~10.80 MB (compact headers)
+=== Heap totals (modelled shallow sizes, compressed oops) ===
+objects: 7,463,707   heap (12-byte headers): 256.26 MB   heap (compact 8-byte headers): 227.86 MB
+
+Top 40 classes by shallow size (12-byte headers):
+      42.71 MB    41.55 MB  16.67%       811,181  byte[]
+      35.98 MB    33.58 MB  14.04%       587,344  Object[] (all ref arrays)
+      27.83 MB    22.26 MB  10.86%       695,772  com/google/devtools/build/skyframe/IncrementalInMemoryNodeEntry
+      24.49 MB    18.37 MB   9.56%       765,462  java/util/concurrent/ConcurrentHashMap$Node
+      14.87 MB    14.87 MB   5.80%       619,788  java/lang/String
+       8.65 MB     5.76 MB   3.37%       360,312  com/google/devtools/build/lib/collect/nestedset/NestedSet$Flat
+       6.61 MB     5.29 MB   2.58%       165,319  com/google/devtools/build/lib/actions/FileContentsProxy
+       5.28 MB     3.96 MB   2.06%       165,003  com/google/devtools/build/lib/actions/FileArtifactValue$RegularFileArtifactValue
+       5.06 MB     5.06 MB   1.98%       316,403  com/google/devtools/build/lib/vfs/PathFragment$RelativePathFragment
+       4.80 MB     3.60 MB   1.87%       150,001  com/google/devtools/build/lib/actions/Artifact$SourceArtifact
+       4.80 MB     4.80 MB   1.87%       150,001  com/google/devtools/build/lib/analysis/configuredtargets/InputFileConfiguredTarget
+       4.34 MB     2.89 MB   1.69%       180,635  com/google/devtools/build/lib/cmdline/Label
+       4.32 MB     4.32 MB   1.69%       180,008  com/google/devtools/build/lib/skyframe/ConfiguredTargetKey
+       3.63 MB     3.63 MB   1.42%       151,339  com/google/devtools/build/lib/vfs/RootedPath
+       3.61 MB     3.61 MB   1.41%       150,317  com/google/devtools/build/lib/actions/FileStateValue$RegularFileStateValueWithContentsProxy
+       3.60 MB     3.60 MB   1.40%       150,007  java/util/concurrent/ConcurrentSkipListMap$Node
+       3.60 MB     3.60 MB   1.40%       150,002  com/google/devtools/build/lib/skyframe/NonRuleConfiguredTargetValue
+       3.60 MB     3.60 MB   1.40%       150,001  com/google/devtools/build/lib/packages/PrivateVisibilityInputFile
+       3.60 MB     2.40 MB   1.40%       150,001  com/google/devtools/build/lib/actions/ArtifactFactory$SourceArtifactCache$Entry
+       3.30 MB     3.30 MB   1.29%        68,790  java/util/concurrent/ConcurrentHashMap$TreeNode
+       3.29 MB     3.16 MB   1.28%        39,071  int[]
+       2.42 MB     2.42 MB   0.94%       151,298  com/google/devtools/build/lib/skyframe/FileKey
+       2.00 MB     2.00 MB   0.78%        50,000  com/google/devtools/build/lib/vfs/DigestUtils$CachedDigest
+       1.79 MB     1.79 MB   0.70%        74,620  java/util/concurrent/ConcurrentSkipListMap$Index
+       1.60 MB     1.60 MB   0.62%        50,001  com/github/benmanes/caffeine/cache/PSMS
+       1.48 MB     1.19 MB   0.58%        37,118  java/util/LinkedHashMap$Entry
+       1.45 MB     1.45 MB   0.57%        30,239  java/util/TreeMap
+       1.35 MB     1.18 MB   0.53%        21,151  java/util/LinkedHashMap
+       1.14 MB     1.14 MB   0.44%           578  long[]
+       1.09 MB     1.09 MB   0.43%        12,394  java/lang/reflect/Method
+       1.08 MB     0.96 MB   0.42%        15,000  com/google/devtools/build/lib/analysis/TargetCompleteEvent
+       0.80 MB     0.80 MB   0.31%        50,102  com/google/devtools/build/lib/vfs/PathFragment$UnixStyleAbsolutePathFragment
+       0.72 MB     0.60 MB   0.28%        15,063  com/google/devtools/build/lib/packages/Rule
+       0.72 MB     0.60 MB   0.28%        15,001  com/google/devtools/build/lib/actions/ActionInputMap
+       0.72 MB     0.48 MB   0.28%        30,001  com/google/devtools/build/skyframe/ValueWithMetadata$ValueWithEvents
+       0.72 MB     0.72 MB   0.28%        30,000  com/google/devtools/build/lib/pkgcache/TargetParsingCompleteEvent$ThinTarget
+       0.60 MB     0.60 MB   0.23%        15,005  com/google/devtools/build/lib/analysis/configuredtargets/RuleConfiguredTarget
+       0.60 MB     0.60 MB   0.23%        15,001  com/google/devtools/build/lib/analysis/Runfiles
+       0.60 MB     0.60 MB   0.23%        15,000  com/google/devtools/build/lib/rules/genrule/GenRuleAction
+       0.52 MB     0.52 MB   0.20%        32,518  com/google/common/collect/RegularImmutableList
+
+=== Q1: RegularFileArtifactValue digest as four longs ===
+RFAV instances: 165,003 (null digest: 0, null proxy: 0), distinct digest arrays: 165,003
+digest length histogram (len -> #arrays): {32=165003}
+digest array inbound-ref histogram (#refs -> #arrays): {1=115003, 2=50000}
+non-RFAV referrers of tracked digest arrays: 
+      50,000  com/google/devtools/build/lib/vfs/DigestUtils$CachedDigest.digest
+digest arrays referenced only by RFAVs (freed by inlining): 115,003 of 165,003
+digest arrays by holder set (1=RFAV, 2=digest cache, 4=other): {1=115003, 3=50000}; cache entries: 50,000
+[12-byte headers] RFAV 32->56 B, CachedDigest 40->72 B, byte[32] 48 B
+    S1 (only RFAV specialized): RFAV growth 3.96 MB, arrays freed 5.52 MB => net 1.56 MB (0.61% of heap)
+    S2 (RFAV + DigestUtils cache specialized): + cache growth 1.60 MB, arrays freed 7.92 MB => net 2.36 MB (0.92% of heap)
+[compact headers] RFAV 24->56 B, CachedDigest 40->64 B, byte[32] 48 B
+    S1 (only RFAV specialized): RFAV growth 5.28 MB, arrays freed 5.52 MB => net 0.24 MB (0.11% of heap)
+    S2 (RFAV + DigestUtils cache specialized): + cache growth 1.20 MB, arrays freed 7.92 MB => net 1.44 MB (0.63% of heap)
+
+=== Q2: PathFragment as null-restricted value class ===
+PathFragment instances: 366,505
+distinct normalizedPath Strings among them: 366,494
+inbound ref histogram (refs, capped at 10 -> #PF): {0=12, 1=166166, 2=200318, 3=2, 4=3, 5=1, 10=3}
+
+Slots referencing PathFragment (class.field : declared type, pfRefs, nulls, otherRefs, flattenable):
+     151,339  nulls=0         other=0         FLAT  vfs/RootedPath.rootRelativePath : vfs.PathFragment
+     150,001  nulls=0         other=0         FLAT  actions/Artifact$SourceArtifact.execPath : vfs.PathFragment
+     150,001  nulls=4         other=2         box   java/util/concurrent/ConcurrentSkipListMap$Node.key : java.lang.Object
+      50,000  nulls=1         other=0         box   com/github/benmanes/caffeine/cache/PSMS.key : java.lang.Object
+      50,000  nulls=0         other=715,462   box   java/util/concurrent/ConcurrentHashMap$Node.key : java.lang.Object
+      15,001  nulls=0         other=0         FLAT  actions/Artifact$DerivedArtifact.execPath : vfs.PathFragment
+         364  nulls=0         other=0         FLAT  cmdline/PackageIdentifier.pkgName : vfs.PathFragment
+         296  nulls=0         other=0         FLAT  bazel/bzlmod/AutoValue_ModuleExtensionUsage_Proxy.containingModuleFilePath : vfs.PathFragment
+          65  nulls=0         other=0         FLAT  vfs/Path.pathFragment : vfs.PathFragment
+          34  nulls=0         other=0         FLAT  packages/BuiltinRestriction$AllowlistEntry.packagePrefix : vfs.PathFragment
+          11  nulls=0         other=0         FLAT  actions/ArtifactRoot.execPath : vfs.PathFragment
+           8  nulls=0         other=0         FLAT  exec/BinTools$PathActionInput.execPath : vfs.PathFragment
+           7  nulls=0         other=18        box   com/google/devtools/common/options/OptionValueDescription$SingleOptionValueDescription.effectiveValue : java.lang.Object
+           5  nulls=0         other=8,816     box   guava/ImmutableMapEntry.value : java.lang.Object
+           3  nulls=0         other=164       box   guava/SingletonImmutableSet.element : java.lang.Object
+           2  nulls=0         other=0         FLAT  runtime/LocationPrinter.workspacePathFragment : vfs.PathFragment
+           2  nulls=0         other=0         FLAT  actions/FileValue$SymlinkFileValueWithStoredChain.linkTarget : vfs.PathFragment
+           2  nulls=0         other=0         FLAT  actions/FileStateValue$SymlinkFileStateValue.symlinkTarget : vfs.PathFragment
+           2  nulls=404       other=743       box   com/google/devtools/common/options/MethodOptionDefinition.defaultValue : java.lang.Object
+           1  nulls=0         other=0         FLAT  runtime/ProcessWrapper.binPath : vfs.PathFragment
+           1  nulls=0         other=0         FLAT  exec/SingleBuildFileCache.relativeOutputPath : vfs.PathFragment
+           1  nulls=0         other=0         FLAT  packages/BuildFileName$6.filenameFragment : vfs.PathFragment
+           1  nulls=0         other=3,572     box   guava/ImmutableMapEntry$NonTerminalImmutableMapEntry.value : java.lang.Object
+           1  nulls=0         other=0         FLAT  skyframe/TargetPatternPhaseValue$TargetPatternPhaseKey.offset : vfs.PathFragment
+           1  nulls=0         other=0         FLAT  actions/Artifact$ConstantMetadataArtifact.execPath : vfs.PathFragment
+           1  nulls=0         other=0         FLAT  runtime/BlazeServerStartupOptionsImpl.installBase : vfs.PathFragment
+           1  nulls=0         other=0         FLAT  runtime/BlazeServerStartupOptionsImpl.outputBase : vfs.PathFragment
+           1  nulls=0         other=0         FLAT  runtime/BlazeServerStartupOptionsImpl.outputUserRoot : vfs.PathFragment
+           1  nulls=0         other=0         FLAT  runtime/BlazeServerStartupOptionsImpl.failureDetailOut : vfs.PathFragment
+           1  nulls=0         other=0         FLAT  runtime/BlazeServerStartupOptionsImpl.workspaceDirectory : vfs.PathFragment
+           1  nulls=0         other=0         FLAT  runtime/BlazeServerStartupOptionsImpl.defaultSystemJavabase : vfs.PathFragment
+           1  nulls=0         other=0         FLAT  runtime/CommandEnvironment.relativeWorkingDirectory : vfs.PathFragment
+           1  nulls=0         other=0         FLAT  remote/RemoteModule.outputBase : vfs.PathFragment
+           1  nulls=0         other=0         FLAT  packages/BuildFileName$1.filenameFragment : vfs.PathFragment
+           1  nulls=0         other=0         FLAT  packages/BuildFileName$2.filenameFragment : vfs.PathFragment
+           1  nulls=0         other=0         FLAT  packages/BuildFileName$3.filenameFragment : vfs.PathFragment
+           1  nulls=0         other=0         FLAT  packages/BuildFileName$4.filenameFragment : vfs.PathFragment
+           1  nulls=0         other=0         FLAT  packages/BuildFileName$5.filenameFragment : vfs.PathFragment
+           1  nulls=0         other=0         FLAT  actions/ArtifactFactory.derivedPathPrefix : vfs.PathFragment
+           1  nulls=0         other=0         FLAT  bazel/repository/RepoDefinitionValue$RepoOverride.repoPath : vfs.PathFragment
+           1  nulls=0         other=0         FLAT  cmdline/AutoValue_Label_PackageContextImpl.packageFragment : vfs.PathFragment
+           1  nulls=0         other=0         FLAT  skyframe/config/PlatformMappingKey.path : vfs.PathFragment
+           1  nulls=0         other=0         FLAT  cmdline/TargetPattern$Parser.relativeDirectory : vfs.PathFragment
+Array referrers of PathFragment:
+           6  [Ljava/lang/Object;
+Holders of those arrays (owner.field: #arrays, #PF elements):
+           1 arrays          3 PFs  guava/RegularImmutableSet.elements
+           1 arrays          3 PFs  guava/RegularImmutableSet.table
+refs from PF-typed fields: 317,148 (of which in fields that are sometimes null: 0); refs from non-PF-typed fields: 250,019; refs from arrays: 6
+PF instances: only referenced from PF-typed fields: 166,472; mixed: 150,010 (non-flat refs: 150,011); only from Object-typed slots/arrays: 50,011; no heap refs (roots): 12
+[12-byte headers] value class WITHOUT @NullRestricted (nullable flat, 8 B per field): holder growth 1.22 MB => net saving -0.15 MB (-0.06% of modelled heap)
+[12-byte headers] boxes eliminated 2.66 MB; remaining boxes resized (16->24 B) 1.60 MB; nullable-flat growth <= 0.00 MB; worst-case re-buffering 0.00 MB => net saving 1.06 MB (best) .. 1.06 MB (worst); 0.41% .. 0.41% of modelled heap
+[compact headers] value class WITHOUT @NullRestricted (nullable flat, 8 B per field): holder growth 1.32 MB => net saving 1.34 MB (0.59% of modelled heap)
+[compact headers] boxes eliminated 2.66 MB; remaining boxes resized (16->16 B) 0.00 MB; nullable-flat growth <= 0.00 MB; worst-case re-buffering 0.00 MB => net saving 2.66 MB (best) .. 2.66 MB (worst); 1.17% .. 1.17% of modelled heap

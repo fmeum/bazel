@@ -1,0 +1,31 @@
+Benchmark                                        (variant)  Mode  Cnt     Score     Error   Units
+PathBench.execPathHash                                 N/A  avgt    5    30.495 ±   1.123   ns/op
+PathBench.execPathHash:gc.alloc.rate.norm              N/A  avgt    5    ≈ 10⁻⁴              B/op
+PathBench.execPathLength                               N/A  avgt    5    35.035 ±   5.140   ns/op
+PathBench.execPathLength:gc.alloc.rate.norm            N/A  avgt    5    ≈ 10⁻⁴              B/op
+PathBench.mapLookup                                    N/A  avgt    5   144.211 ±  20.244   ns/op
+PathBench.mapLookup:gc.alloc.rate.norm                 N/A  avgt    5    ≈ 10⁻³              B/op
+PathBench.sortByExecPath                               N/A  avgt    5  1756.494 ± 253.056   ns/op
+PathBench.sortByExecPath:gc.alloc.rate.norm            N/A  avgt    5     3.464 ±   0.001    B/op
+RfavBench.equalsAll                                  bytes  avgt    5    85.301 ±  29.991   ns/op
+RfavBench.equalsAll:gc.alloc.rate.norm               bytes  avgt    5    ≈ 10⁻⁴              B/op
+RfavBench.equalsAll                                  longs  avgt    5    68.799 ±  10.937   ns/op
+RfavBench.equalsAll:gc.alloc.rate.norm               longs  avgt    5    ≈ 10⁻⁴              B/op
+RfavBench.fingerprintDigests                         bytes  avgt    5   179.651 ±   8.348   ns/op
+RfavBench.fingerprintDigests:gc.alloc.rate.norm      bytes  avgt    5     0.001 ±   0.001    B/op
+RfavBench.fingerprintDigests                         longs  avgt    5   125.422 ±  63.488   ns/op
+RfavBench.fingerprintDigests:gc.alloc.rate.norm      longs  avgt    5    48.000 ±   0.001    B/op
+RfavBench.foldDigest                                 bytes  avgt    5    47.091 ±   9.000   ns/op
+RfavBench.foldDigest:gc.alloc.rate.norm              bytes  avgt    5    ≈ 10⁻⁴              B/op
+RfavBench.foldDigest                                 longs  avgt    5    17.902 ±   1.504   ns/op
+RfavBench.foldDigest:gc.alloc.rate.norm              longs  avgt    5    ≈ 10⁻⁴              B/op
+RfavBench.getDigestAndRead                           bytes  avgt    5    23.669 ±   4.505   ns/op
+RfavBench.getDigestAndRead:gc.alloc.rate.norm        bytes  avgt    5    ≈ 10⁻⁴              B/op
+RfavBench.getDigestAndRead                           longs  avgt    5    27.774 ±   9.183   ns/op
+RfavBench.getDigestAndRead:gc.alloc.rate.norm        longs  avgt    5    48.000 ±   0.001    B/op
+RfavBench.hashAll                                    bytes  avgt    5   184.636 ±  79.361   ns/op
+RfavBench.hashAll:gc.alloc.rate.norm                 bytes  avgt    5    71.995 ±   0.001    B/op
+RfavBench.hashAll                                    longs  avgt    5   118.549 ±  13.912   ns/op
+RfavBench.hashAll:gc.alloc.rate.norm                 longs  avgt    5    71.995 ±   0.001    B/op
+
+Benchmark result is saved to jdk27ga.json

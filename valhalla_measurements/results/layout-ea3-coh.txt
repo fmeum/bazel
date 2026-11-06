@@ -1,0 +1,131 @@
+Layout of class exp/Layout@0x7f47080df7c0 extends java/lang/Object@0x7f4708095e40
+Instance fields:
+ @0 RESERVED 8/-
+Static fields:
+ @0 RESERVED 120/-
+Instance size = 8 bytes
+---
+Layout of class exp/Layout$PF@0x7f47080df7c0 extends java/lang/Object@0x7f4708095e40
+Instance fields:
+ @0 RESERVED 8/-
+ @8 REGULAR 4/4 "s" Ljava/lang/String;
+ @12 NULL_MARKER 1/1 
+Static fields:
+ @0 RESERVED 120/-
+ @120 REGULAR 4/4 ".null_reset" Ljava/lang/Object;
+ @124 REGULAR 4/4 ".acmp_maps" [I
+Instance size = 16 bytes
+First field offset = 8
+BUFFERED layout: 8/8
+NULL_FREE_NON_ATOMIC_FLAT layout: 4/4
+NULL_FREE_ATOMIC_FLAT layout: 4/4
+NULLABLE_ATOMIC_FLAT layout: 8/8
+NULLABLE_NON_ATOMIC_FLAT layout: 5/4
+Null marker offset = 12
+Non-oop acmp map: 
+oop acmp map: 8, 
+---
+Layout of class exp/Layout$PFHolderRecord@0x7f47080df7c0 extends java/lang/Record@0x7f4708095e40
+Instance fields:
+ @0 RESERVED 8/-
+ @8 FLAT 4/4 "path" Lexp/Layout$PF; exp/Layout$PF@0x7f47080df7c0 NULL_FREE_NON_ATOMIC_FLAT
+ @12 REGULAR 4/4 "other" Ljava/lang/Object;
+Static fields:
+ @0 RESERVED 120/-
+Instance size = 16 bytes
+---
+Layout of class exp/Layout$PFHolderPlain@0x7f47080df7c0 extends java/lang/Object@0x7f4708095e40
+Instance fields:
+ @0 RESERVED 8/-
+ @8 FLAT 4/4 "path" Lexp/Layout$PF; exp/Layout$PF@0x7f47080df7c0 NULL_FREE_NON_ATOMIC_FLAT
+ @12 REGULAR 4/4 "other" Ljava/lang/Object;
+Static fields:
+ @0 RESERVED 120/-
+Instance size = 16 bytes
+---
+Layout of class exp/Layout$PFHolderNullable@0x7f47080df7c0 extends java/lang/Object@0x7f4708095e40
+Instance fields:
+ @0 RESERVED 8/-
+ @8 FLAT 8/8 "path" Lexp/Layout$PF; exp/Layout$PF@0x7f47080df7c0 NULLABLE_ATOMIC_FLAT
+ @16 REGULAR 4/4 "other" Ljava/lang/Object;
+Static fields:
+ @0 RESERVED 120/-
+Instance size = 24 bytes
+---
+Layout of class exp/Layout$Sha256@0x7f47080df7c0 extends java/lang/Object@0x7f4708095e40
+Instance fields:
+ @0 RESERVED 8/-
+ @8 REGULAR 8/8 "a" J
+ @16 REGULAR 8/8 "b" J
+ @24 REGULAR 8/8 "c" J
+ @32 REGULAR 8/8 "d" J
+ @40 NULL_MARKER 1/1 
+Static fields:
+ @0 RESERVED 120/-
+ @120 REGULAR 4/4 ".null_reset" Ljava/lang/Object;
+ @124 REGULAR 4/4 ".acmp_maps" [I
+Instance size = 48 bytes
+First field offset = 8
+BUFFERED layout: 33/8
+NULL_FREE_NON_ATOMIC_FLAT layout: 32/8
+NULL_FREE_ATOMIC_FLAT layout: -/-
+NULLABLE_ATOMIC_FLAT layout: -/-
+NULLABLE_NON_ATOMIC_FLAT layout: 33/8
+Null marker offset = 40
+Non-oop acmp map: <8,32>, 
+oop acmp map: 
+---
+Layout of class exp/Layout$RfavLoose@0x7f47080df7c0 extends java/lang/Record@0x7f4708095e40
+Instance fields:
+ @0 RESERVED 8/-
+ @8 FLAT 32/8 "digest" Lexp/Layout$Sha256; exp/Layout$Sha256@0x7f47080df7c0 NULL_FREE_NON_ATOMIC_FLAT
+ @40 REGULAR 8/8 "size" J
+ @48 REGULAR 4/4 "proxy" Ljava/lang/Object;
+Static fields:
+ @0 RESERVED 120/-
+Instance size = 56 bytes
+---
+Layout of class exp/Layout$Sha256Atomic@0x7f47080df7c0 extends java/lang/Object@0x7f4708095e40
+Instance fields:
+ @0 RESERVED 8/-
+ @8 REGULAR 8/8 "a" J
+ @16 REGULAR 8/8 "b" J
+ @24 REGULAR 8/8 "c" J
+ @32 REGULAR 8/8 "d" J
+ @40 NULL_MARKER 1/1 
+Static fields:
+ @0 RESERVED 120/-
+ @120 REGULAR 4/4 ".null_reset" Ljava/lang/Object;
+ @124 REGULAR 4/4 ".acmp_maps" [I
+Instance size = 48 bytes
+First field offset = 8
+BUFFERED layout: 33/8
+NULL_FREE_NON_ATOMIC_FLAT layout: -/-
+NULL_FREE_ATOMIC_FLAT layout: -/-
+NULLABLE_ATOMIC_FLAT layout: -/-
+NULLABLE_NON_ATOMIC_FLAT layout: 33/8
+Null marker offset = 40
+Non-oop acmp map: <8,32>, 
+oop acmp map: 
+---
+Layout of class exp/Layout$RfavAtomic@0x7f47080df7c0 extends java/lang/Record@0x7f4708095e40
+Instance fields:
+ @0 RESERVED 8/-
+ @8 REGULAR 8/8 "size" J
+ @16 REGULAR 4/4 "digest" Lexp/Layout$Sha256Atomic;
+ @20 REGULAR 4/4 "proxy" Ljava/lang/Object;
+Static fields:
+ @0 RESERVED 120/-
+Instance size = 24 bytes
+---
+Layout of class exp/Layout$RfavNullableLoose@0x7f47080df7c0 extends java/lang/Record@0x7f4708095e40
+Instance fields:
+ @0 RESERVED 8/-
+ @8 FLAT 33/8 "digest" Lexp/Layout$Sha256; exp/Layout$Sha256@0x7f47080df7c0 NULLABLE_NON_ATOMIC_FLAT
+ @41 EMPTY 3/1
+ @44 REGULAR 4/4 "proxy" Ljava/lang/Object;
+ @48 REGULAR 8/8 "size" J
+Static fields:
+ @0 RESERVED 120/-
+Instance size = 56 bytes
+---
