@@ -12,6 +12,39 @@ JDKs: Valhalla EA `27-jep401ea3+1-1` (`--enable-preview`, JDK-internal annotatio
 embedded in Bazel at HEAD, compact object headers on by default). All sizes below assume
 compressed oops; "COH" = compact object headers (8-byte header), which Bazel HEAD enables.
 
+## Result from real prototypes (Bazel HEAD on the Valhalla EA JVM)
+
+Both changes were implemented as value classes in Bazel HEAD (`prototype/*.patch`), compiled with
+the EA `javac`, and patched into copies of the `bazel-dev` server jar (`prototype/build_jars.sh`).
+Every variant ran on the same EA JVM (`--enable-preview`) with a fresh output base:
+
+* **digest**: new `vfs/Digest256` (`@LooselyConsistentValue value class`, four longs), stored in
+  `@NullRestricted` fields of a 32-byte-digest variant of `RegularFileArtifactValue` and of
+  `DigestUtils.CachedDigest`.
+* **pf**: `PathFragment` collapsed from a sealed class with three subclasses into one `value
+  class`, with `@NullRestricted` holder fields in `Artifact`, `RootedPath`, `Path`,
+  `PackageIdentifier` and `ArtifactRoot` (assignments moved before `super()`, which the EA verifier
+  requires).
+
+Live heap from `jcmd GC.class_histogram` after the build (mean of 2 runs with COH, 1 run without).
+Run-to-run noise is about ±0.3 MB: the `digest` variant of `self` changes nothing relevant.
+
+| workload | headers | digest | pf | both |
+|---|---|---:|---:|---:|
+| 150k-file synthetic build (229 MB) | COH (HEAD default) | −1.35 MB (−0.59%) | −2.88 MB (−1.26%) | −4.37 MB (−1.91%) |
+| 150k-file synthetic build (258 MB) | 12-byte | −2.83 MB (−1.10%) | −1.78 MB (−0.69%) | −4.05 MB (−1.57%) |
+| `build --nobuild //src:bazel-dev` (103 MB) | COH | (−0.22 MB, noise) | −0.98 MB (−0.95%) | −1.04 MB (−1.01%) |
+| `build --nobuild //src:bazel-dev` (114 MB) | 12-byte | (+0.03 MB, noise) | −0.30 MB (−0.26%) | −0.47 MB (−0.41%) |
+
+The class counts match the heap-dump model:
+* `PathFragment` boxes went from 366,523 to 200,040 (the model predicted 166,472 removed). The
+  remaining boxes are the keys of `ArtifactFactory`'s source-artifact map and of the
+  `DigestUtils` cache.
+* `byte[]` shrank by 7.9 MB, `CachedDigest` grew by 1.2 MB and RFAV grew by 5.3 MB, as modelled.
+
+Wall time did not change measurably (66–72 s for every variant of the synthetic build, 19–21 s for
+the analysis; noise ±3 s). Full table: `prototype/results.txt`.
+
 ## Method
 
 * `layout/Layout.java`: field layouts printed by the EA JVM (`-XX:+PrintFieldLayout`), see

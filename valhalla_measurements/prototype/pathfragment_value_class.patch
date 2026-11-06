@@ -1,0 +1,267 @@
+diff --git a/src/main/java/com/google/devtools/build/lib/actions/Artifact.java b/src/main/java/com/google/devtools/build/lib/actions/Artifact.java
+index 0d0844ff..52e275e6 100644
+--- a/src/main/java/com/google/devtools/build/lib/actions/Artifact.java
++++ b/src/main/java/com/google/devtools/build/lib/actions/Artifact.java
+@@ -14,6 +14,7 @@
+ 
+ package com.google.devtools.build.lib.actions;
+ 
++import jdk.internal.vm.annotation.NullRestricted;
+ import static com.google.common.collect.ImmutableList.toImmutableList;
+ 
+ import com.google.common.annotations.VisibleForTesting;
+@@ -207,17 +208,18 @@ public abstract sealed class Artifact
+   private final ArtifactRoot root;
+ 
+   private final int hashCode;
+-  private final PathFragment execPath;
++  @NullRestricted private final PathFragment execPath;
+ 
+   private Artifact(ArtifactRoot root, PathFragment execPath, int hashCodeWithOwner) {
+     Preconditions.checkNotNull(root);
++    this.execPath = execPath;
++    super();
+     // Use a precomputed hashcode since there tends to be massive hash-based collections of
+     // artifacts. Importantly, the hashcode ought to incorporate the artifact's owner to prevent a
+     // hash collision on the same exec path but a different owner (this is the common case for
+     // multiple aspects that produce the same output file).
+     this.hashCode = hashCodeWithOwner;
+     this.root = root;
+-    this.execPath = execPath;
+   }
+ 
+   @Override
+diff --git a/src/main/java/com/google/devtools/build/lib/actions/ArtifactRoot.java b/src/main/java/com/google/devtools/build/lib/actions/ArtifactRoot.java
+index 4df04200..a33cd8a3 100644
+--- a/src/main/java/com/google/devtools/build/lib/actions/ArtifactRoot.java
++++ b/src/main/java/com/google/devtools/build/lib/actions/ArtifactRoot.java
+@@ -14,6 +14,7 @@
+ 
+ package com.google.devtools.build.lib.actions;
+ 
++import jdk.internal.vm.annotation.NullRestricted;
+ import com.google.common.base.Preconditions;
+ import com.google.common.collect.Interner;
+ import com.google.common.collect.Interners;
+@@ -186,12 +187,13 @@ public final class ArtifactRoot implements Comparable<ArtifactRoot>, FileRootApi
+   }
+ 
+   private final Root root;
+-  private final PathFragment execPath;
++  @NullRestricted private final PathFragment execPath;
+   private final RootType rootType;
+ 
+   private ArtifactRoot(Root root, PathFragment execPath, RootType rootType) {
+-    this.root = Preconditions.checkNotNull(root);
+     this.execPath = execPath;
++    super();
++    this.root = Preconditions.checkNotNull(root);
+     this.rootType = rootType;
+   }
+ 
+diff --git a/src/main/java/com/google/devtools/build/lib/cmdline/PackageIdentifier.java b/src/main/java/com/google/devtools/build/lib/cmdline/PackageIdentifier.java
+index 2cef0e6d..14c570c1 100644
+--- a/src/main/java/com/google/devtools/build/lib/cmdline/PackageIdentifier.java
++++ b/src/main/java/com/google/devtools/build/lib/cmdline/PackageIdentifier.java
+@@ -14,6 +14,7 @@
+ 
+ package com.google.devtools.build.lib.cmdline;
+ 
++import jdk.internal.vm.annotation.NullRestricted;
+ import static com.google.devtools.build.lib.cmdline.RepositoryName.repositoryNameCodec;
+ import static com.google.devtools.build.lib.vfs.PathFragment.pathFragmentCodec;
+ 
+@@ -122,7 +123,7 @@ public final class PackageIdentifier implements SkyKey, Comparable<PackageIdenti
+   private final RepositoryName repository;
+ 
+   /** The name of the package. */
+-  private final PathFragment pkgName;
++  @NullRestricted private final PathFragment pkgName;
+ 
+   /**
+    * Precomputed hash code. Hash/equality is based on repository and pkgName. Note that due to weak
+@@ -131,8 +132,9 @@ public final class PackageIdentifier implements SkyKey, Comparable<PackageIdenti
+   private final int hashCode;
+ 
+   private PackageIdentifier(RepositoryName repository, PathFragment pkgName) {
+-    this.repository = Preconditions.checkNotNull(repository);
+     this.pkgName = Preconditions.checkNotNull(pkgName);
++    super();
++    this.repository = Preconditions.checkNotNull(repository);
+     this.hashCode = HashCodes.hashObjects(repository, pkgName);
+   }
+ 
+diff --git a/src/main/java/com/google/devtools/build/lib/vfs/Path.java b/src/main/java/com/google/devtools/build/lib/vfs/Path.java
+index 492fc36f..2612d79f 100644
+--- a/src/main/java/com/google/devtools/build/lib/vfs/Path.java
++++ b/src/main/java/com/google/devtools/build/lib/vfs/Path.java
+@@ -14,6 +14,7 @@
+ //
+ package com.google.devtools.build.lib.vfs;
+ 
++import jdk.internal.vm.annotation.NullRestricted;
+ import static com.google.common.base.Preconditions.checkArgument;
+ import static com.google.common.base.Preconditions.checkNotNull;
+ 
+@@ -57,7 +58,7 @@ public class Path implements Comparable<Path>, FileType.HasFileType {
+   @SuppressWarnings("GoodTime-ApiWithNumericTimeUnit")
+   public static final long NOW_SENTINEL_TIME = -1L;
+ 
+-  private final PathFragment pathFragment;
++  @NullRestricted private final PathFragment pathFragment;
+   private final FileSystem fileSystem;
+ 
+   /** Creates a local path that is specific to the host OS. */
+@@ -75,6 +76,7 @@ public class Path implements Comparable<Path>, FileType.HasFileType {
+   private Path(PathFragment pathFragment, FileSystem fileSystem) {
+     checkArgument(pathFragment.isAbsolute(), "Paths must be absolute: '%s'", pathFragment);
+     this.pathFragment = pathFragment;
++    super();
+     this.fileSystem = fileSystem;
+   }
+ 
+diff --git a/src/main/java/com/google/devtools/build/lib/vfs/PathFragment.java b/src/main/java/com/google/devtools/build/lib/vfs/PathFragment.java
+index 1e839cd5..003eed6a 100644
+--- a/src/main/java/com/google/devtools/build/lib/vfs/PathFragment.java
++++ b/src/main/java/com/google/devtools/build/lib/vfs/PathFragment.java
+@@ -55,12 +55,12 @@ import javax.annotation.Nullable;
+  * <p>All paths are case-sensitive.
+  */
+ @Immutable
+-public abstract sealed class PathFragment
++public value class PathFragment
+     implements Comparable<PathFragment>, FileType.HasFileType, PathStrippable {
+   private static final OsPathPolicy OS = OsPathPolicy.getFilePathOs();
+ 
+   @SerializationConstant
+-  public static final PathFragment EMPTY_FRAGMENT = new RelativePathFragment("");
++  public static final PathFragment EMPTY_FRAGMENT = new PathFragment("");
+ 
+   public static final char SEPARATOR_CHAR = '/';
+ 
+@@ -124,17 +124,9 @@ public abstract sealed class PathFragment
+     return makePathFragment(normalizedPath, driveStrLength);
+   }
+ 
++  @SuppressWarnings("unused") // driveStrLength is recomputed from the string on demand.
+   private static PathFragment makePathFragment(String normalizedPath, int driveStrLength) {
+-    return switch (driveStrLength) {
+-      case 0 ->
+-          normalizedPath.isEmpty() ? EMPTY_FRAGMENT : new RelativePathFragment(normalizedPath);
+-      case 1 -> new UnixStyleAbsolutePathFragment(normalizedPath);
+-      case 3 -> new WindowsStyleAbsolutePathFragment(normalizedPath);
+-      default ->
+-          throw new IllegalStateException(
+-              String.format(
+-                  "normalizedPath: %s, driveStrLength: %s", normalizedPath, driveStrLength));
+-    };
++    return normalizedPath.isEmpty() ? EMPTY_FRAGMENT : new PathFragment(normalizedPath);
+   }
+ 
+   /**
+@@ -192,51 +184,10 @@ public abstract sealed class PathFragment
+    * Returns 0 for relative paths (e.g. "a/b"), 1 for Unix-style absolute paths (e.g. "/a/b"), and 3
+    * for Windows-style absolute paths (e.g. "a:/b").
+    */
+-  public abstract int getDriveStrLength();
+-
+-  private static final class RelativePathFragment extends PathFragment {
+-    // DON'T add any fields here unless you know what you are doing. Adding another field will
+-    // increase the shallow heap of a RelativePathFragment instance beyond the current value of 16
+-    // bytes. Our heap typically has many instances.
+-
+-    private RelativePathFragment(String normalizedPath) {
+-      super(normalizedPath);
+-    }
+-
+-    @Override
+-    public int getDriveStrLength() {
+-      return 0;
+-    }
+-  }
+-
+-  private static final class UnixStyleAbsolutePathFragment extends PathFragment {
+-    // DON'T add any fields here unless you know what you are doing. Adding another field will
+-    // increase the shallow heap of a UnixStyleAbsolutePathFragment instance beyond the current
+-    // value of 16 bytes. Our heap typically has many instances.
+-
+-    private UnixStyleAbsolutePathFragment(String normalizedPath) {
+-      super(normalizedPath);
+-    }
+-
+-    @Override
+-    public int getDriveStrLength() {
+-      return 1;
+-    }
+-  }
+-
+-  private static final class WindowsStyleAbsolutePathFragment extends PathFragment {
+-    // DON'T add any fields here unless you know what you are doing. Adding another field will
+-    // increase the shallow heap of a WindowsStyleAbsolutePathFragment instance beyond the current
+-    // value of 16 bytes. Our heap typically has many instances (when Bazel is run on Windows).
+-
+-    private WindowsStyleAbsolutePathFragment(String normalizedPath) {
+-      super(normalizedPath);
+-    }
+-
+-    @Override
+-    public int getDriveStrLength() {
+-      return 3;
+-    }
++  public int getDriveStrLength() {
++    // Value classes cannot be subclassed, so the drive string length is no longer encoded in the
++    // runtime class. This is only correct for paths using the host OS's path style.
++    return OS.getDriveStrLength(normalizedPath);
+   }
+ 
+   /**
+@@ -406,7 +357,7 @@ public abstract sealed class PathFragment
+           String.format("Path '%s' is not under '%s', cannot relativize", this, base));
+     }
+     String newPath = normalizedPath.substring(lastSlashIndex + 1);
+-    return new RelativePathFragment(newPath);
++    return new PathFragment(newPath);
+   }
+ 
+   public PathFragment relativeTo(String base) {
+@@ -712,7 +663,7 @@ public abstract sealed class PathFragment
+     if (i >= n) {
+       return EMPTY_FRAGMENT;
+     }
+-    return new RelativePathFragment(normalizedPath.substring(i));
++    return new PathFragment(normalizedPath.substring(i));
+   }
+ 
+   /**
+diff --git a/src/main/java/com/google/devtools/build/lib/vfs/RootedPath.java b/src/main/java/com/google/devtools/build/lib/vfs/RootedPath.java
+index 1e677abe..34e363db 100644
+--- a/src/main/java/com/google/devtools/build/lib/vfs/RootedPath.java
++++ b/src/main/java/com/google/devtools/build/lib/vfs/RootedPath.java
+@@ -13,6 +13,7 @@
+ // limitations under the License.
+ package com.google.devtools.build.lib.vfs;
+ 
++import jdk.internal.vm.annotation.NullRestricted;
+ import static com.google.common.base.Preconditions.checkArgument;
+ 
+ import com.google.devtools.build.lib.skyframe.serialization.VisibleForSerialization;
+@@ -38,7 +39,7 @@ public final class RootedPath implements Comparable<RootedPath>, FileStateKey {
+   @Nullable private static final SkyKeyInterner<RootedPath> interner = SkyKey.newInterner();
+ 
+   private final Root root;
+-  private final PathFragment rootRelativePath;
++  @NullRestricted private final PathFragment rootRelativePath;
+ 
+   // Cache the hash code: RootedPath is used in several of the most common SkyKeys, and we have a
+   // free field to spend on it.
+@@ -58,8 +59,9 @@ public final class RootedPath implements Comparable<RootedPath>, FileStateKey {
+   }
+ 
+   private RootedPath(Root root, PathFragment rootRelativePath) {
+-    this.root = root;
+     this.rootRelativePath = rootRelativePath;
++    super();
++    this.root = root;
+     this.hashCode = 31 * root.hashCode() + rootRelativePath.hashCode();
+   }
+ 

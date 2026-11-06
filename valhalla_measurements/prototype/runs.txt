@@ -1,0 +1,27 @@
+synth base coh 1: Elapsed time: 66.359s heap=230MB histTotal=228595584
+self base coh 1: Elapsed time: 20.020s heap=102MB histTotal=103719392
+synth digest coh 1: Elapsed time: 71.664s heap=228MB histTotal=227359456
+self digest coh 1: Elapsed time: 19.408s heap=102MB histTotal=103320056
+synth pf coh 1: Elapsed time: 71.761s heap=227MB histTotal=225742952
+self pf coh 1: Elapsed time: 20.644s heap=101MB histTotal=102300328
+synth both coh 1: Elapsed time: 71.257s heap=226MB histTotal=224382968
+self both coh 1: Elapsed time: 19.915s heap=101MB histTotal=102317880
+synth base coh 2: Elapsed time: 71.261s heap=230MB histTotal=228796456
+self base coh 2: Elapsed time: 19.568s heap=102MB histTotal=102905312
+synth digest coh 2: Elapsed time: 69.267s heap=228MB histTotal=227330568
+self digest coh 2: Elapsed time: 19.512s heap=102MB histTotal=102860952
+synth pf coh 2: Elapsed time: 67.695s heap=227MB histTotal=225898512
+self pf coh 2: Elapsed time: 19.479s heap=101MB histTotal=102355152
+synth both coh 2: Elapsed time: 67.324s heap=225MB histTotal=224266096
+self both coh 2: Elapsed time: 19.447s heap=101MB histTotal=102225504
+synth base nocoh 1: Elapsed time: 68.472s heap=259MB histTotal=258053480
+self base nocoh 1: Elapsed time: 19.290s heap=113MB histTotal=114462352
+synth digest nocoh 1: Elapsed time: 67.666s heap=256MB histTotal=255224104
+self digest nocoh 1: Elapsed time: 20.023s heap=113MB histTotal=114491904
+synth pf nocoh 1: Elapsed time: 69.319s heap=257MB histTotal=256270032
+self pf nocoh 1: Elapsed time: 20.084s heap=113MB histTotal=114163760
+synth both nocoh 1: Elapsed time: 71.009s heap=255MB histTotal=254002080
+self both nocoh 1: Elapsed time: 18.712s heap=113MB histTotal=113994392
+synth ga coh 1: Elapsed time: 68.794s heap=228MB histTotal=227096000
+self ga coh 1: Elapsed time: 16.752s heap=101MB histTotal=101692696
+ALLDONE

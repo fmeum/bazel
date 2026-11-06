@@ -1,0 +1,278 @@
+diff --git a/src/main/java/com/google/devtools/build/lib/actions/FileArtifactValue.java b/src/main/java/com/google/devtools/build/lib/actions/FileArtifactValue.java
+index 5bd2eade..55179114 100644
+--- a/src/main/java/com/google/devtools/build/lib/actions/FileArtifactValue.java
++++ b/src/main/java/com/google/devtools/build/lib/actions/FileArtifactValue.java
+@@ -13,6 +13,8 @@
+ // limitations under the License.
+ package com.google.devtools.build.lib.actions;
+ 
++import com.google.devtools.build.lib.vfs.Digest256;
++import jdk.internal.vm.annotation.NullRestricted;
+ import static com.google.common.base.Preconditions.checkArgument;
+ import static com.google.common.base.Preconditions.checkNotNull;
+ import static com.google.common.base.Preconditions.checkState;
+@@ -384,6 +386,9 @@ public abstract class FileArtifactValue implements SkyValue, FileArtifactMetadat
+   }
+ 
+   public static FileArtifactValue createForVirtualActionInput(byte[] digest, long size) {
++    if (Digest256.fits(digest)) {
++      return new RegularFileArtifactValue256(Digest256.of(digest), /* proxy= */ null, size);
++    }
+     return new RegularFileArtifactValue(digest, /* proxy= */ null, size);
+   }
+ 
+@@ -398,6 +403,9 @@ public abstract class FileArtifactValue implements SkyValue, FileArtifactMetadat
+ 
+   public static FileArtifactValue createForNormalFile(
+       byte[] digest, @Nullable FileContentsProxy proxy, long size) {
++    if (Digest256.fits(digest)) {
++      return new RegularFileArtifactValue256(Digest256.of(digest), proxy, size);
++    }
+     return new RegularFileArtifactValue(digest, proxy, size);
+   }
+ 
+@@ -684,6 +692,97 @@ public abstract class FileArtifactValue implements SkyValue, FileArtifactMetadat
+     }
+   }
+ 
++  /** {@link RegularFileArtifactValue} specialized to 32-byte digests stored inline. */
++  private static final class RegularFileArtifactValue256 extends FileArtifactValue {
++    @NullRestricted private final Digest256 digest;
++    @Nullable private final FileContentsProxy proxy;
++    private final long size;
++
++    private RegularFileArtifactValue256(
++        Digest256 digest, @Nullable FileContentsProxy proxy, long size) {
++      this.digest = digest;
++      super();
++      this.proxy = proxy;
++      this.size = size;
++    }
++
++    @Override
++    public boolean equals(Object o) {
++      if (this == o) {
++        return true;
++      }
++      if (!(o instanceof RegularFileArtifactValue256 that)) {
++        return false;
++      }
++      return digest.equals(that.digest) && Objects.equals(proxy, that.proxy) && size == that.size;
++    }
++
++    @Override
++    public int hashCode() {
++      return HashCodes.hashObjects(digest.hashCode(), proxy, size);
++    }
++
++    @Override
++    public FileStateType getType() {
++      return FileStateType.REGULAR_FILE;
++    }
++
++    @Override
++    public byte[] getDigest() {
++      return digest.toBytes();
++    }
++
++    @Override
++    public FileContentsProxy getContentsProxy() {
++      return proxy;
++    }
++
++    @Override
++    public long getSize() {
++      return size;
++    }
++
++    @Override
++    public boolean wasModifiedSinceDigest(Path path) throws IOException {
++      if (proxy == null) {
++        return false;
++      }
++      var stat = path.statIfFound(Symlinks.FOLLOW);
++      if (stat == null || !stat.isFile()) {
++        return true;
++      }
++      var newProxy = FileContentsProxy.create(stat);
++      if (proxy.equals(newProxy)) {
++        return false;
++      }
++      if (proxy.isModified(newProxy)) {
++        return true;
++      }
++      byte[] newDigest = DigestUtils.getDigestWithManualFallback(path, SyscallCache.NO_CACHE, stat);
++      return !digest.equalsBytes(newDigest);
++    }
++
++    @Override
++    public long getModifiedTime() {
++      throw new UnsupportedOperationException(
++          "regular file's mtime should never be called. (" + this + ")");
++    }
++
++    @Override
++    public String toString() {
++      return MoreObjects.toStringHelper(this)
++          .add("digest", bytesToString(digest.toBytes()))
++          .add("size", size)
++          .add("proxy", proxy)
++          .toString();
++    }
++
++    @Override
++    protected boolean couldBeModifiedByMetadata(FileArtifactValue lastKnown) {
++      return size != lastKnown.getSize() || !Objects.equals(proxy, lastKnown.getContentsProxy());
++    }
++  }
++
+   /** Proxy metadata for a runfiles tree or fileset. */
+   private static final class SymlinkTreeProxyArtifactValue extends FileArtifactValue {
+     private final byte[] digest;
+diff --git a/src/main/java/com/google/devtools/build/lib/vfs/Digest256.java b/src/main/java/com/google/devtools/build/lib/vfs/Digest256.java
+new file mode 100644
+index 00000000..354b7864
+--- /dev/null
++++ b/src/main/java/com/google/devtools/build/lib/vfs/Digest256.java
+@@ -0,0 +1,90 @@
++// Copyright 2026 The Bazel Authors. All rights reserved.
++//
++// Licensed under the Apache License, Version 2.0 (the "License");
++// you may not use this file except in compliance with the License.
++// You may obtain a copy of the License at
++//
++//    http://www.apache.org/licenses/LICENSE-2.0
++//
++// Unless required by applicable law or agreed to in writing, software
++// distributed under the License is distributed on an "AS IS" BASIS,
++// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++// See the License for the specific language governing permissions and
++// limitations under the License.
++package com.google.devtools.build.lib.vfs;
++
++import java.lang.invoke.MethodHandles;
++import java.lang.invoke.VarHandle;
++import java.nio.ByteOrder;
++import javax.annotation.Nullable;
++import jdk.internal.vm.annotation.LooselyConsistentValue;
++
++/**
++ * A 256-bit digest (e.g. SHA-256) stored inline as four longs.
++ *
++ * <p>As a loosely consistent value class, a {@code @NullRestricted} field of this type is flattened
++ * into its holder (32 bytes) instead of pointing to a separate {@code byte[32]} (48 bytes).
++ */
++@LooselyConsistentValue
++public value class Digest256 {
++  public static final int LENGTH = 32;
++
++  private static final VarHandle LONGS =
++      MethodHandles.byteArrayViewVarHandle(long[].class, ByteOrder.BIG_ENDIAN);
++
++  private final long d0;
++  private final long d1;
++  private final long d2;
++  private final long d3;
++
++  private Digest256(byte[] digest) {
++    this.d0 = (long) LONGS.get(digest, 0);
++    this.d1 = (long) LONGS.get(digest, 8);
++    this.d2 = (long) LONGS.get(digest, 16);
++    this.d3 = (long) LONGS.get(digest, 24);
++  }
++
++  public static boolean fits(@Nullable byte[] digest) {
++    return digest != null && digest.length == LENGTH;
++  }
++
++  public static Digest256 of(byte[] digest) {
++    if (digest.length != LENGTH) {
++      throw new IllegalArgumentException("Expected 32 bytes, got " + digest.length);
++    }
++    return new Digest256(digest);
++  }
++
++  public byte[] toBytes() {
++    byte[] b = new byte[LENGTH];
++    LONGS.set(b, 0, d0);
++    LONGS.set(b, 8, d1);
++    LONGS.set(b, 16, d2);
++    LONGS.set(b, 24, d3);
++    return b;
++  }
++
++  public boolean equalsBytes(@Nullable byte[] other) {
++    return other != null
++        && other.length == LENGTH
++        && d0 == (long) LONGS.get(other, 0)
++        && d1 == (long) LONGS.get(other, 8)
++        && d2 == (long) LONGS.get(other, 16)
++        && d3 == (long) LONGS.get(other, 24);
++  }
++
++  @Override
++  public boolean equals(Object o) {
++    return o instanceof Digest256 that
++        && d0 == that.d0
++        && d1 == that.d1
++        && d2 == that.d2
++        && d3 == that.d3;
++  }
++
++  @Override
++  public int hashCode() {
++    // The digest is already uniformly distributed.
++    return (int) (d0 ^ (d0 >>> 32));
++  }
++}
+diff --git a/src/main/java/com/google/devtools/build/lib/vfs/DigestUtils.java b/src/main/java/com/google/devtools/build/lib/vfs/DigestUtils.java
+index e39eaf9a..77869d2d 100644
+--- a/src/main/java/com/google/devtools/build/lib/vfs/DigestUtils.java
++++ b/src/main/java/com/google/devtools/build/lib/vfs/DigestUtils.java
+@@ -13,6 +13,7 @@
+ // limitations under the License.
+ package com.google.devtools.build.lib.vfs;
+ 
++import jdk.internal.vm.annotation.NullRestricted;
+ import com.github.benmanes.caffeine.cache.Cache;
+ import com.github.benmanes.caffeine.cache.Caffeine;
+ import com.github.benmanes.caffeine.cache.stats.CacheStats;
+@@ -56,13 +57,14 @@ public class DigestUtils {
+     private final long nodeId;
+     private final long changeTime;
+     private final long size;
+-    private final byte[] digest;
++    @NullRestricted private final Digest256 digest;
+ 
+-    private CachedDigest(FileStatus status, byte[] digest) throws IOException {
++    private CachedDigest(FileStatus status, Digest256 digest) throws IOException {
++      this.digest = digest;
++      super();
+       this.nodeId = status.getNodeId();
+       this.changeTime = status.getLastChangeTimeNanos();
+       this.size = status.getSize();
+-      this.digest = digest;
+     }
+ 
+     /** Returns whether the digest is still valid for a file with the given metadata. */
+@@ -176,7 +178,7 @@ public class DigestUtils {
+       CachedDigest cached = cache.cache().asMap().get(key);
+       if (cached != null && cached.matches(status)) {
+         cache.stats().recordHits(1);
+-        return cached.digest;
++        return cached.digest.toBytes();
+       }
+       cache.stats().recordMisses(1);
+     }
+@@ -184,8 +186,9 @@ public class DigestUtils {
+     byte[] digest = path.getDigest();
+ 
+     Preconditions.checkNotNull(digest, "Missing digest for %s", path);
+-    if (cache != null) {
+-      cache.cache().put(key, new CachedDigest(status, digest));
++    // Prototype: only 32-byte digests are cached (stored inline as a Digest256).
++    if (cache != null && Digest256.fits(digest)) {
++      cache.cache().put(key, new CachedDigest(status, Digest256.of(digest)));
+     }
+     return digest;
+   }
