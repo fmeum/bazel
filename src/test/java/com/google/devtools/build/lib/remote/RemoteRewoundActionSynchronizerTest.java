@@ -45,6 +45,7 @@ import com.google.devtools.build.lib.actions.InputMetadataProvider;
 import com.google.devtools.build.lib.actions.RunfilesArtifactValue;
 import com.google.devtools.build.lib.actions.RunfilesTree;
 import com.google.devtools.build.lib.actions.util.ActionsTestUtil;
+import com.google.devtools.build.lib.collect.nestedset.NestedSet;
 import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
 import com.google.devtools.build.lib.collect.nestedset.Order;
 import com.google.devtools.build.lib.profiler.SilentCloseable;
@@ -68,6 +69,8 @@ import org.mockito.InOrder;
 @RunWith(JUnit4.class)
 public final class RemoteRewoundActionSynchronizerTest {
   private static final long DEADLOCK_TIMEOUT_MILLIS = 10_000;
+  private static final NestedSet<Artifact> NO_DISCOVERED_INPUTS =
+      NestedSetBuilder.emptySet(Order.STABLE_ORDER);
 
   private RemoteActionInputFetcher actionInputFetcher;
   private WalkableGraph graph;
@@ -199,7 +202,10 @@ public final class RemoteRewoundActionSynchronizerTest {
     var otherPreparation = new TestThread(() -> rewind(otherAction));
     try (SilentCloseable execution =
         synchronizer.enterActionExecution(
-            consumer, /* wasRewound= */ false, mock(InputMetadataProvider.class))) {
+            consumer,
+            /* wasRewound= */ false,
+            NO_DISCOVERED_INPUTS,
+            mock(InputMetadataProvider.class))) {
       otherPreparation.start();
       waitUntilBlocked(otherPreparation);
     }
@@ -246,6 +252,49 @@ public final class RemoteRewoundActionSynchronizerTest {
       waitUntilBlocked(headerProducerPreparation);
     }
     headerProducerPreparation.joinAndAssertState(DEADLOCK_TIMEOUT_MILLIS);
+  }
+
+  /**
+   * Execution may read discovered inputs that are not part of {@link Action#getInputs} yet, as
+   * {@code CppCompileAction} only adds them after execution, so their producers must not be rewound
+   * while it is running. See https://github.com/bazelbuild/bazel/issues/32488.
+   */
+  @Test
+  public void actionExecution_locksProducersOfInputsAndDiscoveredInputs() throws Exception {
+    FileSystem fs = new InMemoryFileSystem(DigestHashFunction.SHA256);
+    ArtifactRoot root = ArtifactRoot.asDerivedRoot(fs.getPath("/exec"), RootType.OUTPUT, "out");
+    var owner = ActionsTestUtil.NULL_ARTIFACT_OWNER;
+    DerivedArtifact header = (DerivedArtifact) ActionsTestUtil.createArtifact(root, "header.h");
+    header.setGeneratingActionKey(ActionLookupData.create(owner, 0));
+    Action headerProducer = newAction(ImmutableList.of(header), ImmutableList.of());
+    DerivedArtifact source = (DerivedArtifact) ActionsTestUtil.createArtifact(root, "source.cc");
+    source.setGeneratingActionKey(ActionLookupData.create(owner, 1));
+    Action sourceProducer = newAction(ImmutableList.of(source), ImmutableList.of());
+    DerivedArtifact object = (DerivedArtifact) ActionsTestUtil.createArtifact(root, "object.o");
+    object.setGeneratingActionKey(ActionLookupData.create(owner, 2));
+    Action compile = newAction(ImmutableList.of(object), /* inputs= */ ImmutableList.of(source));
+    mockActions(owner, ImmutableList.of(headerProducer, sourceProducer, compile));
+    InputMetadataProvider metadataProvider = mock(InputMetadataProvider.class);
+
+    // Switch to the fine locks with an unrelated rewound action first: the coarse lock would
+    // exclude every rewound action regardless of which keys guard the execution.
+    rewind(newAction());
+
+    var headerProducerPreparation = new TestThread(() -> rewind(headerProducer));
+    var sourceProducerPreparation = new TestThread(() -> rewind(sourceProducer));
+    try (SilentCloseable execution =
+        synchronizer.enterActionExecution(
+            compile,
+            /* wasRewound= */ false,
+            /* discoveredInputs= */ NestedSetBuilder.create(Order.STABLE_ORDER, header),
+            metadataProvider)) {
+      headerProducerPreparation.start();
+      waitUntilBlocked(headerProducerPreparation);
+      sourceProducerPreparation.start();
+      waitUntilBlocked(sourceProducerPreparation);
+    }
+    headerProducerPreparation.joinAndAssertState(DEADLOCK_TIMEOUT_MILLIS);
+    sourceProducerPreparation.joinAndAssertState(DEADLOCK_TIMEOUT_MILLIS);
   }
 
   /**
@@ -302,7 +351,8 @@ public final class RemoteRewoundActionSynchronizerTest {
     var unrelatedPreparation = new TestThread(() -> rewind(unrelatedProducer));
     var runfilesPreparation = new TestThread(() -> rewind(runfilesAction));
     try (SilentCloseable execution =
-        synchronizer.enterActionExecution(consumer, /* wasRewound= */ false, metadataProvider)) {
+        synchronizer.enterActionExecution(
+            consumer, /* wasRewound= */ false, NO_DISCOVERED_INPUTS, metadataProvider)) {
       preparation.start();
       waitUntilBlocked(preparation);
       unrelatedPreparation.start();
@@ -448,7 +498,8 @@ public final class RemoteRewoundActionSynchronizerTest {
 
     var preparation = new TestThread(() -> rewind(producer));
     try (SilentCloseable execution =
-        synchronizer.enterActionExecution(consumer, /* wasRewound= */ false, metadataProvider)) {
+        synchronizer.enterActionExecution(
+            consumer, /* wasRewound= */ false, NO_DISCOVERED_INPUTS, metadataProvider)) {
       preparation.start();
       waitUntilBlocked(preparation);
     }
@@ -498,7 +549,10 @@ public final class RemoteRewoundActionSynchronizerTest {
               () -> {
                 try (SilentCloseable execution =
                     synchronizer.enterActionExecution(
-                        consumer, /* wasRewound= */ false, metadataProvider)) {}
+                        consumer,
+                        /* wasRewound= */ false,
+                        NO_DISCOVERED_INPUTS,
+                        metadataProvider)) {}
               });
       consumerExecution.start();
       consumerExecution.joinAndAssertState(DEADLOCK_TIMEOUT_MILLIS);
@@ -506,7 +560,8 @@ public final class RemoteRewoundActionSynchronizerTest {
       // The producer of the first tree still waits for the consumer.
       var firstPreparation = new TestThread(() -> rewind(firstProducer));
       try (SilentCloseable execution =
-          synchronizer.enterActionExecution(consumer, /* wasRewound= */ false, metadataProvider)) {
+          synchronizer.enterActionExecution(
+              consumer, /* wasRewound= */ false, NO_DISCOVERED_INPUTS, metadataProvider)) {
         firstPreparation.start();
         waitUntilBlocked(firstPreparation);
       }
@@ -584,7 +639,10 @@ public final class RemoteRewoundActionSynchronizerTest {
             () -> {
               try (SilentCloseable execution =
                   synchronizer.enterActionExecution(
-                      downstreamAction, /* wasRewound= */ false, metadataProvider)) {}
+                      downstreamAction,
+                      /* wasRewound= */ false,
+                      NO_DISCOVERED_INPUTS,
+                      metadataProvider)) {}
             });
     downstreamExecution.start();
     waitUntilBlocked(downstreamExecution);
@@ -600,7 +658,10 @@ public final class RemoteRewoundActionSynchronizerTest {
               try (treeConsumerPreparation;
                   SilentCloseable execution =
                       synchronizer.enterActionExecution(
-                          treeConsumer, /* wasRewound= */ true, metadataProvider)) {}
+                          treeConsumer,
+                          /* wasRewound= */ true,
+                          NO_DISCOVERED_INPUTS,
+                          metadataProvider)) {}
             });
     treeConsumerExecution.start();
 

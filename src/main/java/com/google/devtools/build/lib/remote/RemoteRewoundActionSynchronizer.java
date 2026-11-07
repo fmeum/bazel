@@ -123,16 +123,16 @@ public final class RemoteRewoundActionSynchronizer implements RewoundActionSynch
   its execution and acquires no other write lock.
 
   By inputKeysFor, an action acquires the read lock of the key of each action that generates one of
-  its inputs, including the artifacts of its runfiles trees, before it starts executing. While it
-  discovers inputs, it additionally holds the read locks of the keys of the actions generating its
-  scheduling dependencies, which are the artifacts it may read during discovery. For a tree
-  artifact input, this is the action that generates the tree artifact, or the actions expanded
-  from an ActionTemplate that populate it, including producers of empty subdirectories. In either
-  case, the reader depends on that action: ActionExecutionFunction requests the evaluated inputs
-  (including inputs restored from the action cache) and scheduling dependencies before discovering
-  inputs, and all discovered inputs before executing. ArtifactFunction resolves an artifact by
-  requesting its generating action, or, for a tree artifact declared by a template, exactly the
-  expanded actions that populate it.
+  its inputs, including its discovered inputs and the artifacts of its runfiles trees, before it
+  starts executing. While it discovers inputs, it additionally holds the read locks of the keys of
+  the actions generating its scheduling dependencies, which are the artifacts it may read during
+  discovery. For a tree artifact input, this is the action that generates the tree artifact, or
+  the actions expanded from an ActionTemplate that populate it, including producers of empty
+  subdirectories. In either case, the reader depends on that action: ActionExecutionFunction
+  requests the evaluated inputs (including inputs restored from the action cache) and scheduling
+  dependencies before discovering inputs, and all discovered inputs before executing.
+  ArtifactFunction resolves an artifact by requesting its generating action, or, for a tree
+  artifact declared by a template, exactly the expanded actions that populate it.
 
   Thus an action that holds or waits for the read lock of K depends on any action that can acquire
   the write lock of K.
@@ -274,11 +274,21 @@ public final class RemoteRewoundActionSynchronizer implements RewoundActionSynch
 
   @Override
   public SilentCloseable enterActionExecution(
-      Action action, boolean wasRewound, InputMetadataProvider metadataProvider)
+      Action action,
+      boolean wasRewound,
+      NestedSet<Artifact> discoveredInputs,
+      InputMetadataProvider metadataProvider)
       throws InterruptedException {
     try (SilentCloseable c =
         Profiler.instance().profile(ProfilerTask.ACTION_LOCK, "action.enterActionExecution")) {
-      return lockArtifactsForConsumption(action.getInputs().toList(), metadataProvider);
+      // Some actions, such as CppCompileAction, only add the discovered inputs to their inputs
+      // after execution, but read them during execution. The sets are only flattened if the fine
+      // locks are in use.
+      return lockArtifactsForConsumption(
+          Iterables.concat(
+              Iterables.transform(
+                  ImmutableList.of(action.getInputs(), discoveredInputs), NestedSet::toList)),
+          metadataProvider);
     }
   }
 
