@@ -354,6 +354,28 @@ public final class RemoteActionFileSystemTest extends RemoteActionFileSystemTest
   }
 
   @Test
+  public void deleteTree_deletesLocalAndRemoteEntriesBelowReadOnlyDirectories() throws Exception {
+    RemoteActionFileSystem actionFs = (RemoteActionFileSystem) createActionFileSystem();
+    FileSystem localFs = actionFs.getLocalFileSystem();
+
+    PathFragment dir = getOutputPath("dir");
+    PathFragment subdir = dir.getChild("subdir");
+    writeLocalFile(actionFs, dir.getChild("local"), "content");
+    injectRemoteFile(actionFs, dir.getChild("remote"), "content");
+    writeLocalFile(actionFs, subdir.getChild("local1"), "content");
+    writeLocalFile(actionFs, subdir.getChild("local2"), "content");
+    injectRemoteFile(actionFs, subdir.getChild("remote"), "content");
+    localFs.getPath(subdir).setWritable(false);
+    localFs.getPath(dir).setWritable(false);
+
+    actionFs.deleteTree(dir);
+
+    assertThat(actionFs.exists(dir, /* followSymlinks= */ false)).isFalse();
+    assertThat(localFs.exists(dir, /* followSymlinks= */ false)).isFalse();
+    assertThat(actionFs.getRemoteOutputTree().exists(dir, /* followSymlinks= */ false)).isFalse();
+  }
+
+  @Test
   public void delete_followSymlinks(
       @TestParameter FilesystemTestParam from, @TestParameter FilesystemTestParam to)
       throws Exception {

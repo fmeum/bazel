@@ -391,6 +391,30 @@ public class RemoteActionFileSystem extends FileSystem {
   }
 
   @Override
+  public void deleteTreesBelow(PathFragment dir) throws IOException {
+    PathFragment originalDir = dir;
+    try {
+      dir = resolveSymbolicLinksForParent(dir);
+    } catch (FileNotFoundException ignored) {
+      // Failure to delete below a nonexistent path is not an error.
+      pathCanonicalizer.clearPrefix(originalDir);
+      return;
+    }
+
+    pathCanonicalizer.clearPrefix(originalDir);
+
+    // Delegate to the underlying file systems instead of relying on the generic implementation,
+    // which deletes one entry at a time through this file system. Besides being slower, it only
+    // makes a directory writable when the deletion of its first entry fails, whereas the local
+    // file system is able to recover from a failure to delete any entry. This matters when the
+    // outputs of a rewound action are deleted, as their directories may be read-only.
+    if (isOutput(dir)) {
+      remoteOutputTree.getPath(dir).deleteTreesBelow();
+    }
+    localFs.getPath(dir).deleteTreesBelow();
+  }
+
+  @Override
   public InputStream getInputStream(PathFragment path) throws IOException {
     try {
       getFromFuture(downloadIfRemote(path));
