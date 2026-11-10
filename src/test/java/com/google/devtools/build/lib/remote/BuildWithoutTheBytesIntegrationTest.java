@@ -19,6 +19,7 @@ import static com.google.devtools.build.lib.vfs.FileSystemUtils.readContent;
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static org.junit.Assert.assertThrows;
 import static org.junit.Assume.assumeFalse;
+import static org.junit.Assume.assumeTrue;
 
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Sets;
@@ -253,6 +254,62 @@ public class BuildWithoutTheBytesIntegrationTest extends BuildWithoutTheBytesInt
     // A local consumer fetches the contents from the disk cache.
     buildTarget("//:bar");
     assertOnlyOutputContent("//:bar", "bar.txt", "hello");
+  }
+
+  @Test
+  public void remoteExecution_inputsOnlyInDiskCache_uploadedFromDiskCache(
+      @TestParameter boolean consumerIsCacheable) throws Exception {
+    // Regression test for https://github.com/bazelbuild/bazel/issues/32549.
+    assumeTrue(useDiskCache);
+    writeOutputDirRule();
+    write(
+        "BUILD",
+        """
+        load("//:output_dir.bzl", "output_dir")
+
+        output_dir(
+            name = "tree",
+            content_map = {"file": "tree"},
+            tags = ["no-remote"],
+        )
+
+        genrule(
+            name = "file",
+            outs = ["file.txt"],
+            cmd = "echo -n file > $@",
+            tags = ["no-remote"],
+        )
+
+        # Whether an input can be fetched from the disk cache must not depend on whether the result
+        # of the spawn consuming it can be cached.
+        genrule(
+            name = "consumer",
+            srcs = [":tree", ":file"],
+            outs = ["consumer.txt"],
+            cmd = "cat $(location :tree)/file $(location :file) > $@",
+            tags = %s,
+        )
+        """
+            .formatted(consumerIsCacheable ? "[]" : "[\"no-cache\"]"));
+
+    // Execute the producers locally so that their outputs end up in the disk cache, but not in the
+    // remote cache.
+    buildTarget("//:tree", "//:file");
+
+    // Turn the producers into disk cache hits whose outputs aren't materialized locally. The remote
+    // executor can then only obtain them if Bazel fetches them from the disk cache.
+    var originalDiskCacheDir = diskCacheDir;
+    getOutputBase().getRelative("action_cache").deleteTreesBelow();
+    restartServer();
+    addOptions(
+        "--disk_cache=" + originalDiskCacheDir.getPathString(),
+        // Neither action nor build rewinding may be required to recover.
+        "--norewind_lost_inputs",
+        "--experimental_remote_cache_eviction_retries=0");
+    setDownloadToplevel();
+    buildTarget("//:consumer");
+
+    assertValidOutputFile("consumer.txt", "treefile");
   }
 
   @Override
