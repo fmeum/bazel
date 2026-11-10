@@ -105,8 +105,10 @@ public class RemoteExecutionCache extends CombinedCache implements MerkleTreeUpl
           // If the file is available in the disk cache, we can attempt to download it from there.
           // The read cache policy of the context is intentionally not consulted: it governs
           // whether the result of the spawn being executed may be served from a cache, whereas
-          // the file is one of its inputs. In particular, runfiles trees are uploaded with a
-          // context that doesn't allow reading from any cache.
+          // the file is one of its inputs. In particular, the disk cache may not be read from for
+          // spawns marked as no-cache (such as tests run with --nocache_test_results) and Merkle
+          // subtrees (runfiles trees, tree artifacts, ...) are uploaded with a context that doesn't
+          // allow reading from any cache.
           ListenableFuture<Void> downloadFromDiskCache = immediateVoidFuture();
           if (hasDiskCache()) {
             downloadFromDiskCache =

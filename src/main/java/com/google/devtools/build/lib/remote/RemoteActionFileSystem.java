@@ -405,9 +405,8 @@ public class RemoteActionFileSystem extends FileSystem {
 
     // Delegate to the underlying file systems instead of relying on the generic implementation,
     // which deletes one entry at a time through this file system. Besides being slower, it only
-    // makes a directory writable when the deletion of its first entry fails, whereas the local
-    // file system is able to recover from a failure to delete any entry. This matters when the
-    // outputs of a rewound action are deleted, as their directories may be read-only.
+    // makes a read-only directory writable when the deletion of its first entry fails, whereas
+    // the native implementation of the local file system does so for every entry.
     if (isOutput(dir)) {
       remoteOutputTree.getPath(dir).deleteTreesBelow();
     }
