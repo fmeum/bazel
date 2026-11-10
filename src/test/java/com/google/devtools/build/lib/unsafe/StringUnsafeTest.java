@@ -14,10 +14,12 @@
 package com.google.devtools.build.lib.unsafe;
 
 import static com.google.common.truth.Truth.assertThat;
+import static com.google.common.truth.Truth.assertWithMessage;
 
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
@@ -61,5 +63,23 @@ public final class StringUnsafeTest {
     assertThat(StringUnsafe.isAscii("hällo")).isFalse();
     assertThat(StringUnsafe.isAscii("hållo")).isFalse();
     assertThat(StringUnsafe.isAscii("h👋llo")).isFalse();
+  }
+
+  @Test
+  public void testIsAscii_allLengthsAndPositions() {
+    for (int length = 0; length <= 100; length++) {
+      char[] chars = new char[length];
+      Arrays.fill(chars, '\u007f');
+      assertWithMessage("length %s", length).that(StringUnsafe.isAscii(new String(chars))).isTrue();
+      for (int i = 0; i < length; i++) {
+        chars[i] = '\u0080';
+        String s = new String(chars);
+        assertThat(StringUnsafe.getCoder(s)).isEqualTo(StringUnsafe.LATIN1);
+        assertWithMessage("length %s, position %s", length, i)
+            .that(StringUnsafe.isAscii(s))
+            .isFalse();
+        chars[i] = '\u007f';
+      }
+    }
   }
 }

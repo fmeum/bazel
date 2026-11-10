@@ -18,7 +18,7 @@ import java.lang.invoke.MethodHandle;
 import java.lang.invoke.MethodHandles;
 import java.lang.invoke.VarHandle;
 import java.lang.reflect.Constructor;
-import java.lang.reflect.Method;
+import java.nio.ByteOrder;
 import java.util.Arrays;
 
 /**
@@ -36,18 +36,18 @@ public final class StringUnsafe {
   public static final byte UTF16 = 1;
 
   private static final MethodHandle CONSTRUCTOR;
-  private static final MethodHandle HAS_NEGATIVES;
   private static final VarHandle VALUE_HANDLE;
   private static final VarHandle CODE_HANDLE;
 
+  private static final VarHandle LONG_VIEW =
+      MethodHandles.byteArrayViewVarHandle(long[].class, ByteOrder.nativeOrder());
+  private static final VarHandle INT_VIEW =
+      MethodHandles.byteArrayViewVarHandle(int[].class, ByteOrder.nativeOrder());
+  private static final long LONG_HIGH_BITS = 0x8080808080808080L;
+  private static final int INT_HIGH_BITS = 0x80808080;
+
   static {
     try {
-      Class<?> stringCoding = Class.forName("java.lang.StringCoding");
-      Method hasNegatives =
-          stringCoding.getDeclaredMethod("hasNegatives", byte[].class, int.class, int.class);
-      hasNegatives.setAccessible(true);
-      HAS_NEGATIVES = MethodHandles.lookup().unreflect(hasNegatives);
-
       Constructor<String> constructor =
           String.class.getDeclaredConstructor(byte[].class, byte.class);
       constructor.setAccessible(true);
@@ -99,22 +99,43 @@ public final class StringUnsafe {
 
   /** Returns whether the string is ASCII-only. */
   public static boolean isAscii(String obj) {
-    // This implementation uses java.lang.StringCoding#hasNegatives, which is implemented as a JVM
-    // intrinsic. On a machine with 512-bit SIMD registers, this is 5x as fast as a naive loop
-    // over getByteArray(obj), which in turn is 5x as fast as obj.chars().anyMatch(c -> c > 0x7F) in
-    // a JMH benchmark.
-
     if (getCoder(obj) != LATIN1) {
       // Latin-1 is a superset of ASCII, so we must have non-ASCII characters.
       return false;
     }
+    // Checks the high bits of multiple bytes at once. See IsAsciiBenchmark for a comparison with
+    // the JDK's intrinsic.
     byte[] bytes = getByteArray(obj);
-    try {
-      return !(boolean) HAS_NEGATIVES.invokeExact(bytes, 0, bytes.length);
-    } catch (Throwable t) {
-      // hasNegatives doesn't throw.
-      throw new IllegalStateException(t);
+    int length = bytes.length;
+    if (length >= 8) {
+      int i = 0;
+      for (; i <= length - 32; i += 32) {
+        long word =
+            (long) LONG_VIEW.get(bytes, i)
+                | (long) LONG_VIEW.get(bytes, i + 8)
+                | (long) LONG_VIEW.get(bytes, i + 16)
+                | (long) LONG_VIEW.get(bytes, i + 24);
+        if ((word & LONG_HIGH_BITS) != 0) {
+          return false;
+        }
+      }
+      long word = 0;
+      for (; i <= length - 8; i += 8) {
+        word |= (long) LONG_VIEW.get(bytes, i);
+      }
+      // Covers the remaining 0 to 7 bytes by overlapping with bytes already checked.
+      word |= (long) LONG_VIEW.get(bytes, length - 8);
+      return (word & LONG_HIGH_BITS) == 0;
     }
+    if (length >= 4) {
+      int word = (int) INT_VIEW.get(bytes, 0) | (int) INT_VIEW.get(bytes, length - 4);
+      return (word & INT_HIGH_BITS) == 0;
+    }
+    if (length == 0) {
+      return true;
+    }
+    // Covers lengths 1 to 3.
+    return (bytes[0] | bytes[length / 2] | bytes[length - 1]) >= 0;
   }
 
   /**
