@@ -1021,26 +1021,7 @@ public abstract class AbstractActionInputPrefetcher implements ActionInputPrefet
     return remoteOutputChecker;
   }
 
-  /**
-   * Must be called before the outputs of a rewound action are deleted, while no other action is
-   * permitted to start consuming them.
-   */
-  public void handleRewoundActionOutputs(Collection<Artifact> outputs)
-      throws InterruptedException {
-    // A prefetch that was cancelled, e.g. due to an interrupt, isn't awaited by its caller and may
-    // thus still be moving files into place or restoring directory permissions after the consuming
-    // action has finished. Wait for such stragglers so that they can't race with the deletion of
-    // the outputs.
-    downloadCache.awaitInProgressTasks();
-    for (Artifact output : outputs) {
-      Artifact tree = output instanceof TreeFileArtifact ? output.getParent() : output;
-      if (tree.isTreeArtifact()) {
-        Lock lock = treeArtifactLocks.get(tree.getPath().asFragment()).writeLock();
-        lock.lock();
-        lock.unlock();
-      }
-    }
-
+  public void handleRewoundActionOutputs(Collection<Artifact> outputs) {
     // SkyframeActionExecutor#prepareForRewinding does *not* invalidate outputDirectoryHelper
     // because action file systems correspond to an ActionFileSystemType with
     // inMemoryFileSystem() == true. While it is true that resetting outputDirectoryHelper isn't
