@@ -4,6 +4,7 @@ go 1.22
 
 require (
 	github.com/zeebo/blake3 v0.2.3
+	golang.org/x/sys v0.30.0
 	lukechampine.com/blake3 v1.4.1
 )
 

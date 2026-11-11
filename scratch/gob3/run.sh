@@ -50,7 +50,7 @@ case "$(uname -m)" in
     build "$work/default"
     build "$work/noavx512" -DBLAKE3_NO_AVX512
     bench default .
-    bench noavx512 'Hash/c/'
+    BLAKE3_DISABLE_AVX512=1 bench noavx512 'Hash/(c|zeebomaster)/'
     ;;
   *)
     build "$work/default"
@@ -78,6 +78,8 @@ import collections, re, statistics, sys
 rows = {
     "sha256": "Go crypto/sha256, 32 KiB writes",
     "zeebo": "zeebo/blake3 v0.2.3 (BuildBuddy), 32 KiB writes",
+    "zeebomaster": "zeebo/blake3 master 28a397d (unreleased), 32 KiB writes",
+    "zeebomaster-noavx512": "zeebo/blake3 master with BLAKE3_DISABLE_AVX512=1, 32 KiB writes",
     "luke": "lukechampine.com/blake3 v1.4.1, 32 KiB writes",
     "c": "C BLAKE3, one call",
     "c32k": "C BLAKE3, 32 KiB writes via cgo",
