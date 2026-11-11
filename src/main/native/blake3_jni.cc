@@ -73,3 +73,96 @@ Java_com_google_devtools_build_lib_vfs_bazel_Blake3MessageDigest_blake3_1hasher_
 }
 
 }  // namespace blaze_jni
+
+// ---------------------------------------------------------------------------
+// Experimental entry points used by Blake3Experimental for benchmarking.
+// ---------------------------------------------------------------------------
+
+#ifndef _WIN32
+#include <errno.h>
+#include <fcntl.h>
+#include <unistd.h>
+#endif
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_google_devtools_build_lib_vfs_bazel_Blake3Experimental_hashOneShotJni(
+    JNIEnv *env, jclass clazz, jbyteArray input, jint offset, jint len,
+    jbyteArray out) {
+  blake3_hasher hasher;
+  blake3_hasher_init(&hasher);
+  jbyte *in = (jbyte *)env->GetPrimitiveArrayCritical(input, nullptr);
+  blake3_hasher_update(&hasher, in + offset, len);
+  env->ReleasePrimitiveArrayCritical(input, in, JNI_ABORT);
+  uint8_t digest[BLAKE3_OUT_LEN];
+  blake3_hasher_finalize(&hasher, digest, BLAKE3_OUT_LEN);
+  env->SetByteArrayRegion(out, 0, BLAKE3_OUT_LEN, (jbyte *)digest);
+}
+
+extern "C" {
+
+JNIEXPORT int32_t blaze_blake3_hasher_size() {
+  return static_cast<int32_t>(sizeof(blake3_hasher));
+}
+
+JNIEXPORT void blaze_blake3_hasher_init(void *hasher) {
+  blake3_hasher_init(static_cast<blake3_hasher *>(hasher));
+}
+
+JNIEXPORT void blaze_blake3_hasher_update(void *hasher, const void *input,
+                                          int64_t input_len) {
+  blake3_hasher_update(static_cast<blake3_hasher *>(hasher), input,
+                       static_cast<size_t>(input_len));
+}
+
+JNIEXPORT void blaze_blake3_hasher_finalize(void *hasher, void *out,
+                                            int64_t out_len) {
+  blake3_hasher_finalize(static_cast<blake3_hasher *>(hasher),
+                         static_cast<uint8_t *>(out),
+                         static_cast<size_t>(out_len));
+}
+
+JNIEXPORT void blaze_blake3_hash(const void *input, int64_t input_len,
+                                 void *out) {
+  blake3_hasher hasher;
+  blake3_hasher_init(&hasher);
+  blake3_hasher_update(&hasher, input, static_cast<size_t>(input_len));
+  blake3_hasher_finalize(&hasher, static_cast<uint8_t *>(out), BLAKE3_OUT_LEN);
+}
+
+#ifndef _WIN32
+// Returns 0 on success, errno otherwise.
+JNIEXPORT int32_t blaze_blake3_hash_file(const char *path, void *out,
+                                         int64_t buf_size) {
+  int fd;
+  do {
+    fd = open(path, O_RDONLY | O_CLOEXEC);
+  } while (fd < 0 && errno == EINTR);
+  if (fd < 0) {
+    return errno;
+  }
+  uint8_t *buf = static_cast<uint8_t *>(malloc(static_cast<size_t>(buf_size)));
+  blake3_hasher hasher;
+  blake3_hasher_init(&hasher);
+  int32_t result = 0;
+  for (;;) {
+    ssize_t n = read(fd, buf, static_cast<size_t>(buf_size));
+    if (n > 0) {
+      blake3_hasher_update(&hasher, buf, static_cast<size_t>(n));
+    } else if (n == 0) {
+      break;
+    } else if (errno != EINTR) {
+      result = errno;
+      break;
+    }
+  }
+  free(buf);
+  close(fd);
+  if (result == 0) {
+    blake3_hasher_finalize(&hasher, static_cast<uint8_t *>(out),
+                           BLAKE3_OUT_LEN);
+  }
+  return result;
+}
+#endif
+
+}  // extern "C"
