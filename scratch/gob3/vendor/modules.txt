@@ -1,0 +1,20 @@
+# github.com/klauspost/cpuid/v2 v2.0.12
+## explicit; go 1.15
+github.com/klauspost/cpuid/v2
+# github.com/zeebo/blake3 v0.2.3
+## explicit; go 1.13
+github.com/zeebo/blake3
+github.com/zeebo/blake3/internal/alg
+github.com/zeebo/blake3/internal/alg/compress
+github.com/zeebo/blake3/internal/alg/compress/compress_pure
+github.com/zeebo/blake3/internal/alg/compress/compress_sse41
+github.com/zeebo/blake3/internal/alg/hash
+github.com/zeebo/blake3/internal/alg/hash/hash_avx2
+github.com/zeebo/blake3/internal/alg/hash/hash_pure
+github.com/zeebo/blake3/internal/consts
+github.com/zeebo/blake3/internal/utils
+# lukechampine.com/blake3 v1.4.1
+## explicit; go 1.22
+lukechampine.com/blake3
+lukechampine.com/blake3/bao
+lukechampine.com/blake3/guts
