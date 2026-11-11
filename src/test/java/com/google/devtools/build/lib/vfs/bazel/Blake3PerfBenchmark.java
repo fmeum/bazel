@@ -58,7 +58,7 @@ public class Blake3PerfBenchmark {
 
   @State(Scope.Thread)
   public static class BytesState {
-    @Param({"JNI", "JNI_ONESHOT", "FFM_STREAM", "FFM_ONESHOT", "SHA256"})
+    @Param({"JNI", "JNI_ONESHOT", "FFM_STREAM", "FFM_HEAP", "FFM_ONESHOT", "SHA256"})
     public String impl;
 
     @Param({"1", "64", "1024", "8192", "65536", "1048576"})
@@ -77,6 +77,9 @@ public class Blake3PerfBenchmark {
       var h = new Blake3Experimental.FfmHasher();
       h.update(data, 0, size);
       check(expected, h.digestAndClose());
+      var hh = new Blake3Experimental.FfmHeapHasher();
+      hh.update(data, 0, size);
+      check(expected, hh.digest());
     }
   }
 
@@ -89,6 +92,11 @@ public class Blake3PerfBenchmark {
         var h = new Blake3Experimental.FfmHasher();
         h.update(s.data, 0, s.data.length);
         yield h.digestAndClose();
+      }
+      case "FFM_HEAP" -> {
+        var h = new Blake3Experimental.FfmHeapHasher();
+        h.update(s.data, 0, s.data.length);
+        yield h.digest();
       }
       case "FFM_ONESHOT" -> Blake3Experimental.ffmOneShot(s.data, 0, s.data.length);
       case "SHA256" -> Hashing.sha256().hashBytes(s.data).asBytes();

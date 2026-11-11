@@ -67,6 +67,11 @@ public final class Blake3Experimental {
           find("blaze_blake3_hasher_init"),
           FunctionDescriptor.ofVoid(ADDRESS),
           Linker.Option.critical(false));
+  private static final MethodHandle HASHER_INIT_HEAP =
+      LINKER.downcallHandle(
+          find("blaze_blake3_hasher_init"),
+          FunctionDescriptor.ofVoid(ADDRESS),
+          Linker.Option.critical(true));
   private static final MethodHandle HASHER_UPDATE =
       LINKER.downcallHandle(
           find("blaze_blake3_hasher_update"),
@@ -141,6 +146,39 @@ public final class Blake3Experimental {
         throw new AssertionError(t);
       }
       arena.close();
+      return out;
+    }
+  }
+
+  /** Streaming hasher with state in a Java heap array, passed via critical heap access. */
+  public static final class FfmHeapHasher {
+    private final long[] state = new long[(int) ((STATE_SIZE + 7) / 8)];
+
+    public FfmHeapHasher() {
+      try {
+        HASHER_INIT_HEAP.invokeExact(MemorySegment.ofArray(state));
+      } catch (Throwable t) {
+        throw new AssertionError(t);
+      }
+    }
+
+    public void update(byte[] data, int offset, int len) {
+      try {
+        HASHER_UPDATE.invokeExact(
+            MemorySegment.ofArray(state), MemorySegment.ofArray(data).asSlice(offset, len), (long) len);
+      } catch (Throwable t) {
+        throw new AssertionError(t);
+      }
+    }
+
+    public byte[] digest() {
+      byte[] out = new byte[OUT_LEN];
+      try {
+        HASHER_FINALIZE.invokeExact(
+            MemorySegment.ofArray(state), MemorySegment.ofArray(out), (long) OUT_LEN);
+      } catch (Throwable t) {
+        throw new AssertionError(t);
+      }
       return out;
     }
   }
