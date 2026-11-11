@@ -546,3 +546,10 @@ register_toolchains("@local_config_winsdk//:all")
 register_toolchains("//tools/res:empty_rc_toolchain")
 
 register_toolchains("@graalvm_ce_toolchains//:gvm")
+
+# EXPERIMENT: 8-way NEON kernel for blake3.
+single_version_override(
+    module_name = "blake3",
+    patch_strip = 1,
+    patches = ["//third_party/blake3_experiment:neon8.patch"],
+)
