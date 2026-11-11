@@ -1,0 +1,32 @@
+diff --git a/src/tools/remote/src/main/java/com/google/devtools/build/remote/worker/BUILD b/src/tools/remote/src/main/java/com/google/devtools/build/remote/worker/BUILD
+index 016c5b07539..39fdf37d5e1 100644
+--- a/src/tools/remote/src/main/java/com/google/devtools/build/remote/worker/BUILD
++++ b/src/tools/remote/src/main/java/com/google/devtools/build/remote/worker/BUILD
+@@ -60,6 +60,7 @@ java_library(
+         "//src/main/java/com/google/devtools/build/lib/util/io",
+         "//src/main/java/com/google/devtools/build/lib/util/io:out-err",
+         "//src/main/java/com/google/devtools/build/lib/vfs",
++        "//src/main/java/com/google/devtools/build/lib/vfs/bazel",
+         "//src/main/java/com/google/devtools/build/lib/vfs:pathfragment",
+         "//src/main/java/com/google/devtools/build/lib/windows",
+         "//src/main/java/com/google/devtools/common/options",
+diff --git a/src/tools/remote/src/main/java/com/google/devtools/build/remote/worker/RemoteWorker.java b/src/tools/remote/src/main/java/com/google/devtools/build/remote/worker/RemoteWorker.java
+index 03d523aa3ed..d6b246e1dfe 100644
+--- a/src/tools/remote/src/main/java/com/google/devtools/build/remote/worker/RemoteWorker.java
++++ b/src/tools/remote/src/main/java/com/google/devtools/build/remote/worker/RemoteWorker.java
+@@ -45,6 +45,7 @@ import com.google.devtools.build.lib.util.OS;
+ import com.google.devtools.build.lib.util.SingleLineFormatter;
+ import com.google.devtools.build.lib.vfs.DigestHashFunction;
+ import com.google.devtools.build.lib.vfs.DigestHashFunction.DigestFunctionConverter;
++import com.google.devtools.build.lib.vfs.bazel.BazelHashFunctions;
+ import com.google.devtools.build.lib.vfs.FileSystem;
+ import com.google.devtools.build.lib.vfs.Path;
+ import com.google.devtools.build.lib.vfs.SyscallCache;
+@@ -115,6 +116,7 @@ public final class RemoteWorker {
+     final DigestHashFunction hashFunction;
+     String value = null;
+     try {
++      BazelHashFunctions.ensureRegistered();
+       value = System.getProperty("bazel.DigestFunction", "SHA256");
+       hashFunction = new DigestFunctionConverter().convert(value);
+     } catch (OptionsParsingException e) {
