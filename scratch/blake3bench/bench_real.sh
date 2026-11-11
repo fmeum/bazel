@@ -12,7 +12,8 @@
 #           (toplevel) output downloads.
 #   A_all:  same with --remote_download_all.
 #   B_null: null build after a server restart with all outputs on disk.
-# Results are appended to OUT_DIR/results.csv.
+# Results are appended to OUT_DIR/results.csv. Set DIGESTS to limit the digest
+# functions, e.g. DIGESTS=SHA256.
 set -euo pipefail
 
 BIN_DIR=$(cd "$1" && pwd)
@@ -22,6 +23,7 @@ OUT=$(cd "$3" && pwd)
 JAVA=$4
 ROUNDS=$5
 TARGET=${6:-//src:bazel-dev}
+DIGESTS=${DIGESTS:-SHA256 BLAKE3}
 
 mkdir -p "$OUT/work" "$OUT/bep" "$OUT/logs"
 CSV=$OUT/results.csv
@@ -101,7 +103,7 @@ measure() {
   tail -1 "$CSV"
 }
 
-for df in SHA256 BLAKE3; do
+for df in $DIGESTS; do
   start_worker "$df"
   # Populate the cache and fetch external repositories for both binaries.
   for bin in base 64k; do
@@ -114,7 +116,7 @@ done
 
 for round in $(seq 1 "$ROUNDS"); do
   if [ $((round % 2)) -eq 1 ]; then order="base 64k"; else order="64k base"; fi
-  for df in SHA256 BLAKE3; do
+  for df in $DIGESTS; do
     for bin in $order; do
       echo "== round $round $bin $df"
       bz "$bin" "$df" shutdown
@@ -130,7 +132,7 @@ for round in $(seq 1 "$ROUNDS"); do
   done
 done
 
-for df in SHA256 BLAKE3; do
+for df in $DIGESTS; do
   for bin in base 64k; do
     bz "$bin" "$df" shutdown > /dev/null 2>&1 || true
   done
