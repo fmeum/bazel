@@ -22,6 +22,7 @@ java_library(
         ],
         exclude = [
             "BazelHashFunctionsBenchmark.java",
+            "Blake3OverheadBenchmark.java",
         ],
     ),
     deps = [
@@ -53,6 +54,18 @@ java_test(
 java_opt_binary(
     name = "BazelHashFunctionsBenchmark",
     srcs = ["BazelHashFunctionsBenchmark.java"],
+    jvm_flags = ["--enable-native-access=ALL-UNNAMED"],
+    main_class = "org.openjdk.jmh.Main",
+    deps = [
+        "//src/main/java/com/google/devtools/build/lib/vfs/bazel",
+        "//third_party:guava",
+        "//third_party:jmh",
+    ],
+)
+
+java_opt_binary(
+    name = "Blake3OverheadBenchmark",
+    srcs = ["Blake3OverheadBenchmark.java"],
     jvm_flags = ["--enable-native-access=ALL-UNNAMED"],
     main_class = "org.openjdk.jmh.Main",
     deps = [
