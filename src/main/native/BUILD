@@ -79,6 +79,12 @@ cc_library(
 )
 
 cc_binary(
+    name = "blake3_avx_penalty",
+    srcs = ["blake3_avx_penalty.c"],
+    deps = ["@blake3"],
+)
+
+cc_binary(
     name = "libunix_jni.so",
     srcs = [
         "unix_jni.cc",

@@ -34,4 +34,32 @@ BAZEL_EXPORT void blaze_blake3_hash(const void *input, size_t input_len,
   blake3_hasher_finalize(&hasher, static_cast<uint8_t *>(out), BLAKE3_OUT_LEN);
 }
 
+// Scratch variants that clear the upper vector register state first.
+static void ZeroUpper() {
+#if defined(__x86_64__)
+  if (__builtin_cpu_supports("avx")) {
+    __asm__ volatile("vzeroupper");
+  }
+#endif
+}
+
+BAZEL_EXPORT void blaze_blake3_hash_vzeroupper(const void *input,
+                                               size_t input_len, void *out) {
+  ZeroUpper();
+  blaze_blake3_hash(input, input_len, out);
+}
+
+BAZEL_EXPORT void blaze_blake3_hasher_update_vzeroupper(blake3_hasher *self,
+                                                        const void *input,
+                                                        size_t input_len) {
+  ZeroUpper();
+  blake3_hasher_update(self, input, input_len);
+}
+
+BAZEL_EXPORT void blaze_blake3_hasher_finalize_vzeroupper(
+    const blake3_hasher *self, uint8_t *out, size_t out_len) {
+  ZeroUpper();
+  blake3_hasher_finalize(self, out, out_len);
+}
+
 }  // extern "C"

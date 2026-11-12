@@ -53,6 +53,10 @@ public class Blake3OverheadBenchmark {
   private static final MethodHandle HASHER_INIT;
   private static final MethodHandle HASHER_UPDATE;
   private static final MethodHandle HASHER_FINALIZE;
+  private static final MethodHandle HASH;
+  private static final MethodHandle HASH_VZEROUPPER;
+  private static final MethodHandle HASHER_UPDATE_VZEROUPPER;
+  private static final MethodHandle HASHER_FINALIZE_VZEROUPPER;
 
   static {
     try {
@@ -83,6 +87,26 @@ public class Blake3OverheadBenchmark {
     HASHER_FINALIZE =
         linker.downcallHandle(
             lookup.find("blake3_hasher_finalize").orElseThrow(),
+            FunctionDescriptor.ofVoid(ADDRESS, ADDRESS, JAVA_LONG),
+            Linker.Option.critical(true));
+    HASH =
+        linker.downcallHandle(
+            lookup.find("blaze_blake3_hash").orElseThrow(),
+            FunctionDescriptor.ofVoid(ADDRESS, JAVA_LONG, ADDRESS),
+            Linker.Option.critical(true));
+    HASH_VZEROUPPER =
+        linker.downcallHandle(
+            lookup.find("blaze_blake3_hash_vzeroupper").orElseThrow(),
+            FunctionDescriptor.ofVoid(ADDRESS, JAVA_LONG, ADDRESS),
+            Linker.Option.critical(true));
+    HASHER_UPDATE_VZEROUPPER =
+        linker.downcallHandle(
+            lookup.find("blaze_blake3_hasher_update_vzeroupper").orElseThrow(),
+            FunctionDescriptor.ofVoid(ADDRESS, ADDRESS, JAVA_LONG),
+            Linker.Option.critical(true));
+    HASHER_FINALIZE_VZEROUPPER =
+        linker.downcallHandle(
+            lookup.find("blaze_blake3_hasher_finalize_vzeroupper").orElseThrow(),
             FunctionDescriptor.ofVoid(ADDRESS, ADDRESS, JAVA_LONG),
             Linker.Option.critical(true));
   }
@@ -181,5 +205,40 @@ public class Blake3OverheadBenchmark {
   @Benchmark
   public void downcallFinalizeNative() throws Throwable {
     HASHER_FINALIZE.invokeExact(nativeStateWithOneByte, MemorySegment.ofArray(out), 32L);
+  }
+
+  // The raw paths, with and without clearing the upper vector register state in native code first.
+
+  @Benchmark
+  public byte[] oneShotRaw() throws Throwable {
+    var result = new byte[32];
+    HASH.invokeExact(MemorySegment.ofArray(oneByte), 1L, MemorySegment.ofArray(result));
+    return result;
+  }
+
+  @Benchmark
+  public byte[] oneShotRawVzeroupper() throws Throwable {
+    var result = new byte[32];
+    HASH_VZEROUPPER.invokeExact(
+        MemorySegment.ofArray(oneByte), 1L, MemorySegment.ofArray(result));
+    return result;
+  }
+
+  @Benchmark
+  public byte[] hasherRaw() throws Throwable {
+    var state = MemorySegment.ofArray(INITIAL_STATE.clone());
+    HASHER_UPDATE.invokeExact(state, MemorySegment.ofArray(oneByte), 1L);
+    var result = new byte[32];
+    HASHER_FINALIZE.invokeExact(state, MemorySegment.ofArray(result), 32L);
+    return result;
+  }
+
+  @Benchmark
+  public byte[] hasherRawVzeroupper() throws Throwable {
+    var state = MemorySegment.ofArray(INITIAL_STATE.clone());
+    HASHER_UPDATE_VZEROUPPER.invokeExact(state, MemorySegment.ofArray(oneByte), 1L);
+    var result = new byte[32];
+    HASHER_FINALIZE_VZEROUPPER.invokeExact(state, MemorySegment.ofArray(result), 32L);
+    return result;
   }
 }
