@@ -71,6 +71,17 @@ public final class Module implements Resolver.Module, TypeTagger.LoadableModule 
   // other modules which load this.
   @Nullable private StarlarkType[] globalsTypes;
 
+  // Whether getExportType() falls back to the dynamic type of a global's value if the global
+  // doesn't have a declared type. Set if type checking was enabled for a program executed in this
+  // module.
+  private boolean exportsDynamicTypes;
+
+  // Cache for getExportType(), indexed like globals and lazily allocated. A frozen module may be
+  // accessed by multiple threads, but no synchronization is needed: the entries are immutable and
+  // safely published via their final fields, and losing an update only results in the same type
+  // being computed again.
+  @Nullable private volatile ExportedDynamicType[] exportedDynamicTypes;
+
   // An optional piece of application-specific metadata associated with the module/file.
   // Its toString appears to Starlark in str(function): "<function f from ...>".
   @Nullable private final Object clientData;
@@ -345,6 +356,27 @@ public final class Module implements Resolver.Module, TypeTagger.LoadableModule 
    * <p>If type checking was enabled for this module, returns the variable's declared static type if
    * there is one; or the variable's value's dynamic type otherwise.
    *
+   * <p>We export the dynamic type of the value (rather than the inferred static type) because it's
+   * likely to be more useful to users who load() this module; they would want to type-check on the
+   * real set of fields of a Bazel struct or provider, or the real named args to a rule or macro. A
+   * module can annotate a global with a wider type to avoid exposing the dynamic type as part of
+   * its API.
+   *
+   * <p>The dynamic type is computed at the time of the call rather than when the module finishes
+   * executing. Since other modules can only load this module once its values have been frozen,
+   * this ensures that they observe the types of the frozen values. Otherwise, the exported type
+   * of a value whose type depends on whether it is frozen, such as an empty list, would depend on
+   * whether the value happened to be created frozen, which is the case for collection literals if
+   * and only if the program is free of potential mutations at top level (see {@link
+   * net.starlark.java.syntax.Program#isMutationFreeAtTopLevel}).
+   *
+   * <p>Exporting the dynamic type does result in one wart: the exported type might not be a
+   * subtype of the inferred static type, due to the invariance rule for mutable collections. For
+   * example, we might statically infer global X to be list[int|float] and export its value's
+   * dynamic type as list[int] - but list[int] is not a subtype of list[int|float]. Since the
+   * exported values are frozen, it may be possible to fix this wart by introducing frozenlist,
+   * frozendict, etc.
+   *
    * <p>If type checking was not enabled for this module (or if the global variable does not exist),
    * returns null.
    */
@@ -352,7 +384,55 @@ public final class Module implements Resolver.Module, TypeTagger.LoadableModule 
   @Nullable
   public StarlarkType getExportType(String name) {
     Integer i = globalIndex.get(name);
-    return i != null ? getGlobalTypeByIndex(i) : null;
+    if (i == null) {
+      return null;
+    }
+    @Nullable StarlarkType declaredType = getGlobalTypeByIndex(i);
+    if (declaredType != null || !exportsDynamicTypes) {
+      return declaredType;
+    }
+    @Nullable Object value = getGlobalByIndex(i);
+    if (value == null) {
+      return null;
+    }
+    // Computing the dynamic type of a value may require traversing it (e.g. for a large list), and
+    // a global may be loaded by many other modules.
+    @Nullable ExportedDynamicType[] cache = exportedDynamicTypes;
+    if (cache != null && i < cache.length) {
+      @Nullable ExportedDynamicType cached = cache[i];
+      if (cached != null && cached.value == value) {
+        return cached.type;
+      }
+    }
+    StarlarkType type = Starlark.getStarlarkType(value, semantics);
+    // The type of a value that isn't (yet) deeply frozen may still change.
+    if (Starlark.isImmutable(value)) {
+      if (cache == null || i >= cache.length) {
+        cache =
+            cache == null
+                ? new ExportedDynamicType[globals.length]
+                : Arrays.copyOf(cache, globals.length);
+        exportedDynamicTypes = cache;
+      }
+      cache[i] = new ExportedDynamicType(value, type);
+    }
+    return type;
+  }
+
+  /**
+   * A cache entry for the dynamic type of the value of a global variable.
+   *
+   * <p>The value is retained so that the entry is ignored if the global has since been rebound,
+   * which may happen if multiple programs are executed in the same module (e.g. in the REPL).
+   */
+  private record ExportedDynamicType(Object value, StarlarkType type) {}
+
+  /**
+   * Makes {@link #getExportType} return the dynamic type of the value of any global variable that
+   * doesn't have a declared type.
+   */
+  void setExportsDynamicTypes() {
+    this.exportsDynamicTypes = true;
   }
 
   @Override

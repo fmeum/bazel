@@ -1218,6 +1218,41 @@ public class BzlLoadFunctionTest extends BuildViewTestCase {
   }
 
   @Test
+  public void testStaticTypeChecker_emptyCollectionExportType_independentOfTopLevelCalls()
+      throws Exception {
+    scratch.file("a/BUILD");
+    // Without any top-level calls or other potential mutations, collection literals are created
+    // frozen; otherwise, they are only frozen after the file has been executed. This must not
+    // affect their exported types.
+    scratch.file(
+        "a/constants.bzl",
+        """
+        EMPTY_LIST = []
+        EMPTY_DICT = {}
+        """);
+    scratch.file(
+        "a/calls.bzl",
+        """
+        EMPTY_LIST = []
+        EMPTY_DICT = {}
+        _unused = len([])
+        """);
+
+    for (String file : ImmutableList.of("constants", "calls")) {
+      SkyKey key = key("//a:" + file + ".bzl");
+      EvaluationResult<BzlLoadValue> result =
+          SkyframeExecutorTestUtils.evaluate(
+              getSkyframeExecutor(), key, /* keepGoing= */ false, reporter);
+      assertThatEvaluationResult(result).hasNoError();
+      // The exported types are those of the frozen values.
+      assertThat(result.get(key).getModule().getExportType("EMPTY_LIST"))
+          .isEqualTo(Types.list(Types.NEVER));
+      assertThat(result.get(key).getModule().getExportType("EMPTY_DICT"))
+          .isEqualTo(Types.dict(Types.NEVER, Types.NEVER));
+    }
+  }
+
+  @Test
   public void testStaticTypeChecker_notRun_ifDisabledByFlag() throws Exception {
     setBuildLanguageOptions("--noexperimental_starlark_static_type_checking");
     scratch.file("a/BUILD");
