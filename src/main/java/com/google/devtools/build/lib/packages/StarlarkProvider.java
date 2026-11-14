@@ -810,6 +810,17 @@ public final class StarlarkProvider extends StarlarkType
       return provider;
     }
 
+    /**
+     * {@inheritDoc}
+     *
+     * <p>A provider symbol keeps its type, since the type is nominal: it is unaffected by changes
+     * to the provider that are compatible for untyped users, such as adding a field.
+     */
+    @Override
+    public StarlarkType getUntypedExportType() {
+      return this;
+    }
+
     @Override
     public int hashCode() {
       return hashObjects(ProviderType.class, provider);

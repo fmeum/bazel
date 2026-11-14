@@ -1446,13 +1446,23 @@ public final class Starlark {
         StarlarkFunction.ofToplevel(
             rfn, prog.getTypeTable(), module, globalIndex, thread.getNextIdentityToken());
     Object result = Starlark.positionalOnlyCall(thread, toplevel);
-    if (prog.getTypeTable() != null) {
+    @Nullable TypeTable typeTable = prog.getTypeTable();
+    if (typeTable != null) {
       // For globals that don't have a declared static type, we export the value's dynamic type.
       // We export the dynamic type of the value (rather than the inferred static type) because it's
       // likely to be more useful to users who load() this module; they would want to type-check
       // on the real set of fields of a Bazel struct or provider, or the real named args to a rule
       // or macro. A module can annotate a global with a wider type to avoid exposing the dynamic
       // type as part of its API.
+      //
+      // However, if the file doesn't use any type syntax, its author has not opted into static
+      // typing, and cannot be expected to annotate globals with wider types or to treat the dynamic
+      // types of the file's values as a compatibility contract. For example, changing a global
+      // from ["a"] to [], adding a field to a struct, or adding an optional parameter to a function
+      // are traditionally safe changes, but they alter the dynamic type in a way that can break
+      // typed code which loads the global. Therefore, in such files, we export Any unless the
+      // dynamic type explicitly opts into being exported in a form that is robust to such changes;
+      // see StarlarkType#getUntypedExportType.
       //
       // Exporting the dynamic type does result in one wart: the exported type might not be a
       // subtype of the inferred static type, due to the invariance rule for mutable collections.
@@ -1461,10 +1471,12 @@ public final class Starlark {
       // Since the exported values are frozen, it may be possible to fix this wart by introducing
       // frozenlist, frozendict, etc.
       // TODO: #27370 - Ensure this mechanism works for REPL.
+      boolean usesTypeSyntax = typeTable.toplevelUsesTypeSyntax();
       for (int i : globalIndex) {
         Object value = module.getGlobalByIndex(i);
         if (value != null && module.getGlobalTypeByIndex(i) == null) {
-          module.setGlobalTypeByIndex(i, Starlark.getStarlarkType(value, thread.getSemantics()));
+          StarlarkType type = Starlark.getStarlarkType(value, thread.getSemantics());
+          module.setGlobalTypeByIndex(i, usesTypeSyntax ? type : type.getUntypedExportType());
         }
       }
     }

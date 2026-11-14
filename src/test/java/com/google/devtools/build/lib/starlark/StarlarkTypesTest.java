@@ -101,7 +101,8 @@ public class StarlarkTypesTest extends BuildViewTestCase {
   /**
    * Evaluates the given Starlark expression in a .bzl module (with an optional prefix containing
    * load() statements, etc.), and returns the type under which it would be exported by a module to
-   * other .bzl files. (This is type is based on the dynamic type of the expression's value.)
+   * other .bzl files that uses type syntax. (This is type is based on the dynamic type of the
+   * expression's value.)
    */
   private StarlarkType revealExportedType(String expr, String... prefixLines) throws Exception {
     StringBuilder lines = new StringBuilder();
@@ -109,6 +110,8 @@ public class StarlarkTypesTest extends BuildViewTestCase {
       lines.append(prefixLine).append("\n");
     }
     lines.append("VAL = ").append(expr).append("\n");
+    // Ensure the file uses type syntax; otherwise, plain data types would be erased on export.
+    lines.append("_USES_TYPE_SYNTAX: int = 0\n");
     Module module = loadModule(writeTempBzlFile(lines.toString()));
     return module.getExportType("VAL");
   }
@@ -531,6 +534,74 @@ public class StarlarkTypesTest extends BuildViewTestCase {
   }
 
   @Test
+  public void fileWithoutTypeSyntax_exportsOnlySafeTypes() throws Exception {
+    setBuildLanguageOptions(
+        "--experimental_starlark_type_syntax", "--experimental_starlark_static_type_checking");
+    Module module =
+        loadModule(
+            writeTempBzlFile(
+                """
+                def impl(x, y = 1):
+                    pass
+
+                STR = "abc"
+                NONE = None
+                LIST = ["abc"]
+                EMPTY_LIST = []
+                DICT = {"abc": 1}
+                TUPLE = ("abc", 1)
+                STRUCT = struct(impl = impl, names = ["abc"])
+                LABEL = Label("//foo:bar")
+                MyInfo = provider(fields = ["x"])
+                INFO = MyInfo(x = 1)
+                """));
+
+    // By default, values are exported as Any.
+    assertThat(module.getExportType("STR")).isEqualTo(Types.ANY);
+    assertThat(module.getExportType("NONE")).isEqualTo(Types.ANY);
+    assertThat(module.getExportType("LIST")).isEqualTo(Types.ANY);
+    assertThat(module.getExportType("EMPTY_LIST")).isEqualTo(Types.ANY);
+    assertThat(module.getExportType("DICT")).isEqualTo(Types.ANY);
+    assertThat(module.getExportType("TUPLE")).isEqualTo(Types.ANY);
+    assertThat(module.getExportType("LABEL")).isEqualTo(Types.ANY);
+    assertThat(module.getExportType("INFO")).isEqualTo(Types.ANY);
+    // Functions and structs are exported with their signature and fields, but in a form that
+    // decays to a plain callable or struct when propagated to a variable, since adding an optional
+    // parameter or a field is a compatible change for untyped users.
+    StarlarkType implType = module.getExportType("impl");
+    assertThat(implType).isInstanceOf(Types.UntypedExportType.class);
+    assertThat(implType.typeRepr()).isEqualTo("<def (x: Any, y: [Any]) -> Any>");
+    assertThat(implType.toLvalue()).isEqualTo(Types.ANY_CALLABLE);
+    StarlarkType structType = module.getExportType("STRUCT");
+    assertThat(structType).isInstanceOf(Types.UntypedExportType.class);
+    assertThat(((Types.UntypedExportType) structType).getPreciseType())
+        .isEqualTo(Types.struct(ImmutableMap.of("impl", implType, "names", Types.ANY)));
+    assertThat(structType.toLvalue()).isEqualTo(Types.ANY_STRUCT);
+    // Provider symbols keep their (nominal) type.
+    assertThat(module.getExportType("MyInfo").typeRepr()).isEqualTo("<Provider[MyInfo]>");
+  }
+
+  @Test
+  public void fileWithTypeSyntax_exportsDynamicTypesOfUnannotatedGlobals() throws Exception {
+    setBuildLanguageOptions(
+        "--experimental_starlark_type_syntax", "--experimental_starlark_static_type_checking");
+    Module module =
+        loadModule(
+            writeTempBzlFile(
+                """
+                def _impl(x: int):
+                    pass
+
+                LIST = ["abc"]
+                STRUCT = struct(names = ["abc"])
+                """));
+
+    assertThat(module.getExportType("LIST")).isEqualTo(Types.list(Types.STR));
+    assertThat(module.getExportType("STRUCT"))
+        .isEqualTo(Types.struct(ImmutableMap.of("names", Types.list(Types.STR))));
+  }
+
+  @Test
   public void structApiImplementations_assignableToStructType() throws Exception {
     setBuildLanguageOptions(
         "--experimental_starlark_type_syntax", "--experimental_starlark_static_type_checking");
@@ -564,7 +635,10 @@ public class StarlarkTypesTest extends BuildViewTestCase {
     setBuildLanguageOptions(
         "--experimental_starlark_type_syntax", "--experimental_starlark_static_type_checking");
 
-    scratch.file(pkgName + "/lib/lib.bzl", "value = " + valueExpr);
+    scratch.file(
+        pkgName + "/lib/lib.bzl",
+        "value = " + valueExpr,
+        "_: Any  # use type syntax to export precise types");
     scratch.file(pkgName + "/lib/BUILD");
 
     checkValid(
@@ -673,6 +747,7 @@ public class StarlarkTypesTest extends BuildViewTestCase {
     scratch.file(
         "lib/select.bzl",
         """
+        _: Any  # use type syntax to export precise types
         select_of_int = select({"//cfg": 1, "//conditions:default": 0})
         select_of_str = select({"//cfg": "foo", "//conditions:default": "bar"})
         select_of_empty_list = select({"//cfg": [], "//conditions:default": []})
@@ -726,6 +801,7 @@ public class StarlarkTypesTest extends BuildViewTestCase {
     scratch.file(
         "lib/lib.bzl",
         """
+        _: Any  # use type syntax to export precise types
         select_of_int = select({"//cfg": 1, "//conditions:default": 0})
         select_of_str = select({"//cfg": "foo", "//conditions:default": "bar"})
         select_of_list_of_str = select({"//cfg": ["foo"], "//conditions:default": ["bar"]})
@@ -758,6 +834,7 @@ public class StarlarkTypesTest extends BuildViewTestCase {
     scratch.file(
         "lib/lib.bzl",
         """
+        _: Any  # use type syntax to export precise types
         select_of_int = select({"//cfg": 1, "//conditions:default": 0})
         select_of_str = select({"//cfg": "foo", "//conditions:default": "bar"})
         select_of_list_of_str = select({"//cfg": ["foo"], "//conditions:default": ["bar"]})

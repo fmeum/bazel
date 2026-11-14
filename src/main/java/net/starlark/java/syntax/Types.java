@@ -741,6 +741,57 @@ public final class Types {
    */
   public abstract static class CallableType extends StarlarkType {
 
+    /**
+     * {@inheritDoc}
+     *
+     * <p>The names, kinds and mandatoriness of the parameters are preserved for the purpose of
+     * checking calls, but are dropped when the type is propagated to a variable; see {@link
+     * UntypedExportType}. This ensures that adding an optional parameter, which is a compatible
+     * change for untyped callers, cannot break typed code.
+     *
+     * <p>The types of the parameters and of the return value are replaced by {@code Any}. They
+     * can only be more specific than that if the callable was not defined by the exporting
+     * module (for example, if it re-exports a builtin function or a function loaded from a module
+     * that uses type syntax), in which case they are not under the control of that module.
+     */
+    @Override
+    public StarlarkType getUntypedExportType() {
+      if (this.equals(ANY_CALLABLE)) {
+        return this;
+      }
+      ImmutableList<String> names = getParameterNames();
+      ImmutableSet.Builder<String> mandatoryNames = ImmutableSet.builder();
+      for (int i = 0; i < names.size(); i++) {
+        if (isMandatory(i)) {
+          mandatoryNames.add(names.get(i));
+        }
+      }
+      CallableType erased =
+          generalCallable(
+              names,
+              /* parameterTypesIfNonAny= */ null,
+              getNumPositionalOnlyParameters(),
+              getNumPositionalParameters(),
+              MandatoryParamIndices.fromNames(names, mandatoryNames.build()),
+              getVarargsType() != null ? ANY : null,
+              getKwargsType() != null ? ANY : null,
+              ANY);
+      return new UntypedExportType(erased, ANY_CALLABLE);
+    }
+
+    /**
+     * {@inheritDoc}
+     *
+     * <p>The return type is converted recursively, since the return type of a callable stored in
+     * a variable constrains the callables that can subsequently be assigned to that variable.
+     */
+    @Override
+    public StarlarkType toLvalue() {
+      StarlarkType returnType = getReturnType();
+      StarlarkType lvalueReturnType = returnType.toLvalue();
+      return lvalueReturnType.equals(returnType) ? this : withReturnType(lvalueReturnType);
+    }
+
     public abstract ImmutableList<String> getParameterNames();
 
     /** Returns the number of non-residual parameters (i.e. excluding * / *args / **kwargs). */
@@ -2046,6 +2097,28 @@ public final class Types {
      */
     public abstract boolean isPartial();
 
+    /**
+     * {@inheritDoc}
+     *
+     * <p>The fields (with their own types replaced by their untyped export types) are preserved
+     * for the purpose of checking field accesses, but are dropped when the type is propagated to a
+     * variable; see {@link UntypedExportType}. This ensures that adding a field, which is a
+     * compatible change for untyped users, cannot break typed code.
+     */
+    @Override
+    public StarlarkType getUntypedExportType() {
+      if (this.equals(ANY_STRUCT)) {
+        return this;
+      }
+      ImmutableMap.Builder<String, StarlarkType> builder = ImmutableMap.builder();
+      for (Map.Entry<String, StarlarkType> entry : getFields().entrySet()) {
+        builder.put(entry.getKey(), entry.getValue().getUntypedExportType());
+      }
+      return new UntypedExportType(
+          isPartial() ? partialStruct(builder.buildOrThrow()) : struct(builder.buildOrThrow()),
+          ANY_STRUCT);
+    }
+
     @Override
     public boolean assignableFromHook(StarlarkType t, TypeContext context) {
       if (t instanceof StructType that) {
@@ -2111,6 +2184,76 @@ public final class Types {
         builder.put(entry.getKey(), entry.getValue().toLvalue());
       }
       return isPartial() ? partialStruct(builder.buildOrThrow()) : struct(builder.buildOrThrow());
+    }
+  }
+
+  /**
+   * The type of a value loaded from a module that doesn't use type syntax, for values whose shape
+   * may be extended in ways that are compatible for untyped users - for example, a function (which
+   * may gain an optional parameter) or a struct (which may gain a field).
+   *
+   * <p>This type is a subtype of its precise type, so the value can be called, have its fields
+   * accessed, or be assigned to a variable of a declared type just as if it had the precise type.
+   * All of these uses remain valid if the precise type is extended in a compatible way.
+   *
+   * <p>However, the precise type must never become the type of a location that can be assigned
+   * to, because a value that is assignable to the precise type is not necessarily assignable to
+   * its compatible extension. (For example, given {@code h = f; h = g}, where {@code g} has the
+   * same signature as the loaded function {@code f}, the second assignment would break if {@code
+   * f} gained an optional parameter.) Therefore, when the type is propagated to a variable, a
+   * collection element, or the return type of a callable stored in one of these, it decays to a
+   * wider type which doesn't encode the extensible parts of the shape; see {@link #toLvalue}.
+   */
+  public static final class UntypedExportType extends StarlarkType {
+    private final StarlarkType preciseType;
+    private final StarlarkType lvalueType;
+
+    private UntypedExportType(StarlarkType preciseType, StarlarkType lvalueType) {
+      this.preciseType = preciseType;
+      this.lvalueType = lvalueType;
+    }
+
+    /** Returns the precise type of the value at the time it was exported. */
+    public StarlarkType getPreciseType() {
+      return preciseType;
+    }
+
+    @Override
+    public List<StarlarkType> getSupertypes(TypeContext context) {
+      return ImmutableList.of(preciseType);
+    }
+
+    @Nullable
+    @Override
+    public StarlarkType getField(String name, TypeContext context) {
+      return preciseType.getField(name, context);
+    }
+
+    @Override
+    public StarlarkType toLvalue() {
+      return lvalueType;
+    }
+
+    @Override
+    public StarlarkType getUntypedExportType() {
+      return this;
+    }
+
+    @Override
+    public String typeRepr() {
+      return preciseType.typeRepr();
+    }
+
+    @Override
+    public int hashCode() {
+      return 31 * preciseType.hashCode() + lvalueType.hashCode() + 7;
+    }
+
+    @Override
+    public boolean equals(Object obj) {
+      return obj instanceof UntypedExportType that
+          && this.preciseType.equals(that.preciseType)
+          && this.lvalueType.equals(that.lvalueType);
     }
   }
 

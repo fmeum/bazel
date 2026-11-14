@@ -790,6 +790,122 @@ public class TypesTest {
   }
 
   @Test
+  public void getUntypedExportType() {
+    // Plain data is exported as Any.
+    assertThat(Types.NONE.getUntypedExportType()).isEqualTo(Types.ANY);
+    assertThat(Types.BOOL.getUntypedExportType()).isEqualTo(Types.ANY);
+    assertThat(Types.INT.getUntypedExportType()).isEqualTo(Types.ANY);
+    assertThat(Types.FLOAT.getUntypedExportType()).isEqualTo(Types.ANY);
+    assertThat(Types.STR.getUntypedExportType()).isEqualTo(Types.ANY);
+    assertThat(Types.list(Types.STR).getUntypedExportType()).isEqualTo(Types.ANY);
+    assertThat(Types.list(Types.NEVER).getUntypedExportType()).isEqualTo(Types.ANY);
+    assertThat(Types.dict(Types.STR, Types.INT).getUntypedExportType()).isEqualTo(Types.ANY);
+    assertThat(Types.set(Types.STR).getUntypedExportType()).isEqualTo(Types.ANY);
+    assertThat(Types.tuple(ImmutableList.of(Types.STR, Types.INT)).getUntypedExportType())
+        .isEqualTo(Types.ANY);
+    assertThat(Types.homogeneousTuple(Types.STR).getUntypedExportType()).isEqualTo(Types.ANY);
+    assertThat(Types.ANY.getUntypedExportType()).isEqualTo(Types.ANY);
+    assertThat(Types.OBJECT.getUntypedExportType()).isEqualTo(Types.ANY);
+
+    // Structs keep their fields (with recursively exported types) for the purpose of field
+    // accesses, but decay to a plain struct when propagated to a variable.
+    Types.CallableType callable =
+        Types.generalCallable(
+            ImmutableList.of("a"),
+            ImmutableList.of(Types.INT),
+            0,
+            1,
+            ImmutableSet.of("a"),
+            null,
+            null,
+            Types.STR);
+    // The same signature, but with all parameter and return types erased.
+    Types.CallableType erasedCallable =
+        Types.generalCallable(
+            ImmutableList.of("a"),
+            ImmutableList.of(Types.ANY),
+            0,
+            1,
+            ImmutableSet.of("a"),
+            null,
+            null,
+            Types.ANY);
+    Types.StructType struct = Types.struct(ImmutableMap.of("a", Types.INT, "f", callable));
+    StarlarkType exportedStruct = struct.getUntypedExportType();
+    assertThat(exportedStruct).isInstanceOf(Types.UntypedExportType.class);
+    assertThat(((Types.UntypedExportType) exportedStruct).getPreciseType())
+        .isEqualTo(
+            Types.struct(ImmutableMap.of("a", Types.ANY, "f", callable.getUntypedExportType())));
+    assertThat(exportedStruct.getField("a", TestUtils.TYPE_CONTEXT)).isEqualTo(Types.ANY);
+    assertThat(exportedStruct.getField("b", TestUtils.TYPE_CONTEXT)).isNull();
+    assertThat(exportedStruct.toLvalue()).isEqualTo(Types.ANY_STRUCT);
+    assertThat(
+            StarlarkType.assignableFrom(
+                Types.struct(ImmutableMap.of("a", Types.INT)),
+                exportedStruct,
+                TestUtils.TYPE_CONTEXT))
+        .isTrue();
+    assertThat(Types.ANY_STRUCT.getUntypedExportType()).isEqualTo(Types.ANY_STRUCT);
+
+    // Callables keep the shape of their signature for the purpose of calls, but with all types
+    // erased, and decay to a plain callable when propagated to a variable.
+    StarlarkType exportedCallable = callable.getUntypedExportType();
+    assertThat(exportedCallable).isInstanceOf(Types.UntypedExportType.class);
+    assertThat(((Types.UntypedExportType) exportedCallable).getPreciseType())
+        .isEqualTo(erasedCallable);
+    assertThat(Types.toCallableType(exportedCallable, TestUtils.TYPE_CONTEXT))
+        .isEqualTo(erasedCallable);
+    assertThat(
+            ((Types.UntypedExportType)
+                    Types.generalCallable(
+                            ImmutableList.of("a", "b", "c"),
+                            ImmutableList.of(Types.INT, Types.STR, Types.BOOL),
+                            1,
+                            2,
+                            ImmutableSet.of("a", "c"),
+                            Types.INT,
+                            Types.STR,
+                            Types.NONE)
+                        .getUntypedExportType())
+                .getPreciseType())
+        .isEqualTo(
+            Types.generalCallable(
+                ImmutableList.of("a", "b", "c"),
+                ImmutableList.of(Types.ANY, Types.ANY, Types.ANY),
+                1,
+                2,
+                ImmutableSet.of("a", "c"),
+                Types.ANY,
+                Types.ANY,
+                Types.ANY));
+    assertThat(
+            ((Types.UntypedExportType)
+                    Types.simpleCallable(
+                            ImmutableList.of(Types.INT, Types.STR), false, Types.BOOL)
+                        .getUntypedExportType())
+                .getPreciseType()
+                .typeRepr())
+        .isEqualTo("<def (Any, Any, /) -> Any>");
+    // The decay also applies to the return type of a callable that is propagated to a variable.
+    assertThat(
+            Types.simpleCallable(ImmutableList.of(), false, exportedCallable).toLvalue())
+        .isEqualTo(Types.simpleCallable(ImmutableList.of(), false, Types.ANY_CALLABLE));
+    assertThat(exportedCallable.toLvalue()).isEqualTo(Types.ANY_CALLABLE);
+    assertThat(Types.listRvalue(exportedCallable).toLvalue())
+        .isEqualTo(Types.list(Types.ANY_CALLABLE));
+    assertThat(
+            StarlarkType.assignableFrom(erasedCallable, exportedCallable, TestUtils.TYPE_CONTEXT))
+        .isTrue();
+    assertThat(StarlarkType.assignableFrom(Types.INT, exportedCallable, TestUtils.TYPE_CONTEXT))
+        .isFalse();
+    assertThat(Types.ANY_CALLABLE.getUntypedExportType()).isEqualTo(Types.ANY_CALLABLE);
+
+    // Exporting is idempotent.
+    assertThat(exportedCallable.getUntypedExportType()).isEqualTo(exportedCallable);
+    assertThat(exportedStruct.getUntypedExportType()).isEqualTo(exportedStruct);
+  }
+
+  @Test
   public void generalCallable_nullParameterTypesIfAllAnyAndSharesMandatoryParams() {
     Types.GeneralCallableType c1 =
         Types.generalCallable(
