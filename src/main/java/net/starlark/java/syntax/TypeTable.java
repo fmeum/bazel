@@ -198,10 +198,13 @@ public final class TypeTable {
 
   /**
    * Returns the type of the binding (whether declared or inferred). Null indicates untyped / Any.
+   *
+   * <p>A free variable of a function (i.e. a variable of an enclosing function, or a file-local
+   * symbol introduced by a {@code load()} statement) has the type of its defining binding.
    */
   @Nullable
   public StarlarkType getType(Resolver.Binding binding) {
-    return bindingTypes[binding.getBindingId()];
+    return bindingTypes[binding.getDefinition().getBindingId()];
   }
 
   /**

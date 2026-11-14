@@ -107,6 +107,10 @@ public final class Resolver extends NodeVisitor {
     // Otherwise, the first occurrence of this symbol (which must be non-binding).
     private final Identifier first;
 
+    // For a FREE binding, the binding of the same variable in the enclosing function (which is
+    // either a CELL binding or itself a FREE binding); null otherwise.
+    @Nullable private Binding enclosing;
+
     private Binding(
         Scope scope,
         int index,
@@ -128,6 +132,21 @@ public final class Resolver extends NodeVisitor {
      */
     Identifier getFirst() {
       return first;
+    }
+
+    /**
+     * Returns the binding that defines the variable. For a FREE binding, this is the CELL binding
+     * of the variable in the function that declares it; for any other binding, it is the binding
+     * itself.
+     *
+     * <p>All bindings of a variable share the static type of its defining binding.
+     */
+    Binding getDefinition() {
+      Binding bind = this;
+      while (bind.enclosing != null) {
+        bind = bind.enclosing;
+      }
+      return bind;
     }
 
     /** Returns whether any binding occurrence of this symbol appears in the syntax tree. */
@@ -1087,7 +1106,9 @@ public final class Resolver extends NodeVisitor {
             }
             int index = b.freevars.size();
             b.freevars.add(bind);
+            Binding enclosing = bind;
             bind = newBinding(Scope.FREE, index, /* isSyntactic= */ true, bind.first);
+            bind.enclosing = enclosing;
           }
         }
 

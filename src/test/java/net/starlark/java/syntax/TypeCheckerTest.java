@@ -2630,6 +2630,68 @@ public final class TypeCheckerTest {
   }
 
   @Test
+  public void load_statement_symbolUsedInFunction() throws Exception {
+    // A loaded symbol is a file-level local, and thus a free variable of any function using it.
+    loader = importName -> TestUtils.LoadableModule.of("x", Types.union(Types.INT, Types.STR));
+    assertInvalid(
+        ":3:5: cannot assign type 'int | str' to 'y' of type 'int'",
+        """
+        load("//x:x.bzl", "x")
+        def f():
+            y: int = x
+        """);
+    assertInvalid(
+        ":4:9: cannot assign type 'int | str' to 'y' of type 'int'",
+        """
+        load("//x:x.bzl", "x")
+        def f():
+            def g():
+                y: int = x
+        """);
+    assertValid(
+        """
+        load("//x:x.bzl", "x")
+        def f():
+            y: int | str = x
+        """);
+  }
+
+  @Test
+  public void freeVariable_hasTypeOfEnclosingBinding() throws Exception {
+    assertInvalid(
+        ":4:9: cannot assign type 'int' to 'y' of type 'str'",
+        """
+        def f():
+            x: int = 1
+            def g():
+                y: str = x
+        """);
+    assertInvalid(
+        ":5:13: cannot assign type 'int' to 'y' of type 'str'",
+        """
+        def f():
+            x: int = 1
+            def g():
+                def h():
+                    y: str = x
+        """);
+    assertInvalid(
+        ":3:9: cannot assign type 'int' to 'y' of type 'str'",
+        """
+        def f(x: int):
+            def g():
+                y: str = x
+        """);
+    assertValid(
+        """
+        def f():
+            x: int = 1
+            def g():
+                y: int = x
+        """);
+  }
+
+  @Test
   public void typeAlias_bidirectionallyAssignableToFullyWrittenType() throws Exception {
     assertValid(
         """
