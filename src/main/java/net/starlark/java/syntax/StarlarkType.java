@@ -187,9 +187,13 @@ public abstract non-sealed class StarlarkType implements TypeConstructor.Term {
    * module already rely on at run time. In other words: any change to the value that is compatible
    * for all untyped users of the module must leave the returned type unchanged, or else change it
    * to {@code Any}. For example, the element type of a list does not satisfy this condition
-   * (changing {@code ["a"]} to {@code []} is compatible), and neither do the set of fields of a
-   * struct (adding a field is compatible) or the signature of a function (adding an optional
-   * parameter is compatible).
+   * (changing {@code ["a"]} to {@code []} is compatible).
+   *
+   * <p>More generally, a compatible change to the value must not cause type errors in typed code
+   * that loads it. This allows a type to be exported even if compatible changes alter it, so long
+   * as the altered type can be used wherever the original one could. Callable and struct types do
+   * this by means of {@link Types.UntypedExportType}: adding an optional parameter or a field
+   * alters the type, but keeps all existing calls and field accesses valid.
    *
    * <p>The default implementation returns {@code Any}, which is always safe. A type should
    * override this method only if it is known to satisfy the condition above.

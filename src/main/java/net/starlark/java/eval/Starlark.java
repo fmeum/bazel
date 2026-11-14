@@ -1461,8 +1461,8 @@ public final class Starlark {
       // from ["a"] to [], adding a field to a struct, or adding an optional parameter to a function
       // are traditionally safe changes, but they alter the dynamic type in a way that can break
       // typed code which loads the global. Therefore, in such files, we export Any unless the
-      // dynamic type explicitly opts into being exported; see StarlarkType#getUntypedExportType.
-      // This mirrors how Python type checkers treat packages without a py.typed marker.
+      // dynamic type explicitly opts into being exported in a form that is robust to such changes;
+      // see StarlarkType#getUntypedExportType.
       //
       // Exporting the dynamic type does result in one wart: the exported type might not be a
       // subtype of the inferred static type, due to the invariance rule for mutable collections.

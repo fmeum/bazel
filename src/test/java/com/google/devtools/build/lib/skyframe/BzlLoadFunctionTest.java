@@ -1252,8 +1252,8 @@ public class BzlLoadFunctionTest extends BuildViewTestCase {
         f(1)
         lib.f(1)
 
-        # Must keep working even though _mine and struct(f = _mine) lack the optional parameter y
-        # and field g.
+        # The types of loaded functions and structs must not become the types of assignable
+        # locations, since _mine and struct(f = _mine) lack the optional parameter y and field g.
         def _mine(x):
             pass
 
@@ -1263,6 +1263,16 @@ public class BzlLoadFunctionTest extends BuildViewTestCase {
         libs["mine"] = struct(f = _mine)
         getters = {"default": lambda: f}
         getters["mine"] = lambda: _mine
+
+        def h(custom: bool) -> None:
+            impl = f
+            if custom:
+                impl = _mine
+            impl(1)
+            l = lib
+            if custom:
+                l = struct(f = _mine)
+            l.f(1)
         """);
 
     SkyKey key = key("//a:bar.bzl");
@@ -1273,17 +1283,35 @@ public class BzlLoadFunctionTest extends BuildViewTestCase {
   }
 
   @Test
-  public void testStaticTypeChecker_untypedDep_providersStillChecked() throws Exception {
+  public void testStaticTypeChecker_untypedDep_providersCallablesAndStructsStillChecked()
+      throws Exception {
     scratch.file("a/BUILD");
-    scratch.file("a/foo.bzl", "FooInfo = provider(fields = ['x'])");
+    scratch.file(
+        "a/foo.bzl",
+        """
+        FooInfo = provider(fields = ["x"])
+
+        def f(x):
+            pass
+
+        lib = struct(f = f)
+        """);
     scratch.file(
         "a/bar.bzl",
         """
-        load(":foo.bzl", "FooInfo")
+        load(":foo.bzl", "FooInfo", "f", "lib")
 
         ok: FooInfo = FooInfo(x = 1)
         a: int = FooInfo(x = 1)
-        b: FooInfo = FooInfo(y = 1)
+        b: int = f
+        c: int = f(1, 2)
+        d: int = lib.f(1, 2)
+        e: int = lib.no_such_field
+
+        def g() -> None:
+            f(1, 2, 3)
+            lib.f(1, 2, 3)
+            lib.also_no_such_field
         """);
     reporter.removeHandler(failFastHandler);
 
@@ -1291,7 +1319,14 @@ public class BzlLoadFunctionTest extends BuildViewTestCase {
     SkyframeExecutorTestUtils.evaluate(
         getSkyframeExecutor(), key, /* keepGoing= */ false, reporter);
     assertContainsEvent("cannot assign type 'FooInfo' to 'a' of type 'int'");
-    assertContainsEvent("'FooInfo()' got unexpected keyword argument: y");
+    assertContainsEvent("to 'b' of type 'int'");
+    assertContainsEvent("'f()' accepts exactly 1 positional argument but got 2");
+    assertContainsEvent("'lib.f()' accepts exactly 1 positional argument but got 2");
+    assertContainsEvent("does not have field 'no_such_field'");
+    // Loaded symbols are also checked inside functions.
+    assertContainsEvent("'f()' accepts exactly 1 positional argument but got 3");
+    assertContainsEvent("'lib.f()' accepts exactly 1 positional argument but got 3");
+    assertContainsEvent("does not have field 'also_no_such_field'");
     assertDoesNotContainEvent("'ok'");
   }
 

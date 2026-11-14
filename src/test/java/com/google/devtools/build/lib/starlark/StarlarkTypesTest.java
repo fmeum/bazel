@@ -565,8 +565,18 @@ public class StarlarkTypesTest extends BuildViewTestCase {
     assertThat(module.getExportType("TUPLE")).isEqualTo(Types.ANY);
     assertThat(module.getExportType("LABEL")).isEqualTo(Types.ANY);
     assertThat(module.getExportType("INFO")).isEqualTo(Types.ANY);
-    assertThat(module.getExportType("impl")).isEqualTo(Types.ANY);
-    assertThat(module.getExportType("STRUCT")).isEqualTo(Types.ANY);
+    // Functions and structs are exported with their signature and fields, but in a form that
+    // decays to a plain callable or struct when propagated to a variable, since adding an optional
+    // parameter or a field is a compatible change for untyped users.
+    StarlarkType implType = module.getExportType("impl");
+    assertThat(implType).isInstanceOf(Types.UntypedExportType.class);
+    assertThat(implType.typeRepr()).isEqualTo("<def (x: Any, y: [Any]) -> Any>");
+    assertThat(implType.toLvalue()).isEqualTo(Types.ANY_CALLABLE);
+    StarlarkType structType = module.getExportType("STRUCT");
+    assertThat(structType).isInstanceOf(Types.UntypedExportType.class);
+    assertThat(((Types.UntypedExportType) structType).getPreciseType())
+        .isEqualTo(Types.struct(ImmutableMap.of("impl", implType, "names", Types.ANY)));
+    assertThat(structType.toLvalue()).isEqualTo(Types.ANY_STRUCT);
     // Provider symbols keep their (nominal) type.
     assertThat(module.getExportType("MyInfo").typeRepr()).isEqualTo("<Provider[MyInfo]>");
   }
