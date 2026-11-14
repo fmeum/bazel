@@ -236,7 +236,7 @@ public final class TypeTable {
    * considered to use static typing syntax (which is true iff any part of the file uses type
    * syntax).
    */
-  boolean toplevelUsesTypeSyntax() {
+  public boolean toplevelUsesTypeSyntax() {
     if (functionsUsingTypeSyntax.length > 0) {
       return functionsUsingTypeSyntax[functionsUsingTypeSyntax.length - 1];
     }

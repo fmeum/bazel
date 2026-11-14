@@ -345,8 +345,8 @@ public final class Module implements Resolver.Module, TypeTagger.LoadableModule 
    * <p>If type checking was enabled for this module, returns the variable's declared static type if
    * there is one; or the variable's value's dynamic type otherwise.
    *
-   * <p>If type checking was not enabled for this module (or if the global variable does not exist),
-   * returns null.
+   * <p>If type checking was not enabled for this module, if the program that set the variable does
+   * not use any type syntax, or if the global variable does not exist, returns null.
    */
   @Override
   @Nullable

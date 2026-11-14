@@ -1446,7 +1446,16 @@ public final class Starlark {
         StarlarkFunction.ofToplevel(
             rfn, prog.getTypeTable(), module, globalIndex, thread.getNextIdentityToken());
     Object result = Starlark.positionalOnlyCall(thread, toplevel);
-    if (prog.getTypeTable() != null) {
+    // If the file doesn't use any type syntax, its author has not opted into static typing, and
+    // cannot be expected to annotate globals with wider types or to treat the dynamic types of the
+    // file's values as a compatibility contract. For example, changing a global from ["a"] to [],
+    // adding a field to a struct, or adding an optional parameter to a function are traditionally
+    // safe changes, but they alter the dynamic type in a way that can break typed code which loads
+    // the global. Therefore, such files don't export any types, which is equivalent to exporting
+    // all globals as Any. This mirrors how Python type checkers treat packages without a py.typed
+    // marker.
+    @Nullable TypeTable typeTable = prog.getTypeTable();
+    if (typeTable != null && typeTable.toplevelUsesTypeSyntax()) {
       // For globals that don't have a declared static type, we export the value's dynamic type.
       // We export the dynamic type of the value (rather than the inferred static type) because it's
       // likely to be more useful to users who load() this module; they would want to type-check

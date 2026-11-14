@@ -453,7 +453,9 @@ final class Eval {
         StarlarkFunction fn = fn(fr);
         fn.setGlobal(bind.getIndex(), value);
         @Nullable TypeTable typeTable = fn.getTypeTable();
-        if (typeTable != null) {
+        // In a file without type syntax, the only "declared" types are those of def statements.
+        // Don't export them; see the comment in Starlark#execFileProgram.
+        if (typeTable != null && typeTable.toplevelUsesTypeSyntax()) {
           fn.setGlobalDeclaredType(bind.getIndex(), typeTable.getGlobalDeclaredType(bind));
         }
       }
