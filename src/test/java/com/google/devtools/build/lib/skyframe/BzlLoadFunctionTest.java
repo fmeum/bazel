@@ -1218,6 +1218,68 @@ public class BzlLoadFunctionTest extends BuildViewTestCase {
   }
 
   @Test
+  public void testStaticTypeChecker_notRun_outsideMainRepo() throws Exception {
+    scratch.overwriteFile(
+        "MODULE.bazel", //
+        "bazel_dep(name = 'repo')",
+        "local_path_override(module_name = 'repo', path = 'repo')");
+    scratch.file("repo/MODULE.bazel", "module(name = 'repo')");
+    scratch.file("repo/pkg/BUILD");
+    // Statically invalid, but valid at run time.
+    scratch.file(
+        "repo/pkg/foo.bzl",
+        """
+        def f(x: int) -> str:
+            return x
+
+        y: list[int] = ["a"]
+        """);
+
+    checkSuccessfulLookup("@@repo+//pkg:foo.bzl");
+  }
+
+  @Test
+  public void testStaticTypeChecker_declaredTypesOfOtherReposAreUsedInMainRepo() throws Exception {
+    scratch.overwriteFile(
+        "MODULE.bazel", //
+        "bazel_dep(name = 'repo')",
+        "local_path_override(module_name = 'repo', path = 'repo')");
+    scratch.file("repo/MODULE.bazel", "module(name = 'repo')");
+    scratch.file("repo/pkg/BUILD");
+    scratch.file("repo/pkg/foo.bzl", "x: list[str] = ['a']");
+    scratch.file("a/BUILD");
+    scratch.file(
+        "a/bar.bzl",
+        """
+        load("@repo//pkg:foo.bzl", "x")
+        y: list[int] = x
+        """);
+    reporter.removeHandler(failFastHandler);
+
+    SkyKey key = key("//a:bar.bzl");
+    SkyframeExecutorTestUtils.evaluate(
+        getSkyframeExecutor(), key, /* keepGoing= */ false, reporter);
+    assertContainsEvent("cannot assign type 'list[str]' to 'y' of type 'list[int]'");
+  }
+
+  @Test
+  public void testTypeTagger_run_outsideMainRepo() throws Exception {
+    scratch.overwriteFile(
+        "MODULE.bazel", //
+        "bazel_dep(name = 'repo')",
+        "local_path_override(module_name = 'repo', path = 'repo')");
+    scratch.file("repo/MODULE.bazel", "module(name = 'repo')");
+    scratch.file("repo/pkg/BUILD");
+    scratch.file("repo/pkg/foo.bzl", "x: NoSuchType = [1, 2, 3]");
+    reporter.removeHandler(failFastHandler);
+
+    SkyKey key = key("@@repo+//pkg:foo.bzl");
+    SkyframeExecutorTestUtils.evaluate(
+        getSkyframeExecutor(), key, /* keepGoing= */ false, reporter);
+    assertContainsEvent("name 'NoSuchType' is not defined");
+  }
+
+  @Test
   public void testStaticTypeChecker_notRun_ifDisabledByFlag() throws Exception {
     setBuildLanguageOptions("--noexperimental_starlark_static_type_checking");
     scratch.file("a/BUILD");

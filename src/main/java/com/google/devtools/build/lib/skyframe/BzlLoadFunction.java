@@ -880,9 +880,22 @@ public class BzlLoadFunction implements SkyFunction {
 
     // Type-tag and type-check the program
     if (typeOptions.wantStaticTypeChecking() || typeOptions.wantDynamicTypeChecking()) {
+      // Only run the static type checker on files in the main repository (and on builtins). The
+      // author of a file in any other repository can't be expected to keep it free of type errors
+      // under every version of Bazel, since the type checker may start to report errors in code
+      // that it previously accepted, for example because it has learned to infer more precise
+      // types. Such an error couldn't be fixed by the user of the build either, short of patching
+      // the repository. The files of a repository are still type-checked wherever it is the main
+      // repository, which is typically the case in its own CI.
+      //
+      // Files in other repositories are still type-tagged so that the types declared by their
+      // annotations are available to the files that load them.
+      boolean runStaticTypeChecker =
+          typeOptions.wantStaticTypeChecking()
+              && (label.getRepository().isMain()
+                  || StarlarkBuiltinsValue.isBuiltinsRepo(label.getRepository()));
       try {
-        prog =
-            Starlark.withTypeInfo(prog, module, typeOptions.wantStaticTypeChecking(), loadMap::get);
+        prog = Starlark.withTypeInfo(prog, module, runStaticTypeChecker, loadMap::get);
       } catch (SyntaxError.Exception e) {
         Event.replayEventsOn(env.getListener(), e.errors());
         throw typingFailed(label);
