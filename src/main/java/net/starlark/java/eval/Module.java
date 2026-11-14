@@ -343,7 +343,11 @@ public final class Module implements Resolver.Module, TypeTagger.LoadableModule 
    * modules that load this module (not by the evaluation of this module itself).
    *
    * <p>If type checking was enabled for this module, returns the variable's declared static type if
-   * there is one; or the variable's value's dynamic type otherwise.
+   * there is one; or a type derived from the variable's value's dynamic type otherwise. If the
+   * program that set the variable uses type syntax, this is the dynamic type itself; otherwise, it
+   * is the dynamic type's {@link StarlarkType#getUntypedExportType}, which is {@code Any} for most
+   * types, so that modules which have not opted into static typing don't expose the exact shape of
+   * their values as a statically checked API.
    *
    * <p>If type checking was not enabled for this module (or if the global variable does not exist),
    * returns null.

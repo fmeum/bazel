@@ -790,6 +790,44 @@ public class TypesTest {
   }
 
   @Test
+  public void getUntypedExportType() {
+    // Plain data is exported as Any.
+    assertThat(Types.NONE.getUntypedExportType()).isEqualTo(Types.ANY);
+    assertThat(Types.BOOL.getUntypedExportType()).isEqualTo(Types.ANY);
+    assertThat(Types.INT.getUntypedExportType()).isEqualTo(Types.ANY);
+    assertThat(Types.FLOAT.getUntypedExportType()).isEqualTo(Types.ANY);
+    assertThat(Types.STR.getUntypedExportType()).isEqualTo(Types.ANY);
+    assertThat(Types.list(Types.STR).getUntypedExportType()).isEqualTo(Types.ANY);
+    assertThat(Types.list(Types.NEVER).getUntypedExportType()).isEqualTo(Types.ANY);
+    assertThat(Types.dict(Types.STR, Types.INT).getUntypedExportType()).isEqualTo(Types.ANY);
+    assertThat(Types.set(Types.STR).getUntypedExportType()).isEqualTo(Types.ANY);
+    assertThat(Types.tuple(ImmutableList.of(Types.STR, Types.INT)).getUntypedExportType())
+        .isEqualTo(Types.ANY);
+    assertThat(Types.homogeneousTuple(Types.STR).getUntypedExportType()).isEqualTo(Types.ANY);
+    assertThat(Types.ANY.getUntypedExportType()).isEqualTo(Types.ANY);
+    assertThat(Types.OBJECT.getUntypedExportType()).isEqualTo(Types.ANY);
+
+    // Structs and callables are exported as Any too: adding a field or an optional parameter is
+    // a compatible change for untyped users.
+    assertThat(Types.struct(ImmutableMap.of("a", Types.INT)).getUntypedExportType())
+        .isEqualTo(Types.ANY);
+    assertThat(Types.ANY_STRUCT.getUntypedExportType()).isEqualTo(Types.ANY);
+    assertThat(
+            Types.generalCallable(
+                    ImmutableList.of("a"),
+                    ImmutableList.of(Types.INT),
+                    0,
+                    1,
+                    ImmutableSet.of("a"),
+                    null,
+                    null,
+                    Types.STR)
+                .getUntypedExportType())
+        .isEqualTo(Types.ANY);
+    assertThat(Types.ANY_CALLABLE.getUntypedExportType()).isEqualTo(Types.ANY);
+  }
+
+  @Test
   public void generalCallable_nullParameterTypesIfAllAnyAndSharesMandatoryParams() {
     Types.GeneralCallableType c1 =
         Types.generalCallable(

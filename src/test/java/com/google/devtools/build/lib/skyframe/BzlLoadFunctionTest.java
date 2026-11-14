@@ -1218,6 +1218,109 @@ public class BzlLoadFunctionTest extends BuildViewTestCase {
   }
 
   @Test
+  public void testStaticTypeChecker_untypedDep_compatibleChangesDontBreak() throws Exception {
+    scratch.file("a/BUILD");
+    // foo.bzl doesn't use type syntax, so the exact types of its values are not a part of its API:
+    // typed code that loads it must keep working if, say, DEFAULTS is changed to ["abc"], NAME to
+    // None, a field is added to lib, or an optional parameter is added to f.
+    scratch.file(
+        "a/foo.bzl",
+        """
+        DEFAULTS = []
+        NAME = "abc"
+
+        def f(x, y = None):
+            pass
+
+        lib = struct(f = f, g = 1)
+        """);
+    scratch.file(
+        "a/bar.bzl",
+        """
+        load(":foo.bzl", "DEFAULTS", "NAME", "f", "lib")
+
+        def g(override: bool) -> list[str]:
+            x = DEFAULTS
+            if override:
+                x = ["xyz"]
+            return x
+
+        y: list[str] = DEFAULTS
+        z: str | None = NAME
+        s: struct = lib
+        c: Callable[[int], Any] = f
+        f(1)
+        lib.f(1)
+
+        # Must keep working even though _mine and struct(f = _mine) lack the optional parameter y
+        # and field g.
+        def _mine(x):
+            pass
+
+        impls = {"default": f}
+        impls["mine"] = _mine
+        libs = {"default": lib}
+        libs["mine"] = struct(f = _mine)
+        getters = {"default": lambda: f}
+        getters["mine"] = lambda: _mine
+        """);
+
+    SkyKey key = key("//a:bar.bzl");
+    EvaluationResult<BzlLoadValue> result =
+        SkyframeExecutorTestUtils.evaluate(
+            getSkyframeExecutor(), key, /* keepGoing= */ false, reporter);
+    assertThatEvaluationResult(result).hasNoError();
+  }
+
+  @Test
+  public void testStaticTypeChecker_untypedDep_providersStillChecked() throws Exception {
+    scratch.file("a/BUILD");
+    scratch.file("a/foo.bzl", "FooInfo = provider(fields = ['x'])");
+    scratch.file(
+        "a/bar.bzl",
+        """
+        load(":foo.bzl", "FooInfo")
+
+        ok: FooInfo = FooInfo(x = 1)
+        a: int = FooInfo(x = 1)
+        b: FooInfo = FooInfo(y = 1)
+        """);
+    reporter.removeHandler(failFastHandler);
+
+    SkyKey key = key("//a:bar.bzl");
+    SkyframeExecutorTestUtils.evaluate(
+        getSkyframeExecutor(), key, /* keepGoing= */ false, reporter);
+    assertContainsEvent("cannot assign type 'FooInfo' to 'a' of type 'int'");
+    assertContainsEvent("'FooInfo()' got unexpected keyword argument: y");
+    assertDoesNotContainEvent("'ok'");
+  }
+
+  @Test
+  public void testStaticTypeChecker_typedDep_dynamicTypesOfUnannotatedGlobalsExported()
+      throws Exception {
+    scratch.file("a/BUILD");
+    // foo.bzl uses type syntax, so its unannotated globals are exported with their dynamic types.
+    scratch.file(
+        "a/foo.bzl",
+        """
+        DEFAULTS = ["abc"]
+        _unused: int = 0
+        """);
+    scratch.file(
+        "a/bar.bzl",
+        """
+        load(":foo.bzl", "DEFAULTS")
+        y: list[int] = DEFAULTS
+        """);
+    reporter.removeHandler(failFastHandler);
+
+    SkyKey key = key("//a:bar.bzl");
+    SkyframeExecutorTestUtils.evaluate(
+        getSkyframeExecutor(), key, /* keepGoing= */ false, reporter);
+    assertContainsEvent("cannot assign type 'list[str]' to 'y' of type 'list[int]'");
+  }
+
+  @Test
   public void testStaticTypeChecker_notRun_ifDisabledByFlag() throws Exception {
     setBuildLanguageOptions("--noexperimental_starlark_static_type_checking");
     scratch.file("a/BUILD");

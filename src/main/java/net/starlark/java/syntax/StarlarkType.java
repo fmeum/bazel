@@ -177,6 +177,28 @@ public abstract non-sealed class StarlarkType implements TypeConstructor.Term {
   }
 
   /**
+   * Returns the type under which a global variable is exported to other modules, given that this
+   * is the dynamic type of the variable's value, and that the module defining the variable does
+   * not use type syntax. See {@code net.starlark.java.eval.Module#getExportType}.
+   *
+   * <p>The author of a module that does not use type syntax has not opted into static typing, and
+   * cannot be expected to treat the types of the module's values as a compatibility contract.
+   * Therefore, the returned type may only encode properties of the value that untyped users of the
+   * module already rely on at run time. In other words: any change to the value that is compatible
+   * for all untyped users of the module must leave the returned type unchanged, or else change it
+   * to {@code Any}. For example, the element type of a list does not satisfy this condition
+   * (changing {@code ["a"]} to {@code []} is compatible), and neither do the set of fields of a
+   * struct (adding a field is compatible) or the signature of a function (adding an optional
+   * parameter is compatible).
+   *
+   * <p>The default implementation returns {@code Any}, which is always safe. A type should
+   * override this method only if it is known to satisfy the condition above.
+   */
+  public StarlarkType getUntypedExportType() {
+    return Types.ANY;
+  }
+
+  /**
    * Returns the type that should be inferred for a new, unaliased value of this type; for example,
    * a literal, the result of a binary operation, or the return value of a constructor function.
    *
