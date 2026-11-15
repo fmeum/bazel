@@ -496,6 +496,7 @@ java_library(
     name = "repository_remote_helpers_factory",
     srcs = ["RepositoryRemoteHelpersFactory.java"],
     deps = [
+        ":remote_module_extension_cache",
         ":remote_repo_contents_cache",
         ":repository_remote_executor",
         "//third_party/java/jsr305_annotations",
@@ -998,6 +999,17 @@ java_library(
         "//src/main/java/com/google/devtools/build/lib/buildeventstream",
         "//src/main/java/com/google/devtools/build/lib/buildeventstream/proto:build_event_stream_java_proto",
         "//third_party/java/guava:collect",
+    ],
+)
+
+java_library(
+    name = "remote_module_extension_cache",
+    srcs = ["RemoteModuleExtensionCache.java"],
+    deps = [
+        "//src/main/java/com/google/devtools/build/lib/events",
+        "//src/main/java/com/google/devtools/build/lib/rules:repository/repo_recorded_input",
+        "//src/main/java/com/google/devtools/build/skyframe:skyframe-objects",
+        "//third_party/java/jsr305_annotations",
     ],
 )
 

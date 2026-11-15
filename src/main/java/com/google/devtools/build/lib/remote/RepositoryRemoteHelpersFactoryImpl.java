@@ -15,6 +15,7 @@ package com.google.devtools.build.lib.remote;
 
 import com.google.devtools.build.lib.analysis.BlazeDirectories;
 import com.google.devtools.build.lib.remote.common.RemoteExecutionClient;
+import com.google.devtools.build.lib.runtime.RemoteModuleExtensionCache;
 import com.google.devtools.build.lib.runtime.RemoteRepoContentsCache;
 import com.google.devtools.build.lib.runtime.RepositoryRemoteExecutor;
 import com.google.devtools.build.lib.runtime.RepositoryRemoteHelpersFactory;
@@ -79,6 +80,19 @@ class RepositoryRemoteHelpersFactoryImpl implements RepositoryRemoteHelpersFacto
   @Override
   public RemoteRepoContentsCache createRepoContentsCache() {
     return new RemoteRepoContentsCacheImpl(
+        directories,
+        cache,
+        buildRequestId,
+        commandId,
+        acceptCached,
+        uploadLocalResults,
+        verboseFailures);
+  }
+
+  @Nullable
+  @Override
+  public RemoteModuleExtensionCache createModuleExtensionCache() {
+    return new RemoteModuleExtensionCacheImpl(
         directories,
         cache,
         buildRequestId,

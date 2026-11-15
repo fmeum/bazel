@@ -161,7 +161,7 @@ public class BazelLockFileFunction implements SkyFunction {
     }
   }
 
-  private static boolean isValidLockfile(@Nullable BazelLockFileValue lockFileValue) {
+  static boolean isValidLockfile(@Nullable BazelLockFileValue lockFileValue) {
     if (lockFileValue == null || lockFileValue.getModuleExtensions() == null) {
       return false;
     }

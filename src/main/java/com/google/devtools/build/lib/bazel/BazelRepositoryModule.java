@@ -90,6 +90,7 @@ import com.google.devtools.build.lib.runtime.BlazeRuntime;
 import com.google.devtools.build.lib.runtime.CommandEnvironment;
 import com.google.devtools.build.lib.runtime.InfoItem;
 import com.google.devtools.build.lib.runtime.ProcessWrapper;
+import com.google.devtools.build.lib.runtime.RemoteModuleExtensionCache;
 import com.google.devtools.build.lib.runtime.RemoteRepoContentsCache;
 import com.google.devtools.build.lib.runtime.RepositoryRemoteExecutor;
 import com.google.devtools.build.lib.runtime.RepositoryRemoteHelpersFactory;
@@ -688,10 +689,18 @@ public class BazelRepositoryModule extends BlazeModule {
           env.getRuntime().getRepositoryHelpersFactory();
       RepositoryRemoteExecutor remoteExecutor = null;
       RemoteRepoContentsCache remoteRepoContentsCache = null;
+      RemoteModuleExtensionCache remoteModuleExtensionCache = null;
       if (repositoryRemoteHelpersFactory != null) {
         remoteExecutor = repositoryRemoteHelpersFactory.createExecutor();
         remoteRepoContentsCache = repositoryRemoteHelpersFactory.createRepoContentsCache();
+        if (repoOptions.getExperimentalRemoteModuleExtensionCache()) {
+          remoteModuleExtensionCache = repositoryRemoteHelpersFactory.createModuleExtensionCache();
+        }
       }
+      // With the flag, the hidden lockfile is not used even if no cache is available: whether a
+      // cache is configured shouldn't silently change which state extension results come from.
+      singleExtensionEvalFunction.setRemoteModuleExtensionCache(
+          repoOptions.getExperimentalRemoteModuleExtensionCache(), remoteModuleExtensionCache);
       repositoryFetchFunction.setRepositoryRemoteExecutor(remoteExecutor);
       repositoryFetchFunction.setRemoteRepoContentsCache(remoteRepoContentsCache);
       singleExtensionEvalFunction.setRepositoryRemoteExecutor(remoteExecutor);

@@ -467,6 +467,19 @@ public abstract class RepositoryOptions extends OptionsBase {
   public abstract LockfileMode getLockfileMode();
 
   @Option(
+      name = "experimental_remote_module_extension_cache",
+      defaultValue = "false",
+      documentationCategory = OptionDocumentationCategory.BZLMOD,
+      effectTags = {OptionEffectTag.LOADING_AND_ANALYSIS},
+      metadataTags = {OptionMetadataTag.EXPERIMENTAL},
+      help =
+          "If enabled, the results of reproducible module extensions are stored in and retrieved"
+              + " from the remote cache and/or disk cache instead of the hidden lockfile in the"
+              + " output base. This allows reusing these results across machines and output"
+              + " bases. Has no effect with `--lockfile_mode=off`.")
+  public abstract boolean getExperimentalRemoteModuleExtensionCache();
+
+  @Option(
       name = "vendor_dir",
       defaultValue = "null",
       converter = OptionsUtils.PathFragmentConverter.class,

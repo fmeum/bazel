@@ -84,6 +84,54 @@ java_library(
 )
 
 java_library(
+    name = "recorded_inputs_action_cache",
+    srcs = ["RecordedInputsActionCache.java"],
+    deps = [
+        ":combined_cache",
+        "//src/main/java/com/google/devtools/build/lib/analysis:blaze_directories",
+        "//src/main/java/com/google/devtools/build/lib/events",
+        "//src/main/java/com/google/devtools/build/lib/remote/common",
+        "//src/main/java/com/google/devtools/build/lib/remote/common:action_key",
+        "//src/main/java/com/google/devtools/build/lib/remote/util:bulk_transfers",
+        "//src/main/java/com/google/devtools/build/lib/remote/util:digest_util",
+        "//src/main/java/com/google/devtools/build/lib/rules:repository/repo_recorded_input",
+        "//src/main/java/com/google/devtools/build/lib/unsafe:string",
+        "//src/main/java/com/google/devtools/build/lib/util",
+        "//src/main/java/com/google/devtools/build/skyframe:skyframe-objects",
+        "//third_party/java/guava:base",
+        "//third_party/java/guava:collect",
+        "//third_party/java/guava:concurrent",
+        "//third_party/java/jsr305_annotations",
+        "//third_party/java/protobuf:protobuf_lite",
+        "@remoteapis//:build_bazel_remote_execution_v2_remote_execution_java_proto",
+    ],
+)
+
+java_library(
+    name = "remote_module_extension_cache_impl",
+    srcs = ["RemoteModuleExtensionCacheImpl.java"],
+    deps = [
+        ":combined_cache",
+        ":recorded_inputs_action_cache",
+        "//src/main/java/com/google/devtools/build/lib/analysis:blaze_directories",
+        "//src/main/java/com/google/devtools/build/lib/events",
+        "//src/main/java/com/google/devtools/build/lib/remote/common",
+        "//src/main/java/com/google/devtools/build/lib/remote/util:bulk_transfers",
+        "//src/main/java/com/google/devtools/build/lib/remote/util:digest_util",
+        "//src/main/java/com/google/devtools/build/lib/remote/util:tracing_metadata_utils",
+        "//src/main/java/com/google/devtools/build/lib/rules:repository/repo_recorded_input",
+        "//src/main/java/com/google/devtools/build/lib/runtime:remote_module_extension_cache",
+        "//src/main/java/com/google/devtools/build/skyframe:skyframe-objects",
+        "//third_party/java/guava:base",
+        "//third_party/java/guava:collect",
+        "//third_party/java/guava:concurrent",
+        "//third_party/java/jsr305_annotations",
+        "//third_party/java/protobuf:protobuf_lite",
+        "@remoteapis//:build_bazel_remote_execution_v2_remote_execution_java_proto",
+    ],
+)
+
+java_library(
     name = "remote_repo_contents_cache_impl",
     srcs = ["RemoteRepoContentsCacheImpl.java"],
     visibility = [
@@ -92,6 +140,7 @@ java_library(
     ],
     deps = [
         ":combined_cache",
+        ":recorded_inputs_action_cache",
         ":remote_external_overlay_file_system",
         ":upload_manifest",
         "//src/main/java/com/google/devtools/build/lib/actions",
@@ -190,6 +239,7 @@ java_library(
         "//src/main/java/com/google/devtools/build/lib/runtime:blaze_service",
         "//src/main/java/com/google/devtools/build/lib/runtime:block_waiting_module",
         "//src/main/java/com/google/devtools/build/lib/runtime:command_line_path_factory",
+        "//src/main/java/com/google/devtools/build/lib/runtime:remote_module_extension_cache",
         "//src/main/java/com/google/devtools/build/lib/runtime:remote_repo_contents_cache",
         "//src/main/java/com/google/devtools/build/lib/runtime:repository_remote_executor",
         "//src/main/java/com/google/devtools/build/lib/runtime:repository_remote_helpers_factory",
@@ -901,10 +951,12 @@ java_library(
     deps = [
         ":combined_cache",
         ":remote_execution_cache",
+        ":remote_module_extension_cache_impl",
         ":remote_repo_contents_cache_impl",
         ":remote_repository_remote_executor",
         "//src/main/java/com/google/devtools/build/lib/analysis:blaze_directories",
         "//src/main/java/com/google/devtools/build/lib/remote/common",
+        "//src/main/java/com/google/devtools/build/lib/runtime:remote_module_extension_cache",
         "//src/main/java/com/google/devtools/build/lib/runtime:remote_repo_contents_cache",
         "//src/main/java/com/google/devtools/build/lib/runtime:repository_remote_executor",
         "//src/main/java/com/google/devtools/build/lib/runtime:repository_remote_helpers_factory",

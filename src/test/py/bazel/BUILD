@@ -434,6 +434,14 @@ py_test(
 )
 
 py_test(
+    name = "remote_module_extension_cache_test",
+    size = "large",
+    srcs = ["bzlmod/remote_module_extension_cache_test.py"],
+    tags = ["requires-network"],
+    deps = [":remote_repo_contents_cache_test_base"],
+)
+
+py_test(
     name = "remote_repo_contents_cache_rewinding_test",
     size = "large",
     srcs = ["bzlmod/remote_repo_contents_cache_rewinding_test.py"],

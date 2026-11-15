@@ -17,6 +17,7 @@ package com.google.devtools.build.lib.bazel.bzlmod;
 
 import static com.google.common.collect.ImmutableBiMap.toImmutableBiMap;
 import static com.google.common.collect.ImmutableSet.toImmutableSet;
+import static java.nio.charset.StandardCharsets.UTF_8;
 import static java.util.Objects.requireNonNull;
 import static java.util.stream.Collectors.joining;
 
@@ -36,14 +37,18 @@ import com.google.devtools.build.lib.profiler.ProfilerTask;
 import com.google.devtools.build.lib.profiler.SilentCloseable;
 import com.google.devtools.build.lib.rules.repository.RepoRecordedInput;
 import com.google.devtools.build.lib.runtime.ProcessWrapper;
+import com.google.devtools.build.lib.runtime.RemoteModuleExtensionCache;
 import com.google.devtools.build.lib.runtime.RepositoryRemoteExecutor;
 import com.google.devtools.build.lib.server.FailureDetails.ExternalDeps.Code;
 import com.google.devtools.build.lib.skyframe.PrecomputedValue;
 import com.google.devtools.build.lib.skyframe.RepositoryMappingValue;
+import com.google.devtools.build.lib.util.Fingerprint;
 import com.google.devtools.build.skyframe.SkyFunction;
 import com.google.devtools.build.skyframe.SkyFunctionException;
 import com.google.devtools.build.skyframe.SkyKey;
 import com.google.devtools.build.skyframe.SkyValue;
+import com.google.gson.JsonParseException;
+import java.io.IOException;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
@@ -68,6 +73,8 @@ public class SingleExtensionEvalFunction implements SkyFunction {
   @Nullable private ProcessWrapper processWrapper = null;
   @Nullable private RepositoryRemoteExecutor repositoryRemoteExecutor = null;
   @Nullable private DownloadManager downloadManager = null;
+  private boolean replaceHiddenLockfileWithRemoteCache = false;
+  @Nullable private RemoteModuleExtensionCache remoteModuleExtensionCache = null;
 
   public SingleExtensionEvalFunction(
       BlazeDirectories directories,
@@ -92,6 +99,18 @@ public class SingleExtensionEvalFunction implements SkyFunction {
 
   public void setRepositoryRemoteExecutor(RepositoryRemoteExecutor repositoryRemoteExecutor) {
     this.repositoryRemoteExecutor = repositoryRemoteExecutor;
+  }
+
+  /**
+   * @param replaceHiddenLockfile whether the results of reproducible extensions should be cached in
+   *     the given cache instead of the hidden lockfile
+   * @param cache the cache to use, which may be null if none is available for the current command,
+   *     in which case the results of reproducible extensions are not persisted at all
+   */
+  public void setRemoteModuleExtensionCache(
+      boolean replaceHiddenLockfile, @Nullable RemoteModuleExtensionCache cache) {
+    this.replaceHiddenLockfileWithRemoteCache = replaceHiddenLockfile;
+    this.remoteModuleExtensionCache = cache;
   }
 
   @Nullable
@@ -142,6 +161,10 @@ public class SingleExtensionEvalFunction implements SkyFunction {
       return null;
     }
 
+    // The innate extensions are implemented in Java and don't benefit from being cached.
+    RemoteModuleExtensionCache remoteCache =
+        extensionId.isInnate() ? null : remoteModuleExtensionCache;
+
     // Check the lockfile first for that module extension
     LockfileMode lockfileMode = BazelLockFileFunction.LOCKFILE_MODE.get(env);
     int currentFactsVersion = extension.getFactsVersion();
@@ -149,13 +172,19 @@ public class SingleExtensionEvalFunction implements SkyFunction {
     // Store workspace lockfile facts separately for validation in ERROR mode
     Facts workspaceLockfileFacts = Facts.EMPTY;
     if (!lockfileMode.equals(LockfileMode.OFF)) {
-      var lockfiles =
-          env.getValuesAndExceptions(
-              ImmutableList.of(BazelLockFileValue.KEY, BazelLockFileValue.HIDDEN_KEY));
-      BazelLockFileValue workspaceLockfile =
-          (BazelLockFileValue) lockfiles.get(BazelLockFileValue.KEY);
-      BazelLockFileValue hiddenLockfile =
-          (BazelLockFileValue) lockfiles.get(BazelLockFileValue.HIDDEN_KEY);
+      BazelLockFileValue workspaceLockfile;
+      BazelLockFileValue hiddenLockfile;
+      if (replaceHiddenLockfileWithRemoteCache) {
+        workspaceLockfile = (BazelLockFileValue) env.getValue(BazelLockFileValue.KEY);
+        // The role of the hidden lockfile is taken over by the remote cache, see below.
+        hiddenLockfile = BazelLockFileValue.EMPTY_LOCKFILE;
+      } else {
+        var lockfiles =
+            env.getValuesAndExceptions(
+                ImmutableList.of(BazelLockFileValue.KEY, BazelLockFileValue.HIDDEN_KEY));
+        workspaceLockfile = (BazelLockFileValue) lockfiles.get(BazelLockFileValue.KEY);
+        hiddenLockfile = (BazelLockFileValue) lockfiles.get(BazelLockFileValue.HIDDEN_KEY);
+      }
       if (workspaceLockfile == null || hiddenLockfile == null) {
         return null;
       }
@@ -189,6 +218,37 @@ public class SingleExtensionEvalFunction implements SkyFunction {
         lockedExtensionMap = hiddenLockfile.getModuleExtensions().get(extensionId);
         lockedExtension =
             lockedExtensionMap == null ? null : lockedExtensionMap.get(extension.getEvalFactors());
+      }
+      if (lockedExtension == null && remoteCache != null) {
+        // The remote cache takes over both roles of the hidden lockfile: it provides the result of
+        // a previous evaluation of a reproducible extension as well as the facts that this
+        // particular evaluation produced. Compared to the hidden lockfile, these facts are tied
+        // to the exact same inputs as the current evaluation rather than to whatever evaluation
+        // of the extension happened to run last in this output base.
+        BazelLockFileValue cachedResult;
+        try (SilentCloseable c =
+            Profiler.instance()
+                .profile(ProfilerTask.BZLMOD, () -> "check remote cache for " + extensionId)) {
+          cachedResult =
+              lookupRemoteCache(env, remoteCache, extensionId, extension, usagesValue);
+        }
+        if (env.valuesMissing()) {
+          return null;
+        }
+        if (cachedResult != null) {
+          lockedExtension =
+              cachedResult
+                  .getModuleExtensions()
+                  .get(extensionId)
+                  .get(extension.getEvalFactors());
+          if (cachedResult.getFactsVersions().getOrDefault(extensionId, 0)
+              == currentFactsVersion) {
+            hiddenLockfileFacts = cachedResult.getFacts().getOrDefault(extensionId, Facts.EMPTY);
+            if (!workspaceLockfile.getFacts().containsKey(extensionId)) {
+              lockfileFacts = hiddenLockfileFacts;
+            }
+          }
+        }
       }
       if (lockedExtension != null) {
         try (SilentCloseable c =
@@ -307,6 +367,20 @@ public class SingleExtensionEvalFunction implements SkyFunction {
     } else {
       lockFileInfo = Optional.empty();
     }
+    if (remoteCache != null
+        && lockFileInfo.isPresent()
+        && moduleExtensionMetadata.getReproducible()) {
+      try (SilentCloseable c =
+          Profiler.instance()
+              .profile(ProfilerTask.BZLMOD, () -> "upload to remote cache for " + extensionId)) {
+        remoteCache.put(
+            extensionId.toString(),
+            computeRemoteCacheKey(extensionId, extension, usagesValue),
+            moduleExtensionResult.recordedInputs(),
+            encodeForRemoteCache(extensionId, lockFileInfo.get(), newFacts, currentFactsVersion),
+            env.getListener());
+      }
+    }
     return createSingleExtensionValue(
         generatedRepoSpecs,
         lockfileModuleExtensionMetadata,
@@ -319,13 +393,110 @@ public class SingleExtensionEvalFunction implements SkyFunction {
   }
 
   /**
+   * Returns the hash of all inputs to the evaluation of the extension that are known before it
+   * runs. Together with the inputs recorded while the extension runs, this covers exactly the
+   * information that is used to decide whether a lockfile entry is up-to-date.
+   */
+  private static String computeRemoteCacheKey(
+      ModuleExtensionId extensionId,
+      RunnableExtension extension,
+      SingleExtensionUsagesValue usagesValue) {
+    return new Fingerprint()
+        .addInt(BazelLockFileValue.LOCK_FILE_VERSION)
+        .addString(extensionId.toString())
+        .addString(extension.getEvalFactors().toString())
+        .addBytes(extension.getBzlTransitiveDigest())
+        .addBytes(
+            SingleExtensionUsagesValue.hashForEvaluation(
+                GsonTypeAdapterUtil.SINGLE_EXTENSION_USAGES_VALUE_GSON, usagesValue))
+        .hexDigestAndReset();
+  }
+
+  /**
+   * Cache entries are lockfiles that contain a single extension evaluated for a single set of
+   * factors as well as the facts produced by that evaluation. This reuses the (versioned)
+   * serialization logic of the lockfile, including its guarantee of not containing any absolute
+   * paths or other information that isn't portable between machines.
+   */
+  private static byte[] encodeForRemoteCache(
+      ModuleExtensionId extensionId,
+      LockFileModuleExtension.WithFactors lockFileInfo,
+      Facts facts,
+      int factsVersion) {
+    var entry =
+        BazelLockFileValue.builder()
+            .setModuleExtensions(
+                ImmutableMap.of(
+                    extensionId,
+                    ImmutableMap.of(
+                        lockFileInfo.extensionFactors(), lockFileInfo.moduleExtension())))
+            .setFacts(ImmutableMap.of(extensionId, facts))
+            .setFactsVersions(ImmutableMap.of(extensionId, factsVersion))
+            .build();
+    return GsonTypeAdapterUtil.LOCKFILE_GSON.toJson(entry).getBytes(UTF_8);
+  }
+
+  /**
+   * Returns the single-extension lockfile cached for the given extension or null if there is none
+   * or a Skyframe restart is required. Failures to reach the cache or to parse an entry are
+   * reported as warnings and treated as cache misses.
+   */
+  @Nullable
+  private static BazelLockFileValue lookupRemoteCache(
+      Environment env,
+      RemoteModuleExtensionCache cache,
+      ModuleExtensionId extensionId,
+      RunnableExtension extension,
+      SingleExtensionUsagesValue usagesValue)
+      throws InterruptedException {
+    try {
+      byte[] cachedResult =
+          cache.lookup(
+              extensionId.toString(),
+              computeRemoteCacheKey(extensionId, extension, usagesValue),
+              env);
+      if (env.valuesMissing() || cachedResult == null) {
+        return null;
+      }
+      BazelLockFileValue entry =
+          GsonTypeAdapterUtil.LOCKFILE_GSON.fromJson(
+              new String(cachedResult, UTF_8), BazelLockFileValue.class);
+      LockFileModuleExtension cachedExtension = null;
+      if (BazelLockFileFunction.isValidLockfile(entry)
+          && entry.getLockFileVersion() == BazelLockFileValue.LOCK_FILE_VERSION
+          && entry.getModuleExtensions().containsKey(extensionId)) {
+        cachedExtension =
+            entry.getModuleExtensions().get(extensionId).get(extension.getEvalFactors());
+      }
+      // Only reproducible extensions are ever uploaded.
+      if (cachedExtension == null || !cachedExtension.isReproducible()) {
+        env.getListener()
+            .handle(
+                Event.warn(
+                    "Ignoring malformed remote cache entry for module extension " + extensionId));
+        return null;
+      }
+      return entry;
+    } catch (IOException | JsonParseException | NullPointerException | IllegalArgumentException e) {
+      env.getListener()
+          .handle(
+              Event.warn(
+                  "Failed to look up module extension %s in the remote cache: %s"
+                      .formatted(extensionId, e.getMessage())));
+      return null;
+    }
+  }
+
+  /**
    * Tries to get the evaluation result from the lockfile, if it's still up-to-date. Otherwise,
    * returns {@code null}.
    *
    * @param facts the facts to attach to the reused result (workspace lockfile facts if present,
    *     otherwise the hidden lockfile's)
    * @param hiddenLockfileFacts the facts recorded by the most recent actual evaluation of the
-   *     extension (kept in the hidden lockfile), or {@code null} if there is no such record
+   *     extension (kept in the hidden lockfile or, if it replaces the hidden lockfile, the remote
+   *     cache entry that {@code lockedExtension} was obtained from), or {@code null} if there is
+   *     no such record
    * @throws NeedsSkyframeRestartException in case we need a skyframe restart. Note that we
    *     <em>don't</em> return {@code null} in this case!
    */

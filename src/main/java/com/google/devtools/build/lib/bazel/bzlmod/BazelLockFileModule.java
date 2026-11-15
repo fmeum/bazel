@@ -68,8 +68,12 @@ public class BazelLockFileModule extends BlazeModule {
       // in the meantime.
       return;
     }
-    LockfileMode lockfileMode =
-        env.getOptions().getOptions(RepositoryOptions.class).getLockfileMode();
+    RepositoryOptions repoOptions = env.getOptions().getOptions(RepositoryOptions.class);
+    LockfileMode lockfileMode = repoOptions.getLockfileMode();
+    // If the remote cache takes over the role of the hidden lockfile, results of reproducible
+    // extensions have already been uploaded by SingleExtensionEvalFunction. The existing hidden
+    // lockfile is neither read nor updated so that it is still valid when the flag is flipped back.
+    boolean useHiddenLockfile = !repoOptions.getExperimentalRemoteModuleExtensionCache();
     if (!ENABLED_IN_MODES.contains(lockfileMode)) {
       return;
     }
@@ -86,7 +90,9 @@ public class BazelLockFileModule extends BlazeModule {
       depGraphValue = (BazelDepGraphValue) evaluator.getExistingValue(BazelDepGraphValue.KEY);
       oldLockfile = (BazelLockFileValue) evaluator.getExistingValue(BazelLockFileValue.KEY);
       oldHiddenLockfile =
-          (BazelLockFileValue) evaluator.getExistingValue(BazelLockFileValue.HIDDEN_KEY);
+          useHiddenLockfile
+              ? (BazelLockFileValue) evaluator.getExistingValue(BazelLockFileValue.HIDDEN_KEY)
+              : null;
     } catch (InterruptedException e) {
       // Not thrown in Bazel.
       throw new IllegalStateException(e);
@@ -195,6 +201,9 @@ public class BazelLockFileModule extends BlazeModule {
     Thread updateHiddenLockfile =
         Thread.startVirtualThread(
             () -> {
+              if (!useHiddenLockfile) {
+                return;
+              }
               // Results of reproducible extensions do not need to be stored for reproducibility,
               // but avoiding reevaluations on server startups helps cold build performance.
               var reproducibleExtensionInfos =

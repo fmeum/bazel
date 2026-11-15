@@ -85,6 +85,7 @@ import com.google.devtools.build.lib.runtime.BlockWaitingModule;
 import com.google.devtools.build.lib.runtime.BuildEventArtifactUploaderFactory;
 import com.google.devtools.build.lib.runtime.CommandEnvironment;
 import com.google.devtools.build.lib.runtime.CommandLinePathFactory;
+import com.google.devtools.build.lib.runtime.RemoteModuleExtensionCache;
 import com.google.devtools.build.lib.runtime.RemoteRepoContentsCache;
 import com.google.devtools.build.lib.runtime.RepositoryRemoteExecutor;
 import com.google.devtools.build.lib.runtime.RepositoryRemoteHelpersFactory;
@@ -1423,6 +1424,16 @@ public final class RemoteModule extends BlazeModule {
         return null;
       }
       return delegate.createRepoContentsCache();
+    }
+
+    @Nullable
+    @Override
+    public RemoteModuleExtensionCache createModuleExtensionCache() {
+      RepositoryRemoteHelpersFactory delegate = this.delegate;
+      if (delegate == null) {
+        return null;
+      }
+      return delegate.createModuleExtensionCache();
     }
   }
 
