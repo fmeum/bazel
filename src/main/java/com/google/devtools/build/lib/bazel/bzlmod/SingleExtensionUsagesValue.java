@@ -19,6 +19,7 @@ import com.google.auto.value.AutoValue;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.Maps;
+import com.google.common.hash.Hasher;
 import com.google.common.hash.Hashing;
 import com.google.devtools.build.lib.cmdline.RepositoryMapping;
 import com.google.devtools.build.lib.cmdline.RepositoryName;
@@ -76,9 +77,22 @@ public abstract class SingleExtensionUsagesValue implements SkyValue {
    * equivalent for the purpose of evaluating the extension.
    */
   static byte[] hashForEvaluation(Gson gson, SingleExtensionUsagesValue usagesValue) {
-    return Hashing.sha256()
-        .hashUnencodedChars(gson.toJson(usagesValue.trimForEvaluation()))
-        .asBytes();
+    Hasher hasher = Hashing.sha256().newHasher();
+    hasher.putUnencodedChars(gson.toJson(usagesValue.trimForEvaluation()));
+    // Labels without a repo part in tags (e.g. "//:foo") resolve relative to the repo of the module
+    // that specifies the tag. The canonical name of that repo is determined by the module key,
+    // which is part of the abridged modules, except that it includes the version if and only if
+    // there are multiple versions of the module in the dependency graph (e.g. due to a
+    // multiple_version_override). Only hash this bit for modules for which it is set so that the
+    // hash stays the same in the common case.
+    for (var entry : usagesValue.getRepoMappings().entrySet()) {
+      ModuleKey moduleKey = entry.getKey();
+      if (!entry.getValue().contextRepo().equals(moduleKey.getCanonicalRepoNameWithoutVersion())) {
+        // JSON never contains a literal NUL character.
+        hasher.putChar('\0').putUnencodedChars(moduleKey.toString());
+      }
+    }
+    return hasher.hash().asBytes();
   }
 
   /**
@@ -93,7 +107,8 @@ public abstract class SingleExtensionUsagesValue implements SkyValue {
         getAbridgedModules(),
         // repoMappings: The usage of repo mappings by the extension's implementation function is
         // tracked on the level of individual entries and all label attributes are provided as
-        // `Label`, which exclusively reference canonical repository names.
+        // `Label`, which exclusively reference canonical repository names. Whether the canonical
+        // name of a module's own repo includes its version is accounted for in hashForEvaluation.
         ImmutableMap.of(),
         getRepoOverrides());
   }

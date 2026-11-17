@@ -2772,6 +2772,92 @@ class BazelLockfileTest(test_base.TestBase):
     self.assertIn('ran the extension!', stderr)
     self.assertIn('STR=@@foo+//:lib_foo', stderr)
 
+  def testExtensionRepoMappingChange_contextRepoOfNonRootModule(self):
+    # Labels without a repo part in a tag resolve relative to the repo of the
+    # module that specifies the tag. The canonical name of that repo changes
+    # without the module key changing when a multiple_version_override is
+    # added for the module, which must cause the extension to be reevaluated.
+    self.main_registry.setModuleBasePath('projects')
+    projects_dir = self.main_registry.projects
+
+    self.main_registry.createLocalPathModule('ext', '1.0', 'ext')
+    scratchFile(projects_dir.joinpath('ext', 'BUILD'))
+    scratchFile(
+        projects_dir.joinpath('ext', 'ext.bzl'),
+        [
+            'def _repo_impl(rctx):',
+            '  rctx.file("BUILD")',
+            '  rctx.file("defs.bzl", "STR = " + repr(str(rctx.attr.value)))',
+            'repo = repository_rule(_repo_impl,attrs={"value":attr.label()})',
+            'def _ext_impl(mctx):',
+            '  print("ran the extension!")',
+            '  for mod in mctx.modules:',
+            '    for tag in mod.tags.tag:',
+            '      repo(name = "repo", value = tag.label)',
+            'tag = tag_class(attrs = {"label": attr.label()})',
+            'ext = module_extension(_ext_impl, tag_classes = {"tag": tag})',
+        ],
+    )
+    self.main_registry.createShModule(
+        'foo',
+        '1.0',
+        {'ext': '1.0'},
+        extra_module_file_contents=[
+            'ext = use_extension("@ext//:ext.bzl", "ext")',
+            'ext.tag(label = "//:lib_foo")',
+        ],
+    )
+    self.main_registry.createShModule('foo', '2.0')
+    self.main_registry.createShModule('baz', '1.0', {'foo': '2.0'})
+
+    module_file_lines = [
+        'bazel_dep(name="foo",version="1.0")',
+        'bazel_dep(name="ext",version="1.0")',
+        'ext = use_extension("@ext//:ext.bzl", "ext")',
+        'use_repo(ext, "repo")',
+    ]
+    self.ScratchFile('MODULE.bazel', module_file_lines)
+    self.ScratchFile(
+        'BUILD.bazel',
+        [
+            'load("@repo//:defs.bzl", "STR")',
+            'print("STR="+STR)',
+            'filegroup(name="lol")',
+        ],
+    )
+
+    _, _, stderr = self.RunBazel(['build', ':lol'])
+    stderr = '\n'.join(stderr)
+    self.assertIn('ran the extension!', stderr)
+    self.assertIn('STR=@@foo+//:lib_foo', stderr)
+
+    # Shutdown bazel to make sure we rely on the lockfile and not skyframe
+    self.RunBazel(['shutdown'])
+    # Pull in another version of foo that doesn't use the extension. The usages
+    # of the extension don't change, but foo@1.0's repo is now named foo+1.0.
+    self.ScratchFile(
+        'MODULE.bazel',
+        module_file_lines
+        + [
+            'bazel_dep(name="baz",version="1.0")',
+            'multiple_version_override(',
+            '  module_name="foo",',
+            '  versions=["1.0","2.0"],',
+            ')',
+        ],
+    )
+    _, _, stderr = self.RunBazel(['build', ':lol'])
+    stderr = '\n'.join(stderr)
+    self.assertIn('ran the extension!', stderr)
+    self.assertIn('STR=@@foo+1.0//:lib_foo', stderr)
+
+    # Shutdown bazel to make sure we rely on the lockfile and not skyframe
+    self.RunBazel(['shutdown'])
+    _, _, stderr = self.RunBazel(['build', ':lol'])
+    stderr = '\n'.join(stderr)
+    self.assertNotIn('ran the extension!', stderr)
+    self.assertIn('STR=@@foo+1.0//:lib_foo', stderr)
+
   def testReproducibleExtensionsIgnoredInLockfile(self):
     self.ScratchFile(
         'MODULE.bazel',
