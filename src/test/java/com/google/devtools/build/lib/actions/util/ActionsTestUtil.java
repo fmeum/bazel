@@ -418,7 +418,7 @@ public final class ActionsTestUtil {
         }
 
         @Override
-        public ActionTemplate.ReferencedOutput lookUpReferencedOutput(
+        public Artifact.TreeFileArtifact lookUpReferencedOutput(
             Artifact.TreeArtifact directory, PathFragment relativePath) {
           throw new UnsupportedOperationException(
               "Unexpected lookup of " + relativePath + " in " + directory);

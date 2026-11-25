@@ -39,7 +39,6 @@ import com.google.devtools.build.lib.actions.ActionLookupKey;
 import com.google.devtools.build.lib.actions.ActionLookupValue;
 import com.google.devtools.build.lib.actions.ActionTemplate;
 import com.google.devtools.build.lib.actions.ActionTemplate.ExpansionContext;
-import com.google.devtools.build.lib.actions.ActionTemplate.ReferencedOutput;
 import com.google.devtools.build.lib.actions.Actions;
 import com.google.devtools.build.lib.actions.AlreadyReportedActionExecutionException;
 import com.google.devtools.build.lib.actions.Artifact;
@@ -367,17 +366,11 @@ public class ActionTemplateExpansionFunction implements SkyFunction {
 
     @Override
     @Nullable
-    public ReferencedOutput lookUpReferencedOutput(
+    public TreeFileArtifact lookUpReferencedOutput(
         TreeArtifact directory, PathFragment relativePath) {
       ActionTemplateExpansionValue expansion = referencedExpansions.get(directory);
-      checkArgument(
-          expansion != null, "%s is not referenced by %s", directory, actionTemplate);
-      TreeFileArtifact output = expansion.getOutput(directory, relativePath);
-      if (output == null) {
-        return null;
-      }
-      return new ReferencedOutput(
-          output, expansion.getAction(output.getGeneratingActionKey().getActionIndex()));
+      checkArgument(expansion != null, "%s is not referenced by %s", directory, actionTemplate);
+      return expansion.getOutput(directory, relativePath);
     }
 
     @Override

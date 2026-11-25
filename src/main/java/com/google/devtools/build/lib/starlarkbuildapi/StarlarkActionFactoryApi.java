@@ -109,6 +109,9 @@ arguments:
   <li><code>additional_params</code> (keyword-only): The value of the
       <code>additional_params</code> argument of <code>actions.map_directory()</code>; a
       dictionary mapping from strings to strings, booleans, or integers.</li>
+  <li><code>referenced_directories</code> (keyword-only, only passed if non-empty): The value of
+      the <code>referenced_directories</code> argument of <code>actions.map_directory()</code>; a
+      dictionary mapping from strings to directories.</li>
 </ul>
 
 This function must be top-level, i.e. lambdas and nested functions are not allowed.
@@ -974,21 +977,22 @@ This function must be top-level, i.e. lambdas and nested functions are not allow
         @Param(
             name = "referenced_directories",
             allowedTypes = {
-              @ParamType(type = Depset.class, generic1 = FileApi.class),
-              @ParamType(type = NoneType.class),
+              @ParamType(type = Dict.class),
             },
-            defaultValue = "None",
+            defaultValue = "{}",
             named = true,
             positional = false,
             doc =
-                "Experimental. A depset of output directories of other"
-                    + " <code>map_directory()</code> calls whose individual files may be used as"
-                    + " inputs of the actions created by the implementation function. Unlike input"
-                    + " directories, these directories don't have to be built before the"
-                    + " implementation function runs: it only waits for the other implementation"
-                    + " functions to run and an action consuming one of their files only waits for"
-                    + " that file to be built. The files can currently only be looked up by native"
-                    + " helpers, such as the ones for C++ modules."),
+                "Experimental. A dictionary mapping of strings to output directories of other"
+                    + " <code>map_directory()</code> calls. Unlike input directories, these"
+                    + " directories don't have to be built before the implementation function"
+                    + " runs: it only waits for the implementation functions of the other"
+                    + " <code>map_directory()</code> calls to run. Individual files in them can be"
+                    + " looked up with <a href='../builtins/template_ctx.html#find_file'>"
+                    + "<code>template_ctx.find_file()</code></a> and used as inputs of the actions"
+                    + " created by the implementation"
+                    + " function. Such an action only waits for the files it consumes to be"
+                    + " built."),
         @Param(
             name = "execution_requirements",
             allowedTypes = {
@@ -1101,7 +1105,7 @@ This function must be top-level, i.e. lambdas and nested functions are not allow
       Dict<?, ?> outputDirectories,
       Dict<?, ?> tools,
       Dict<?, ?> additionalKwargs,
-      Object referencedDirectoriesUnchecked,
+      Dict<?, ?> referencedDirectoriesUnchecked,
       Object executionRequirementsUnchecked,
       Object execGroupUnchecked,
       Object toolchainUnchecked,

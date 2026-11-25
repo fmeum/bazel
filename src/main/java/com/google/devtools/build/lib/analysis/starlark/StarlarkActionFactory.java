@@ -1155,7 +1155,7 @@ public class StarlarkActionFactory implements StarlarkActionFactoryApi {
       Dict<?, ?> outputDirectories,
       Dict<?, ?> tools,
       Dict<?, ?> additionalParams,
-      Object referencedDirectoriesUnchecked,
+      Dict<?, ?> referencedDirectoriesUnchecked,
       Object executionRequirementsUnchecked,
       Object execGroupUnchecked,
       Object toolchainUnchecked,
@@ -1257,8 +1257,11 @@ public class StarlarkActionFactory implements StarlarkActionFactoryApi {
                 String.class,
                 Object.class,
                 StarlarkMapActionTemplate.ADDITIONAL_PARAMS_KEY),
-            Depset.noneableCast(
-                referencedDirectoriesUnchecked, Artifact.class, "referenced_directories"),
+            Dict.cast(
+                referencedDirectoriesUnchecked,
+                String.class,
+                TreeArtifact.class,
+                StarlarkMapActionTemplate.REFERENCED_DIRECTORIES_KEY),
             spawnActionBuilder,
             executionInfo,
             PathMappers.getOutputPathsMode(ruleContext.getConfiguration()),

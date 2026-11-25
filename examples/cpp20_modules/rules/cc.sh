@@ -18,14 +18,24 @@ mode="$1"
 shift
 case "$mode" in
   scan)
-    # scan <output dir> <source>...: writes src_<i>.ddi (P1689) for the i-th source.
+    # scan <output dir> <manifest> <source>...: writes src_<i>.ddi (P1689) for the i-th source and
+    # a JSON list of all of them to the manifest.
     out="$1"
-    shift
+    manifest="$2"
+    shift 2
     i=0
     for src in "$@"; do
       "$SCAN_DEPS" -format=p1689 -- "$CXX" -std=c++20 -c "$src" -o "src_$i.o" > "$out/src_$i.ddi"
       i=$((i + 1))
     done
+    {
+      echo "["
+      for ((j = 0; j < i; j++)); do
+        [[ $j -gt 0 ]] && echo ","
+        cat "$out/src_$j.ddi"
+      done
+      echo "]"
+    } > "$manifest"
     ;;
   compile)
     # Simulates an expensive module that nothing in the demo imports.

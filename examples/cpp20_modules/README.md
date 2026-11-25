@@ -1,8 +1,8 @@
 # C++20 modules with `map_directory()`
 
 A prototype of C++20 modules support built on `ctx.actions.map_directory()`,
-`template_ctx.read()` and the private `cc_internal.look_up_module_interface()`.
-See `third_party/bazel_rules/rules_cc/modules/cc_modules.bzl` for how it works.
+`template_ctx.read()` and `template_ctx.find_file()`, without any private APIs.
+See `rules/cc_modules.bzl` for how it works.
 
 The rules call the host's Clang directly and require Clang 16 or newer with
 `clang-scan-deps` on the `PATH`.

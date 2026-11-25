@@ -99,6 +99,28 @@ public interface StarlarkTemplateContextApi extends StarlarkValue {
   String read(FileApi file) throws EvalException, InterruptedException;
 
   @StarlarkMethod(
+      name = "find_file",
+      doc =
+          "Returns the file at the given path in one of the <code>referenced_directories</code>"
+              + " of this <code>map_directory()</code> call, or <code>None</code> if the"
+              + " implementation function of the <code>map_directory()</code> call that"
+              + " generates the directory didn't declare such a file.<p>The file can be used as an"
+              + " input of the actions created by this implementation function. Such an action"
+              + " only waits for the files it consumes to be built, not for the entire"
+              + " directory.",
+      parameters = {
+        @Param(
+            name = "directory",
+            named = true,
+            doc = "One of the values of <code>referenced_directories</code>."),
+        @Param(
+            name = "path",
+            named = true,
+            doc = "The path of the file relative to <code>directory</code>."),
+      })
+  Object findFile(FileApi directory, String path) throws EvalException;
+
+  @StarlarkMethod(
       name = "run",
       doc = "Creates an action that runs an executable.",
       parameters = {

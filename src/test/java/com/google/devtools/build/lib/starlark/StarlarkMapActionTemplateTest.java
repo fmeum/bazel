@@ -2024,14 +2024,15 @@ public final class StarlarkMapActionTemplateTest extends BuildIntegrationTestCas
 
   /**
    * Writes a fake C++20 modules rule that compiles one "BMI" per module with a fake compiler that
-   * records the names of the BMIs it was given. It lives in the mock rules_cc module since it uses
-   * the private C++ API.
+   * records the names of the BMIs it was given. It only uses generic APIs: each library writes a
+   * manifest of its modules and their imports, which dependents read to find the BMIs of the
+   * modules they import transitively, and looks up these BMIs in the BMI directories of its
+   * dependencies.
    */
   private void writeFakeModuleRules() throws Exception {
+    write("fake_modules/BUILD", "exports_files([\"compile.sh\"])");
     write(
-        "third_party/bazel_rules/rules_cc/fake_modules/BUILD", "exports_files([\"compile.sh\"])");
-    write(
-            "third_party/bazel_rules/rules_cc/fake_modules/compile.sh",
+            "fake_modules/compile.sh",
             """
             #!/bin/sh
             out="$1"; module="$2"; fail="$3"; shift 3
@@ -2040,69 +2041,81 @@ public final class StarlarkMapActionTemplateTest extends BuildIntegrationTestCas
             """)
         .setExecutable(true);
     write(
-        "third_party/bazel_rules/rules_cc/fake_modules/rules.bzl",
+        "fake_modules/rules.bzl",
         """
-        FakeModuleInfo = provider(fields = ["bmi_dirs"])
+        FakeModuleInfo = provider(fields = ["libraries"])
+
+        def _parse_imports(s):
+            return [i for i in s.strip().split(" ") if i]
+
+        def _transitive_imports(roots, imports):
+            seen = {}
+            stack = list(roots)
+            max_steps = len(roots) + 1
+            for module_imports in imports.values():
+                max_steps += len(module_imports)
+            for _ in range(max_steps):
+                if not stack:
+                    break
+                module = stack.pop()
+                if module in seen:
+                    continue
+                if module not in imports:
+                    fail("unknown module " + module)
+                seen[module] = True
+                stack.extend(imports[module])
+            return seen
 
         def _compile_modules(
                 template_ctx,
                 input_directories,
                 output_directories,
+                additional_inputs,
                 tools,
                 additional_params,
-                **kwargs):
-            cc_internal = cc_common.internal_DO_NOT_USE()
+                referenced_directories = {}):
             failing = additional_params["failing"].split(",")
             imports = {}
+            bmis = {}
             for f in input_directories["imports"].children:
-                imports[f.basename.removesuffix(".imports")] = [
-                    i
-                    for i in template_ctx.read(f).strip().split(" ")
-                    if i
-                ]
-            local_bmis = {
-                module: template_ctx.declare_file(
+                module = f.basename.removesuffix(".imports")
+                imports[module] = _parse_imports(template_ctx.read(f))
+                bmis[module] = template_ctx.declare_file(
                     module + ".pcm",
                     directory = output_directories["bmis"],
                 )
-                for module in imports
-            }
+            local_modules = list(imports.keys())
 
-            # The BMIs each local module is compiled against, filled in topological order.
-            closures = {}
-            for _ in range(len(imports)):
-                for module, module_imports in sorted(imports.items()):
-                    if module in closures:
-                        continue
-                    if not all([i in closures for i in module_imports if i in local_bmis]):
-                        continue
-                    inputs = []
-                    for i in module_imports:
-                        if i in local_bmis:
-                            inputs.append(local_bmis[i])
-                            inputs.extend(closures[i])
-                        else:
-                            found = cc_internal.look_up_module_interface(
-                                template_ctx = template_ctx,
-                                path = i + ".pcm",
-                            )
-                            if not found:
-                                fail("%s imports unknown module %s" % (module, i))
-                            bmi, transitive_bmis = found
-                            inputs.append(bmi)
-                            inputs.extend(transitive_bmis)
-                    closures[module] = depset(inputs).to_list()
-                    args = template_ctx.args()
-                    args.add(local_bmis[module])
-                    args.add(module)
-                    args.add("1" if module in failing else "0")
-                    args.add_all(closures[module])
-                    template_ctx.run(
-                        inputs = closures[module],
-                        outputs = [local_bmis[module]],
-                        executable = tools["compile"],
-                        arguments = [args],
+            # The manifests of dependencies are regular files that don't depend on their BMIs.
+            for key, directory in referenced_directories.items():
+                if template_ctx.find_file(directory = directory, path = "missing.pcm") != None:
+                    fail("unexpected file")
+                for line in template_ctx.read(additional_inputs[key]).splitlines():
+                    module, _, module_imports = line.partition(":")
+                    if module in bmis:
+                        fail("module %s is provided by more than one library" % module)
+                    imports[module] = _parse_imports(module_imports)
+                    bmis[module] = template_ctx.find_file(
+                        directory = directory,
+                        path = module + ".pcm",
                     )
+
+            for module in local_modules:
+                inputs = [
+                    bmis[m]
+                    for m in sorted(_transitive_imports(imports[module], imports))
+                ]
+                args = template_ctx.args()
+                args.add(bmis[module])
+                args.add(module)
+                args.add("1" if module in failing else "0")
+                args.add_all(inputs)
+                template_ctx.run(
+                    inputs = inputs,
+                    outputs = [bmis[module]],
+                    executable = tools["compile"],
+                    arguments = [args],
+                )
 
         def _fake_module_library_impl(ctx):
             imports_dir = ctx.actions.declare_directory(ctx.label.name + "_imports")
@@ -2114,33 +2127,41 @@ public final class StarlarkMapActionTemplateTest extends BuildIntegrationTestCas
                     module,
                 ))
             ctx.actions.run_shell(outputs = [imports_dir], command = " && ".join(commands))
+            manifest = ctx.actions.declare_file(ctx.label.name + ".modules")
+            ctx.actions.write(manifest, "".join([
+                "%s:%s\\n" % (module, " ".join(module_imports))
+                for module, module_imports in ctx.attr.modules.items()
+            ]))
 
-            referenced_directories = depset(
-                transitive = [dep[FakeModuleInfo].bmi_dirs for dep in ctx.attr.deps],
+            dep_libraries = depset(
+                transitive = [dep[FakeModuleInfo].libraries for dep in ctx.attr.deps],
             )
+            referenced_directories = {}
+            additional_inputs = {}
+            for i, library in enumerate(dep_libraries.to_list()):
+                referenced_directories["lib_%d" % i] = library.bmis
+                additional_inputs["lib_%d" % i] = library.manifest
             if ctx.attr.reference_plain_directory:
                 plain_dir = ctx.actions.declare_directory(ctx.label.name + "_plain")
                 ctx.actions.run_shell(outputs = [plain_dir], command = "true")
-                referenced_directories = depset(
-                    [plain_dir],
-                    transitive = [referenced_directories],
-                )
+                referenced_directories["plain"] = plain_dir
 
             bmi_dir = ctx.actions.declare_directory(ctx.label.name + "_bmis")
             ctx.actions.map_directory(
                 implementation = _compile_modules,
                 input_directories = {"imports": imports_dir},
                 output_directories = {"bmis": bmi_dir},
+                additional_inputs = additional_inputs,
                 referenced_directories = referenced_directories,
                 tools = {"compile": ctx.attr._compile.files_to_run},
                 additional_params = {"failing": ",".join(ctx.attr.failing)},
             )
             return [
                 DefaultInfo(files = depset([bmi_dir])),
-                FakeModuleInfo(bmi_dirs = depset([bmi_dir], transitive = [
-                    dep[FakeModuleInfo].bmi_dirs
-                    for dep in ctx.attr.deps
-                ])),
+                FakeModuleInfo(libraries = depset(
+                    [struct(manifest = manifest, bmis = bmi_dir)],
+                    transitive = [dep_libraries],
+                )),
             ]
 
         fake_module_library = rule(
@@ -2151,7 +2172,7 @@ public final class StarlarkMapActionTemplateTest extends BuildIntegrationTestCas
                 "failing": attr.string_list(),
                 "reference_plain_directory": attr.bool(),
                 "_compile": attr.label(
-                    default = Label("//fake_modules:compile.sh"),
+                    default = "//fake_modules:compile.sh",
                     allow_single_file = True,
                     executable = True,
                     cfg = "exec",
@@ -2179,7 +2200,7 @@ public final class StarlarkMapActionTemplateTest extends BuildIntegrationTestCas
     write(
         "modules/BUILD",
         """
-        load("@rules_cc//fake_modules:rules.bzl", "fake_module_library")
+        load("//fake_modules:rules.bzl", "fake_module_library")
         fake_module_library(
             name = "a",
             modules = {
@@ -2222,7 +2243,7 @@ public final class StarlarkMapActionTemplateTest extends BuildIntegrationTestCas
     writeFakeModuleRules();
     String buildFile =
         """
-        load("@rules_cc//fake_modules:rules.bzl", "fake_module_library")
+        load("//fake_modules:rules.bzl", "fake_module_library")
         fake_module_library(
             name = "a",
             modules = {
@@ -2248,28 +2269,12 @@ public final class StarlarkMapActionTemplateTest extends BuildIntegrationTestCas
   }
 
   @Test
-  public void referencedDirectories_moduleProvidedByTwoTargets() throws Exception {
-    writeFakeModuleRules();
-    write(
-        "modules/BUILD",
-        """
-        load("@rules_cc//fake_modules:rules.bzl", "fake_module_library")
-        fake_module_library(name = "a", modules = {"dup": []})
-        fake_module_library(name = "b", modules = {"dup": []})
-        fake_module_library(name = "c", modules = {"c": ["dup"]}, deps = [":a", ":b"])
-        """);
-
-    assertThrows(BuildFailedException.class, () -> buildTarget("//modules:c"));
-    assertContainsError("Module interface 'dup.pcm' is provided by both");
-  }
-
-  @Test
   public void referencedDirectories_mustBeOutputsOfMapDirectory() throws Exception {
     writeFakeModuleRules();
     write(
         "modules/BUILD",
         """
-        load("@rules_cc//fake_modules:rules.bzl", "fake_module_library")
+        load("//fake_modules:rules.bzl", "fake_module_library")
         fake_module_library(
             name = "a",
             modules = {"a": []},
@@ -2280,6 +2285,81 @@ public final class StarlarkMapActionTemplateTest extends BuildIntegrationTestCas
     assertThrows(BuildFailedException.class, () -> buildTarget("//modules:a"));
     assertContainsError(
         "a_plain in referenced_directories is not an output directory of a map_directory() call");
+  }
+
+  @Test
+  public void findFile_invalidArguments(
+      @TestParameter({"output_directory", "absolute_path", "uplevel_reference"}) String variant)
+      throws Exception {
+    write(
+        "find/defs.bzl",
+        """
+        def _referenced_impl(template_ctx, output_directories, **kwargs):
+            out = template_ctx.declare_file("out.txt", directory = output_directories["out"])
+            template_ctx.run(outputs = [out], executable = kwargs["tools"]["touch"], arguments = [
+                out.path,
+            ])
+
+        def _find_impl(
+                template_ctx,
+                output_directories,
+                referenced_directories,
+                additional_params,
+                **kwargs):
+            variant = additional_params["variant"]
+            ref = referenced_directories["ref"]
+            if variant == "output_directory":
+                template_ctx.find_file(directory = output_directories["out"], path = "out.txt")
+            elif variant == "absolute_path":
+                template_ctx.find_file(directory = ref, path = "/out.txt")
+            else:
+                template_ctx.find_file(directory = ref, path = "../out.txt")
+
+        def _rule_impl(ctx):
+            seed = ctx.actions.declare_directory(ctx.label.name + "_seed")
+            ctx.actions.run_shell(outputs = [seed], command = "touch %s/x" % seed.path)
+            ref = ctx.actions.declare_directory(ctx.label.name + "_ref")
+            ctx.actions.map_directory(
+                implementation = _referenced_impl,
+                input_directories = {"seed": seed},
+                output_directories = {"out": ref},
+                tools = {"touch": ctx.executable._touch},
+            )
+            out = ctx.actions.declare_directory(ctx.label.name + "_out")
+            ctx.actions.map_directory(
+                implementation = _find_impl,
+                input_directories = {"seed": seed},
+                output_directories = {"out": out},
+                referenced_directories = {"ref": ref},
+                tools = {},
+                additional_params = {"variant": ctx.attr.variant},
+            )
+            return [DefaultInfo(files = depset([out]))]
+
+        find_rule = rule(
+            implementation = _rule_impl,
+            attrs = {
+                "variant": attr.string(),
+                "_touch": attr.label(
+                    default = ":touch.sh",
+                    allow_single_file = True,
+                    executable = True,
+                    cfg = "exec",
+                ),
+            },
+        )
+        """);
+    write("find/touch.sh", "#!/bin/sh", "touch \"$1\"").setExecutable(true);
+    write(
+        "find/BUILD",
+        "load(':defs.bzl', 'find_rule')",
+        "find_rule(name = 't', variant = '%s')".formatted(variant));
+
+    assertThrows(BuildFailedException.class, () -> buildTarget("//find:t"));
+    assertContainsError(
+        variant.equals("output_directory")
+            ? "is not one of the referenced_directories of this map_directory() call"
+            : "path must be a relative path within the directory");
   }
 
   private TreeArtifact assertTreeBuilt(String rootRelativePath) throws Exception {

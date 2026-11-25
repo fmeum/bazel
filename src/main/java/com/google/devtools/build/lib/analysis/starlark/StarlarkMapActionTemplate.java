@@ -79,6 +79,7 @@ public final class StarlarkMapActionTemplate extends ActionKeyComputer
   public static final String OUTPUT_DIRECTORIES_KEY = "output_directories";
   public static final String TOOLS_KEY = "tools";
   public static final String ADDITIONAL_PARAMS_KEY = "additional_params";
+  public static final String REFERENCED_DIRECTORIES_KEY = "referenced_directories";
 
   // The allowed classes for values for the different keys.
   private static final ImmutableSet<Class<?>> ADDITIONAL_INPUTS_CLASSES =
@@ -94,7 +95,7 @@ public final class StarlarkMapActionTemplate extends ActionKeyComputer
   private final NestedSet<Artifact> allInputs;
   // Output directories of other map_directory() calls whose individual files can be referenced
   // without being inputs of this template.
-  private final NestedSet<Artifact> referencedDirectories;
+  private final Dict<String, TreeArtifact> referencedDirectories;
   private final Dict<String, TreeArtifact> outputDirectories;
   private final Dict<String, Object> tools;
   private final NestedSet<Artifact> toolsNs;
@@ -118,7 +119,7 @@ public final class StarlarkMapActionTemplate extends ActionKeyComputer
       Dict<String, TreeArtifact> outputDirectories,
       Dict<String, Object> tools,
       Dict<String, Object> additionalParams,
-      NestedSet<Artifact> referencedDirectories,
+      Dict<String, TreeArtifact> referencedDirectories,
       SpawnAction.Builder spawnActionBuilder,
       ImmutableMap<String, String> executionRequirements,
       OutputPathsMode outputPathsMode,
@@ -146,7 +147,8 @@ public final class StarlarkMapActionTemplate extends ActionKeyComputer
     this.allInputs = allInputsNsBuilder.build();
     this.toolsNs = toolsNsBuilder.build();
     this.additionalParams = Dict.<String, Object>immutableCopyOf(additionalParams);
-    this.referencedDirectories = referencedDirectories;
+    this.referencedDirectories =
+        validateDictValues(referencedDirectories, REFERENCED_DIRECTORIES_KEY, DIRECTORY_CLASSES);
     this.spawnActionBuilder = spawnActionBuilder;
     this.executionRequirements = executionRequirements;
     this.outputPathsMode = outputPathsMode;
@@ -235,7 +237,7 @@ public final class StarlarkMapActionTemplate extends ActionKeyComputer
             getExecutionInfo(),
             isSubdirectoryAllowed,
             expansionContext,
-            referencedDirectories);
+            ImmutableSet.copyOf(referencedDirectories.values()));
 
     ImmutableMap.Builder<String, ExpandedDirectory> expandedDirectories = ImmutableMap.builder();
     for (Entry<String, TreeArtifact> entry : inputDirectories.entrySet()) {
@@ -258,6 +260,10 @@ public final class StarlarkMapActionTemplate extends ActionKeyComputer
       argumentProcessor.addNamedArg(ADDITIONAL_INPUTS_KEY, additionalInputs);
       argumentProcessor.addNamedArg(TOOLS_KEY, tools);
       argumentProcessor.addNamedArg(ADDITIONAL_PARAMS_KEY, additionalParams);
+      // Only passed if non-empty so that existing implementation functions keep working.
+      if (!referencedDirectories.isEmpty()) {
+        argumentProcessor.addNamedArg(REFERENCED_DIRECTORIES_KEY, referencedDirectories);
+      }
 
       Object returnValue =
           Starlark.callViaArgumentProcessor(thread, implementation, argumentProcessor);
@@ -367,7 +373,10 @@ public final class StarlarkMapActionTemplate extends ActionKeyComputer
       throws CommandLineExpansionException, InterruptedException {
     // Already contains input_directories, additional_inputs and tools.
     actionKeyContext.addNestedSetToFingerprint(fp, allInputs);
-    actionKeyContext.addNestedSetToFingerprint(fp, referencedDirectories);
+    for (Entry<String, TreeArtifact> entry : referencedDirectories.entrySet()) {
+      fp.addString(entry.getKey());
+      fp.addPath(entry.getValue().getExecPath());
+    }
     for (Entry<String, TreeArtifact> entry : outputDirectories.entrySet()) {
       fp.addString(entry.getKey());
       fp.addPath(entry.getValue().getExecPath());
@@ -446,7 +455,9 @@ public final class StarlarkMapActionTemplate extends ActionKeyComputer
 
   @Override
   public NestedSet<Artifact> getReferencedDirectories() {
-    return referencedDirectories;
+    return NestedSetBuilder.<Artifact>stableOrder()
+        .addAll(referencedDirectories.values())
+        .build();
   }
 
   @Override
