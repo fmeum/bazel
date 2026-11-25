@@ -119,7 +119,7 @@ public final class CppCompileActionTemplate extends ActionKeyComputer
   public ImmutableList<CppCompileAction> generateActionsForInputArtifacts(
       ImmutableList<TreeFileArtifact> inputTreeFileArtifacts,
       ActionLookupKey artifactOwner,
-      InputFileReader inputFileReader,
+      ExpansionContext expansionContext,
       EventHandler eventHandler)
       throws ActionExecutionException {
     ImmutableList.Builder<CppCompileAction> expandedActions = new ImmutableList.Builder<>();

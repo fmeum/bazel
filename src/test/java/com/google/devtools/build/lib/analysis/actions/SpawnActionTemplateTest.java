@@ -204,7 +204,7 @@ public class SpawnActionTemplateTest {
         actionTemplate.generateActionsForInputArtifacts(
             inputTreeFileArtifacts,
             ActionsTestUtil.NULL_TEMPLATE_EXPANSION_ARTIFACT_OWNER,
-            ActionsTestUtil.THROWING_INPUT_FILE_READER,
+            ActionsTestUtil.THROWING_EXPANSION_CONTEXT,
             NullEventHandler.INSTANCE);
 
     assertThat(expandedActions).hasSize(3);
@@ -249,7 +249,7 @@ public class SpawnActionTemplateTest {
         actionTemplate.generateActionsForInputArtifacts(
             inputTreeFileArtifacts,
             ActionsTestUtil.NULL_TEMPLATE_EXPANSION_ARTIFACT_OWNER,
-            ActionsTestUtil.THROWING_INPUT_FILE_READER,
+            ActionsTestUtil.THROWING_EXPANSION_CONTEXT,
             NullEventHandler.INSTANCE);
 
     for (int i = 0; i < expandedActions.size(); ++i) {
@@ -273,7 +273,7 @@ public class SpawnActionTemplateTest {
         actionTemplate.generateActionsForInputArtifacts(
             inputTreeFileArtifacts,
             ActionsTestUtil.NULL_TEMPLATE_EXPANSION_ARTIFACT_OWNER,
-            ActionsTestUtil.THROWING_INPUT_FILE_READER,
+            ActionsTestUtil.THROWING_EXPANSION_CONTEXT,
             NullEventHandler.INSTANCE);
 
     assertThat(expandedActions).hasSize(3);
@@ -300,7 +300,7 @@ public class SpawnActionTemplateTest {
         actionTemplate.generateActionsForInputArtifacts(
             inputTreeFileArtifacts,
             ActionsTestUtil.NULL_TEMPLATE_EXPANSION_ARTIFACT_OWNER,
-            ActionsTestUtil.THROWING_INPUT_FILE_READER,
+            ActionsTestUtil.THROWING_EXPANSION_CONTEXT,
             NullEventHandler.INSTANCE);
 
     assertThat(expandedActions).hasSize(3);
@@ -341,7 +341,7 @@ public class SpawnActionTemplateTest {
             actionTemplate.generateActionsForInputArtifacts(
                 inputTreeFileArtifacts,
                 ActionsTestUtil.NULL_TEMPLATE_EXPANSION_ARTIFACT_OWNER,
-                ActionsTestUtil.THROWING_INPUT_FILE_READER,
+                ActionsTestUtil.THROWING_EXPANSION_CONTEXT,
                 NullEventHandler.INSTANCE));
 
     mapper = new OutputPathMapper() {
@@ -361,7 +361,7 @@ public class SpawnActionTemplateTest {
             actionTemplate2.generateActionsForInputArtifacts(
                 inputTreeFileArtifacts,
                 ActionsTestUtil.NULL_TEMPLATE_EXPANSION_ARTIFACT_OWNER,
-                ActionsTestUtil.THROWING_INPUT_FILE_READER,
+                ActionsTestUtil.THROWING_EXPANSION_CONTEXT,
                 NullEventHandler.INSTANCE));
   }
 

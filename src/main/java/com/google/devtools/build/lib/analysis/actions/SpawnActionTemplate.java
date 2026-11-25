@@ -111,7 +111,7 @@ public final class SpawnActionTemplate extends ActionKeyComputer
   public ImmutableList<SpawnAction> generateActionsForInputArtifacts(
       ImmutableList<TreeFileArtifact> inputTreeFileArtifacts,
       ActionLookupKey artifactOwner,
-      InputFileReader inputFileReader,
+      ExpansionContext expansionContext,
       EventHandler eventHandler) {
     ImmutableList.Builder<SpawnAction> expandedActions =
         ImmutableList.builderWithExpectedSize(inputTreeFileArtifacts.size());

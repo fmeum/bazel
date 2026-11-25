@@ -972,6 +972,24 @@ This function must be top-level, i.e. lambdas and nested functions are not allow
                     + " act as identifiers to easily reference a specific parameter from within the"
                     + " implementation function."),
         @Param(
+            name = "referenced_directories",
+            allowedTypes = {
+              @ParamType(type = Depset.class, generic1 = FileApi.class),
+              @ParamType(type = NoneType.class),
+            },
+            defaultValue = "None",
+            named = true,
+            positional = false,
+            doc =
+                "Experimental. A depset of output directories of other"
+                    + " <code>map_directory()</code> calls whose individual files may be used as"
+                    + " inputs of the actions created by the implementation function. Unlike input"
+                    + " directories, these directories don't have to be built before the"
+                    + " implementation function runs: it only waits for the other implementation"
+                    + " functions to run and an action consuming one of their files only waits for"
+                    + " that file to be built. The files can currently only be looked up by native"
+                    + " helpers, such as the ones for C++ modules."),
+        @Param(
             name = "execution_requirements",
             allowedTypes = {
               @ParamType(type = Dict.class),
@@ -1083,6 +1101,7 @@ This function must be top-level, i.e. lambdas and nested functions are not allow
       Dict<?, ?> outputDirectories,
       Dict<?, ?> tools,
       Dict<?, ?> additionalKwargs,
+      Object referencedDirectoriesUnchecked,
       Object executionRequirementsUnchecked,
       Object execGroupUnchecked,
       Object toolchainUnchecked,

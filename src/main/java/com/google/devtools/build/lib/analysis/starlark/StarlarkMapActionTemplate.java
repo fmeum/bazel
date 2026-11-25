@@ -92,6 +92,9 @@ public final class StarlarkMapActionTemplate extends ActionKeyComputer
   // or NestedSet<Artifact>.
   private final Dict<String, Object> additionalInputs;
   private final NestedSet<Artifact> allInputs;
+  // Output directories of other map_directory() calls whose individual files can be referenced
+  // without being inputs of this template.
+  private final NestedSet<Artifact> referencedDirectories;
   private final Dict<String, TreeArtifact> outputDirectories;
   private final Dict<String, Object> tools;
   private final NestedSet<Artifact> toolsNs;
@@ -115,6 +118,7 @@ public final class StarlarkMapActionTemplate extends ActionKeyComputer
       Dict<String, TreeArtifact> outputDirectories,
       Dict<String, Object> tools,
       Dict<String, Object> additionalParams,
+      NestedSet<Artifact> referencedDirectories,
       SpawnAction.Builder spawnActionBuilder,
       ImmutableMap<String, String> executionRequirements,
       OutputPathsMode outputPathsMode,
@@ -142,6 +146,7 @@ public final class StarlarkMapActionTemplate extends ActionKeyComputer
     this.allInputs = allInputsNsBuilder.build();
     this.toolsNs = toolsNsBuilder.build();
     this.additionalParams = Dict.<String, Object>immutableCopyOf(additionalParams);
+    this.referencedDirectories = referencedDirectories;
     this.spawnActionBuilder = spawnActionBuilder;
     this.executionRequirements = executionRequirements;
     this.outputPathsMode = outputPathsMode;
@@ -210,7 +215,7 @@ public final class StarlarkMapActionTemplate extends ActionKeyComputer
   public ImmutableList<AbstractAction> generateActionsForInputArtifacts(
       ImmutableList<TreeFileArtifact> inputTreeFileArtifacts,
       ActionLookupKey artifactOwner,
-      InputFileReader inputFileReader,
+      ExpansionContext expansionContext,
       EventHandler eventHandler)
       throws ActionConflictException, ActionExecutionException, InterruptedException {
 
@@ -229,7 +234,8 @@ public final class StarlarkMapActionTemplate extends ActionKeyComputer
             ImmutableSet.copyOf(outputDirectories.values()),
             getExecutionInfo(),
             isSubdirectoryAllowed,
-            inputFileReader);
+            expansionContext,
+            referencedDirectories);
 
     ImmutableMap.Builder<String, ExpandedDirectory> expandedDirectories = ImmutableMap.builder();
     for (Entry<String, TreeArtifact> entry : inputDirectories.entrySet()) {
@@ -361,6 +367,7 @@ public final class StarlarkMapActionTemplate extends ActionKeyComputer
       throws CommandLineExpansionException, InterruptedException {
     // Already contains input_directories, additional_inputs and tools.
     actionKeyContext.addNestedSetToFingerprint(fp, allInputs);
+    actionKeyContext.addNestedSetToFingerprint(fp, referencedDirectories);
     for (Entry<String, TreeArtifact> entry : outputDirectories.entrySet()) {
       fp.addString(entry.getKey());
       fp.addPath(entry.getValue().getExecPath());
@@ -435,6 +442,11 @@ public final class StarlarkMapActionTemplate extends ActionKeyComputer
   @Override
   public NestedSet<Artifact> getInputs() {
     return allInputs;
+  }
+
+  @Override
+  public NestedSet<Artifact> getReferencedDirectories() {
+    return referencedDirectories;
   }
 
   @Override

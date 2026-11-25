@@ -13,28 +13,81 @@
 // limitations under the License.
 package com.google.devtools.build.lib.skyframe;
 
+import static com.google.common.collect.ImmutableMap.toImmutableMap;
+
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.MoreObjects;
 import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableMap;
 import com.google.devtools.build.lib.actions.ActionAnalysisMetadata;
 import com.google.devtools.build.lib.actions.ActionLookupData;
 import com.google.devtools.build.lib.actions.ActionLookupKey;
 import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.actions.Artifact.DerivedArtifact;
+import com.google.devtools.build.lib.actions.Artifact.TreeArtifact;
+import com.google.devtools.build.lib.actions.Artifact.TreeFileArtifact;
 import com.google.devtools.build.lib.actions.BasicActionLookupValue;
 import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.skyframe.config.BuildConfigurationKey;
 import com.google.devtools.build.lib.skyframe.serialization.VisibleForSerialization;
 import com.google.devtools.build.lib.skyframe.serialization.autocodec.AutoCodec;
+import com.google.devtools.build.lib.vfs.PathFragment;
 import com.google.devtools.build.skyframe.SkyFunctionName;
 import com.google.devtools.build.skyframe.SkyKey;
+import java.util.HashMap;
+import java.util.Map;
+import javax.annotation.Nullable;
 
 /** Value that stores expanded actions from ActionTemplate. */
 public final class ActionTemplateExpansionValue extends BasicActionLookupValue {
 
+  // Lazily computed index of the outputs of the expanded actions, keyed by top-level output tree
+  // and path relative to it. Shared by all templates that reference the trees.
+  @Nullable
+  private transient volatile ImmutableMap<
+          TreeArtifact, ImmutableMap<PathFragment, TreeFileArtifact>>
+      outputsByTree;
+
   @VisibleForTesting
   public ActionTemplateExpansionValue(ImmutableList<ActionAnalysisMetadata> generatingActions) {
     super(generatingActions);
+  }
+
+  /**
+   * Returns the output of an expanded action at the given path relative to the given output tree
+   * of the template, or {@code null} if there is no such output.
+   */
+  @Nullable
+  public TreeFileArtifact getOutput(TreeArtifact tree, PathFragment treeRelativePath) {
+    var index = outputsByTree;
+    if (index == null) {
+      index = computeOutputsByTree();
+      outputsByTree = index;
+    }
+    var outputs = index.get(tree);
+    return outputs == null ? null : outputs.get(treeRelativePath);
+  }
+
+  private ImmutableMap<TreeArtifact, ImmutableMap<PathFragment, TreeFileArtifact>>
+      computeOutputsByTree() {
+    var outputsByTree =
+        new HashMap<TreeArtifact, ImmutableMap.Builder<PathFragment, TreeFileArtifact>>();
+    for (var action : getActions()) {
+      for (Artifact output : action.getOutputs()) {
+        if (!(output instanceof TreeFileArtifact treeFileArtifact)) {
+          continue;
+        }
+        TreeArtifact tree =
+            treeFileArtifact.getParent().isSubTreeArtifact()
+                ? treeFileArtifact.getParent().getParent()
+                : treeFileArtifact.getParent();
+        outputsByTree
+            .computeIfAbsent(tree, unused -> ImmutableMap.builder())
+            .put(treeFileArtifact.getExecPath().relativeTo(tree.getExecPath()), treeFileArtifact);
+      }
+    }
+    return outputsByTree.entrySet().stream()
+        .collect(toImmutableMap(Map.Entry::getKey, e -> e.getValue().buildOrThrow()));
   }
 
   /**

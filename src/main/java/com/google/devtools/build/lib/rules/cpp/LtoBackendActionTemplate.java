@@ -180,7 +180,7 @@ public final class LtoBackendActionTemplate extends ActionKeyComputer
   public ImmutableList<LtoBackendAction> generateActionsForInputArtifacts(
       ImmutableList<TreeFileArtifact> inputTreeFileArtifacts,
       ActionLookupKey artifactOwner,
-      InputFileReader inputFileReader,
+      ExpansionContext expansionContext,
       EventHandler eventHandler)
       throws ActionExecutionException {
     if (indexAndImportsTreeArtifact != null) {

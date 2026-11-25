@@ -406,10 +406,23 @@ public final class ActionsTestUtil {
   public static final ActionTemplateExpansionKey NULL_TEMPLATE_EXPANSION_ARTIFACT_OWNER =
       ActionTemplateExpansionValue.key(NULL_ARTIFACT_OWNER, /* actionIndex= */ 0);
 
-  /** An {@link ActionTemplate.InputFileReader} for templates that don't read their inputs. */
-  public static final ActionTemplate.InputFileReader THROWING_INPUT_FILE_READER =
-      file -> {
-        throw new UnsupportedOperationException("Unexpected read of " + file);
+  /**
+   * An {@link ActionTemplate.ExpansionContext} for templates that neither read their inputs nor
+   * reference outputs of other templates.
+   */
+  public static final ActionTemplate.ExpansionContext THROWING_EXPANSION_CONTEXT =
+      new ActionTemplate.ExpansionContext() {
+        @Override
+        public byte[] read(Artifact file) {
+          throw new UnsupportedOperationException("Unexpected read of " + file);
+        }
+
+        @Override
+        public ActionTemplate.ReferencedOutput lookUpReferencedOutput(
+            Artifact.TreeArtifact directory, PathFragment relativePath) {
+          throw new UnsupportedOperationException(
+              "Unexpected lookup of " + relativePath + " in " + directory);
+        }
       };
 
   @SerializationConstant

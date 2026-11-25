@@ -207,7 +207,7 @@ public final class ActionTemplateExpansionFunctionTest extends FoundationTestCas
           public ImmutableList<DummyAction> generateActionsForInputArtifacts(
               ImmutableList<TreeFileArtifact> inputTreeFileArtifacts,
               ActionLookupKey artifactOwner,
-              InputFileReader inputFileReader,
+              ExpansionContext expansionContext,
               EventHandler eventHandler) {
             return ImmutableList.of();
           }
@@ -242,7 +242,7 @@ public final class ActionTemplateExpansionFunctionTest extends FoundationTestCas
           public ImmutableList<DummyAction> generateActionsForInputArtifacts(
               ImmutableList<TreeFileArtifact> inputTreeFileArtifacts,
               ActionLookupKey artifactOwner,
-              InputFileReader inputFileReader,
+              ExpansionContext expansionContext,
               EventHandler eventHandler) {
             TreeFileArtifact input = Iterables.getOnlyElement(inputTreeFileArtifacts);
             TreeFileArtifact outputWithWrongOwner =
@@ -272,7 +272,7 @@ public final class ActionTemplateExpansionFunctionTest extends FoundationTestCas
           public ImmutableList<DummyAction> generateActionsForInputArtifacts(
               ImmutableList<TreeFileArtifact> inputTreeFileArtifacts,
               ActionLookupKey artifactOwner,
-              InputFileReader inputFileReader,
+              ExpansionContext expansionContext,
               EventHandler eventHandler) {
             TreeFileArtifact input = Iterables.getOnlyElement(inputTreeFileArtifacts);
             Artifact notTreeFileArtifact =
@@ -304,7 +304,7 @@ public final class ActionTemplateExpansionFunctionTest extends FoundationTestCas
           public ImmutableList<DummyAction> generateActionsForInputArtifacts(
               ImmutableList<TreeFileArtifact> inputTreeFileArtifacts,
               ActionLookupKey artifactOwner,
-              InputFileReader inputFileReader,
+              ExpansionContext expansionContext,
               EventHandler eventHandler) {
             TreeFileArtifact input = Iterables.getOnlyElement(inputTreeFileArtifacts);
             TreeFileArtifact outputUnderWrongTree =
@@ -337,7 +337,7 @@ public final class ActionTemplateExpansionFunctionTest extends FoundationTestCas
           public ImmutableList<DummyAction> generateActionsForInputArtifacts(
               ImmutableList<TreeFileArtifact> inputTreeFileArtifacts,
               ActionLookupKey artifactOwner,
-              InputFileReader inputFileReader,
+              ExpansionContext expansionContext,
               EventHandler eventHandler) {
             TreeFileArtifact input = Iterables.getOnlyElement(inputTreeFileArtifacts);
             return ImmutableList.of(
@@ -372,7 +372,7 @@ public final class ActionTemplateExpansionFunctionTest extends FoundationTestCas
           public ImmutableList<DummyAction> generateActionsForInputArtifacts(
               ImmutableList<TreeFileArtifact> inputTreeFileArtifacts,
               ActionLookupKey artifactOwner,
-              InputFileReader inputFileReader,
+              ExpansionContext expansionContext,
               EventHandler eventHandler) {
             ImmutableList.Builder<DummyAction> actions = ImmutableList.builder();
             ImmutableListMultimap<TreeArtifact, TreeFileArtifact> inputTreeArtifactsToChildren =
@@ -425,7 +425,7 @@ public final class ActionTemplateExpansionFunctionTest extends FoundationTestCas
       public ImmutableList<DummyAction> generateActionsForInputArtifacts(
           ImmutableList<TreeFileArtifact> inputTreeFileArtifacts,
           ActionLookupKey artifactOwner,
-          InputFileReader inputFileReader,
+          ExpansionContext expansionContext,
           EventHandler eventHandler) {
         TreeFileArtifact input = Iterables.getOnlyElement(inputTreeFileArtifacts);
         return ImmutableList.of(

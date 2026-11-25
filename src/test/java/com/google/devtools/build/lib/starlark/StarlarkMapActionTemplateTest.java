@@ -14,6 +14,7 @@
 package com.google.devtools.build.lib.starlark;
 
 import static com.google.common.collect.ImmutableSet.toImmutableSet;
+import static com.google.common.collect.Iterables.getOnlyElement;
 import static com.google.common.truth.Truth.assertThat;
 import static org.junit.Assert.assertThrows;
 
@@ -1910,6 +1911,266 @@ public final class StarlarkMapActionTemplateTest extends BuildIntegrationTestCas
         .containsMatch(
             ".*Cannot declare subdirectory `.*subdir2`.* in another subdirectory "
                 + ".*test/target_output_dir/subdir1.*");
+  }
+
+  /**
+   * Writes a fake C++20 modules rule that compiles one "BMI" per module with a fake compiler that
+   * records the names of the BMIs it was given. It lives in the mock rules_cc module since it uses
+   * the private C++ API.
+   */
+  private void writeFakeModuleRules() throws Exception {
+    write(
+        "third_party/bazel_rules/rules_cc/fake_modules/BUILD", "exports_files([\"compile.sh\"])");
+    write(
+            "third_party/bazel_rules/rules_cc/fake_modules/compile.sh",
+            """
+            #!/bin/sh
+            out="$1"; module="$2"; fail="$3"; shift 3
+            if [ "$fail" = 1 ]; then echo "failed to compile $module" >&2; exit 1; fi
+            { echo "$module"; for f in "$@"; do basename "$f"; done | sort; } > "$out"
+            """)
+        .setExecutable(true);
+    write(
+        "third_party/bazel_rules/rules_cc/fake_modules/rules.bzl",
+        """
+        FakeModuleInfo = provider(fields = ["bmi_dirs"])
+
+        def _compile_modules(
+                template_ctx,
+                input_directories,
+                output_directories,
+                tools,
+                additional_params,
+                **kwargs):
+            cc_internal = cc_common.internal_DO_NOT_USE()
+            failing = additional_params["failing"].split(",")
+            imports = {}
+            for f in input_directories["imports"].children:
+                imports[f.basename.removesuffix(".imports")] = [
+                    i
+                    for i in template_ctx.read(f).strip().split(" ")
+                    if i
+                ]
+            local_bmis = {
+                module: template_ctx.declare_file(
+                    module + ".pcm",
+                    directory = output_directories["bmis"],
+                )
+                for module in imports
+            }
+
+            # The BMIs each local module is compiled against, filled in topological order.
+            closures = {}
+            for _ in range(len(imports)):
+                for module, module_imports in sorted(imports.items()):
+                    if module in closures:
+                        continue
+                    if not all([i in closures for i in module_imports if i in local_bmis]):
+                        continue
+                    inputs = []
+                    for i in module_imports:
+                        if i in local_bmis:
+                            inputs.append(local_bmis[i])
+                            inputs.extend(closures[i])
+                        else:
+                            found = cc_internal.look_up_module_interface(
+                                template_ctx = template_ctx,
+                                path = i + ".pcm",
+                            )
+                            if not found:
+                                fail("%s imports unknown module %s" % (module, i))
+                            bmi, transitive_bmis = found
+                            inputs.append(bmi)
+                            inputs.extend(transitive_bmis)
+                    closures[module] = depset(inputs).to_list()
+                    args = template_ctx.args()
+                    args.add(local_bmis[module])
+                    args.add(module)
+                    args.add("1" if module in failing else "0")
+                    args.add_all(closures[module])
+                    template_ctx.run(
+                        inputs = closures[module],
+                        outputs = [local_bmis[module]],
+                        executable = tools["compile"],
+                        arguments = [args],
+                    )
+
+        def _fake_module_library_impl(ctx):
+            imports_dir = ctx.actions.declare_directory(ctx.label.name + "_imports")
+            commands = ["mkdir -p " + imports_dir.path]
+            for module, module_imports in ctx.attr.modules.items():
+                commands.append("echo '%s' > %s/%s.imports" % (
+                    " ".join(module_imports),
+                    imports_dir.path,
+                    module,
+                ))
+            ctx.actions.run_shell(outputs = [imports_dir], command = " && ".join(commands))
+
+            referenced_directories = depset(
+                transitive = [dep[FakeModuleInfo].bmi_dirs for dep in ctx.attr.deps],
+            )
+            if ctx.attr.reference_plain_directory:
+                plain_dir = ctx.actions.declare_directory(ctx.label.name + "_plain")
+                ctx.actions.run_shell(outputs = [plain_dir], command = "true")
+                referenced_directories = depset(
+                    [plain_dir],
+                    transitive = [referenced_directories],
+                )
+
+            bmi_dir = ctx.actions.declare_directory(ctx.label.name + "_bmis")
+            ctx.actions.map_directory(
+                implementation = _compile_modules,
+                input_directories = {"imports": imports_dir},
+                output_directories = {"bmis": bmi_dir},
+                referenced_directories = referenced_directories,
+                tools = {"compile": ctx.attr._compile.files_to_run},
+                additional_params = {"failing": ",".join(ctx.attr.failing)},
+            )
+            return [
+                DefaultInfo(files = depset([bmi_dir])),
+                FakeModuleInfo(bmi_dirs = depset([bmi_dir], transitive = [
+                    dep[FakeModuleInfo].bmi_dirs
+                    for dep in ctx.attr.deps
+                ])),
+            ]
+
+        fake_module_library = rule(
+            implementation = _fake_module_library_impl,
+            attrs = {
+                "modules": attr.string_list_dict(),
+                "deps": attr.label_list(providers = [FakeModuleInfo]),
+                "failing": attr.string_list(),
+                "reference_plain_directory": attr.bool(),
+                "_compile": attr.label(
+                    default = Label("//fake_modules:compile.sh"),
+                    allow_single_file = True,
+                    executable = True,
+                    cfg = "exec",
+                ),
+            },
+        )
+        """);
+  }
+
+  private String readTreeFile(TreeArtifact tree, String relativeFilePath) throws Exception {
+    return FileSystemUtils.readContentAsLatin1(
+        directories.getExecRoot().getRelative(tree.getExecPath().getChild(relativeFilePath)));
+  }
+
+  private boolean treeFileExists(TreeArtifact tree, String relativeFilePath) throws Exception {
+    return directories
+        .getExecRoot()
+        .getRelative(tree.getExecPath().getChild(relativeFilePath))
+        .exists();
+  }
+
+  @Test
+  public void referencedDirectories_onlyNeededOutputsOfOtherTargetsAreBuilt() throws Exception {
+    writeFakeModuleRules();
+    write(
+        "modules/BUILD",
+        """
+        load("@rules_cc//fake_modules:rules.bzl", "fake_module_library")
+        fake_module_library(
+            name = "a",
+            modules = {
+                "a.x": ["a.y"],
+                "a.y": ["a.z"],
+                "a.z": [],
+                "a.unrelated": [],
+            },
+            # Building all of a fails, but b only needs some of its modules.
+            failing = ["a.unrelated"],
+        )
+        fake_module_library(
+            name = "b",
+            modules = {
+                "b.m": ["a.x", "b.n"],
+                "b.n": [],
+            },
+            deps = [":a"],
+        )
+        """);
+
+    buildTarget("//modules:b");
+
+    TreeArtifact bBmis = assertTreeBuilt("//modules:b", "modules/b_bmis");
+    assertThat(readTreeFile(bBmis, "b.m.pcm"))
+        .isEqualTo("b.m\na.x.pcm\na.y.pcm\na.z.pcm\nb.n.pcm\n");
+    assertThat(readTreeFile(bBmis, "b.n.pcm")).isEqualTo("b.n\n");
+    TreeArtifact aBmis = (TreeArtifact) getOnlyElement(getArtifacts("//modules:a"));
+    assertThat(readTreeFile(aBmis, "a.x.pcm")).isEqualTo("a.x\na.y.pcm\na.z.pcm\n");
+    assertThat(treeFileExists(aBmis, "a.unrelated.pcm")).isFalse();
+    // The tree artifact of a hasn't been built.
+    assertThat(getTreeArtifactValueFromTemplate(aBmis)).isNull();
+
+    assertThrows(BuildFailedException.class, () -> buildTarget("//modules:a"));
+    assertContainsError("a.unrelated");
+  }
+
+  @Test
+  public void referencedDirectories_reexpandedWhenReferencedExpansionChanges() throws Exception {
+    writeFakeModuleRules();
+    String buildFile =
+        """
+        load("@rules_cc//fake_modules:rules.bzl", "fake_module_library")
+        fake_module_library(
+            name = "a",
+            modules = {
+                "a.x": ["a.y"],
+                "a.y": [%s],
+                "a.z": [],
+            },
+        )
+        fake_module_library(
+            name = "b",
+            modules = {"b.m": ["a.x"]},
+            deps = [":a"],
+        )
+        """;
+    write("modules/BUILD", buildFile.formatted(""));
+    buildTarget("//modules:b");
+    TreeArtifact bBmis = assertTreeBuilt("//modules:b", "modules/b_bmis");
+    assertThat(readTreeFile(bBmis, "b.m.pcm")).isEqualTo("b.m\na.x.pcm\na.y.pcm\n");
+
+    write("modules/BUILD", buildFile.formatted("\"a.z\""));
+    buildTarget("//modules:b");
+    assertThat(readTreeFile(bBmis, "b.m.pcm")).isEqualTo("b.m\na.x.pcm\na.y.pcm\na.z.pcm\n");
+  }
+
+  @Test
+  public void referencedDirectories_moduleProvidedByTwoTargets() throws Exception {
+    writeFakeModuleRules();
+    write(
+        "modules/BUILD",
+        """
+        load("@rules_cc//fake_modules:rules.bzl", "fake_module_library")
+        fake_module_library(name = "a", modules = {"dup": []})
+        fake_module_library(name = "b", modules = {"dup": []})
+        fake_module_library(name = "c", modules = {"c": ["dup"]}, deps = [":a", ":b"])
+        """);
+
+    assertThrows(BuildFailedException.class, () -> buildTarget("//modules:c"));
+    assertContainsError("Module interface 'dup.pcm' is provided by both");
+  }
+
+  @Test
+  public void referencedDirectories_mustBeOutputsOfMapDirectory() throws Exception {
+    writeFakeModuleRules();
+    write(
+        "modules/BUILD",
+        """
+        load("@rules_cc//fake_modules:rules.bzl", "fake_module_library")
+        fake_module_library(
+            name = "a",
+            modules = {"a": []},
+            reference_plain_directory = True,
+        )
+        """);
+
+    assertThrows(BuildFailedException.class, () -> buildTarget("//modules:a"));
+    assertContainsError(
+        "a_plain in referenced_directories is not an output directory of a map_directory() call");
   }
 
   private TreeArtifact assertTreeBuilt(String rootRelativePath) throws Exception {

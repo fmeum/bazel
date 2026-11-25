@@ -1,0 +1,2 @@
+common --experimental_allow_map_directory
+common --lockfile_mode=off

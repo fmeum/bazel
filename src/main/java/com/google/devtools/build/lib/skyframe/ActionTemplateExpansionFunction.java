@@ -14,6 +14,7 @@
 package com.google.devtools.build.lib.skyframe;
 
 import static com.google.common.base.Preconditions.checkArgument;
+import static com.google.common.collect.ImmutableSet.toImmutableSet;
 
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Preconditions;
@@ -34,9 +35,11 @@ import com.google.devtools.build.lib.actions.ActionInputMap;
 import com.google.devtools.build.lib.actions.ActionInputPrefetcher.Priority;
 import com.google.devtools.build.lib.actions.ActionInputPrefetcher.Reason;
 import com.google.devtools.build.lib.actions.ActionKeyContext;
+import com.google.devtools.build.lib.actions.ActionLookupKey;
 import com.google.devtools.build.lib.actions.ActionLookupValue;
 import com.google.devtools.build.lib.actions.ActionTemplate;
-import com.google.devtools.build.lib.actions.ActionTemplate.InputFileReader;
+import com.google.devtools.build.lib.actions.ActionTemplate.ExpansionContext;
+import com.google.devtools.build.lib.actions.ActionTemplate.ReferencedOutput;
 import com.google.devtools.build.lib.actions.Actions;
 import com.google.devtools.build.lib.actions.AlreadyReportedActionExecutionException;
 import com.google.devtools.build.lib.actions.Artifact;
@@ -51,16 +54,22 @@ import com.google.devtools.build.lib.events.Event;
 import com.google.devtools.build.lib.events.EventHandler;
 import com.google.devtools.build.lib.profiler.SilentCloseable;
 import com.google.devtools.build.lib.remote.common.BulkTransferException;
+import com.google.devtools.build.lib.server.FailureDetails.Execution;
+import com.google.devtools.build.lib.server.FailureDetails.FailureDetail;
 import com.google.devtools.build.lib.skyframe.ActionTemplateExpansionValue.ActionTemplateExpansionKey;
 import com.google.devtools.build.lib.skyframe.ArtifactFunction.MissingArtifactValue;
 import com.google.devtools.build.lib.skyframe.rewinding.ActionRewindException;
 import com.google.devtools.build.lib.skyframe.rewinding.ActionRewindStrategy;
+import com.google.devtools.build.lib.util.DetailedExitCode;
 import com.google.devtools.build.lib.vfs.FileSystemUtils;
+import com.google.devtools.build.lib.vfs.PathFragment;
 import com.google.devtools.build.skyframe.SkyFunction;
 import com.google.devtools.build.skyframe.SkyFunctionException;
 import com.google.devtools.build.skyframe.SkyKey;
 import com.google.devtools.build.skyframe.SkyValue;
 import com.google.devtools.build.skyframe.SkyframeLookupResult;
+import com.google.errorprone.annotations.FormatMethod;
+import com.google.errorprone.annotations.FormatString;
 import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.util.Collection;
@@ -120,15 +129,45 @@ public class ActionTemplateExpansionFunction implements SkyFunction {
         otherInputKeysBuilder::add);
     ImmutableList<SkyKey> otherInputKeys = otherInputKeysBuilder.build();
 
+    // The directories referenced by the template don't have to be built, only the templates
+    // generating them have to be expanded. The owners of these templates have already been
+    // analyzed and are requested together with the inputs to avoid a Skyframe restart.
+    ImmutableList<Artifact> referencedDirectories =
+        actionTemplate.getReferencedDirectories().toList();
+    ImmutableSet<ActionLookupKey> referencedDirectoryOwners =
+        referencedDirectories.stream()
+            .filter(TreeArtifact.class::isInstance)
+            .map(directory -> ((TreeArtifact) directory).getArtifactOwner())
+            .collect(toImmutableSet());
+
     SkyframeLookupResult result =
-        env.getValuesAndExceptions(Iterables.concat(inputTreeArtifacts, otherInputKeys));
+        env.getValuesAndExceptions(
+            Iterables.concat(inputTreeArtifacts, otherInputKeys, referencedDirectoryOwners));
 
     if (env.valuesMissing()) {
       return null;
     }
 
+    ImmutableMap<TreeArtifact, ActionTemplateExpansionValue> referencedExpansions;
+    try {
+      referencedExpansions =
+          getReferencedExpansions(actionTemplate, referencedDirectories, result, env);
+    } catch (ActionExecutionException e) {
+      env.getListener()
+          .handle(
+              Event.error(
+                  actionTemplate.getOwner().getLocation(),
+                  actionTemplate.describe() + " failed: " + e.getMessage()));
+      throw new ActionTemplateExpansionFunctionException(
+          new AlreadyReportedActionExecutionException(e));
+    }
+    if (referencedExpansions == null) {
+      return null;
+    }
+
     var inputMetadata = new ActionInputMap(inputTreeArtifacts.size());
-    var inputFileReader = new TemplateInputFileReader(actionTemplate, inputMetadata, result);
+    var expansionContext =
+        new TemplateExpansionContext(actionTemplate, inputMetadata, result, referencedExpansions);
     ImmutableList<ActionAnalysisMetadata> actions;
     try {
       ImmutableList.Builder<TreeFileArtifact> inputTreeFileArtifacts = ImmutableList.builder();
@@ -160,12 +199,12 @@ public class ActionTemplateExpansionFunction implements SkyFunction {
                 actionTemplate,
                 inputTreeFileArtifacts.build(),
                 key,
-                inputFileReader,
+                expansionContext,
                 env.getListener());
       }
     } catch (ActionExecutionException e) {
       ActionExecutionException failure = e;
-      if (inputFileReader.lostInputs != null) {
+      if (expansionContext.lostInputs != null) {
         // The expansion failed since it read an input that is no longer available. Rewind the
         // action generating it.
         try {
@@ -174,7 +213,7 @@ public class ActionTemplateExpansionFunction implements SkyFunction {
                   key,
                   actionTemplate,
                   ImmutableSet.copyOf(Iterables.concat(inputTreeArtifacts, otherInputKeys)),
-                  inputFileReader.lostInputs,
+                  expansionContext.lostInputs,
                   inputMetadata,
                   env)
               .toNullIfMissingDependenciesElseReset();
@@ -219,24 +258,126 @@ public class ActionTemplateExpansionFunction implements SkyFunction {
   }
 
   /**
-   * Reads the input files of an {@link ActionTemplate} and records the ones that are no longer
-   * available.
+   * Returns the expansions of the action templates generating the given directories, keyed by
+   * directory, or {@code null} if some of them aren't available yet.
+   *
+   * <p>The expansions are requested without requesting the directories themselves, so that the
+   * actions generated by this template only wait for the individual files they consume.
    */
-  private final class TemplateInputFileReader implements InputFileReader {
+  @Nullable
+  private static ImmutableMap<TreeArtifact, ActionTemplateExpansionValue> getReferencedExpansions(
+      ActionTemplate<?> actionTemplate,
+      ImmutableList<Artifact> referencedDirectories,
+      SkyframeLookupResult ownerValues,
+      Environment env)
+      throws ActionExecutionException, InterruptedException {
+    if (referencedDirectories.isEmpty()) {
+      return ImmutableMap.of();
+    }
+    var expansionKeys =
+        ImmutableMap.<TreeArtifact, ActionTemplateExpansionKey>builderWithExpectedSize(
+            referencedDirectories.size());
+    for (Artifact artifact : referencedDirectories) {
+      if (!(artifact instanceof TreeArtifact directory) || directory.isSubTreeArtifact()) {
+        throw referencedDirectoryError(
+            actionTemplate,
+            "%s in referenced_directories is not a directory",
+            artifact.getExecPathString());
+      }
+      if (actionTemplate.getOutputs().contains(directory)) {
+        throw referencedDirectoryError(
+            actionTemplate,
+            "%s in referenced_directories is an output directory of the same map_directory()"
+                + " call",
+            directory.getExecPathString());
+      }
+      var ownerValue = (ActionLookupValue) ownerValues.get(directory.getArtifactOwner());
+      if (ownerValue == null) {
+        return null;
+      }
+      int actionIndex = directory.getGeneratingActionKey().getActionIndex();
+      if (!(ownerValue.getActions().get(actionIndex) instanceof ActionTemplate<?>)) {
+        throw referencedDirectoryError(
+            actionTemplate,
+            "%s in referenced_directories is not an output directory of a map_directory() call",
+            directory.getExecPathString());
+      }
+      expansionKeys.put(
+          directory, ActionTemplateExpansionValue.key(directory.getArtifactOwner(), actionIndex));
+    }
+    ImmutableMap<TreeArtifact, ActionTemplateExpansionKey> keys =
+        expansionKeys.buildKeepingLast();
+    SkyframeLookupResult expansionValues = env.getValuesAndExceptions(keys.values());
+    var expansions =
+        ImmutableMap.<TreeArtifact, ActionTemplateExpansionValue>builderWithExpectedSize(
+            keys.size());
+    for (var entry : keys.entrySet()) {
+      // A failed expansion is propagated to the expansion of this template by returning null.
+      var expansion = (ActionTemplateExpansionValue) expansionValues.get(entry.getValue());
+      if (expansion == null) {
+        return null;
+      }
+      expansions.put(entry.getKey(), expansion);
+    }
+    return expansions.buildOrThrow();
+  }
+
+  @FormatMethod
+  private static ActionExecutionException referencedDirectoryError(
+      ActionTemplate<?> actionTemplate, @FormatString String format, Object... args) {
+    String message = String.format(format, args);
+    return new ActionExecutionException(
+        message,
+        actionTemplate,
+        /* catastrophe= */ false,
+        DetailedExitCode.of(
+            FailureDetail.newBuilder()
+                .setMessage(message)
+                // The same code is used for other errors in map_directory() implementations.
+                .setExecution(
+                    Execution.newBuilder()
+                        .setCode(
+                            Execution.Code.PERSISTENT_ACTION_OUTPUT_DIRECTORY_CREATION_FAILURE))
+                .build()));
+  }
+
+  /**
+   * Reads the input files of an {@link ActionTemplate}, records the ones that are no longer
+   * available and looks up the outputs of the templates generating its referenced directories.
+   */
+  private final class TemplateExpansionContext implements ExpansionContext {
     private final ActionTemplate<?> actionTemplate;
     // Initially contains the metadata of the files in the input tree artifacts. The metadata of
     // other files is added when they are read.
     private final ActionInputMap inputMetadata;
     private final SkyframeLookupResult inputValues;
+    private final ImmutableMap<TreeArtifact, ActionTemplateExpansionValue> referencedExpansions;
     @Nullable private ImmutableSetMultimap<String, ActionInput> lostInputs;
 
-    TemplateInputFileReader(
+    TemplateExpansionContext(
         ActionTemplate<?> actionTemplate,
         ActionInputMap inputMetadata,
-        SkyframeLookupResult inputValues) {
+        SkyframeLookupResult inputValues,
+        ImmutableMap<TreeArtifact, ActionTemplateExpansionValue> referencedExpansions) {
       this.actionTemplate = actionTemplate;
       this.inputMetadata = inputMetadata;
       this.inputValues = inputValues;
+      this.referencedExpansions = referencedExpansions;
+    }
+
+    @Override
+    @Nullable
+    public ReferencedOutput lookUpReferencedOutput(
+        TreeArtifact directory, PathFragment relativePath) {
+      ActionTemplateExpansionValue expansion = referencedExpansions.get(directory);
+      checkArgument(
+          expansion != null, "%s is not referenced by %s", directory, actionTemplate);
+      TreeFileArtifact output = expansion.getOutput(directory, relativePath);
+      if (output == null) {
+        return null;
+      }
+      return new ReferencedOutput(
+          output, expansion.getAction(output.getGeneratingActionKey().getActionIndex()));
     }
 
     @Override
@@ -303,7 +444,7 @@ public class ActionTemplateExpansionFunction implements SkyFunction {
       ActionTemplate<?> actionTemplate,
       ImmutableList<TreeFileArtifact> inputTreeFileArtifacts,
       ActionTemplateExpansionKey key,
-      InputFileReader inputFileReader,
+      ExpansionContext expansionContext,
       EventHandler eventHandler)
       throws ActionConflictException, ActionExecutionException, InterruptedException {
     Collection<Artifact> outputs = actionTemplate.getOutputs();
@@ -316,7 +457,7 @@ public class ActionTemplateExpansionFunction implements SkyFunction {
     }
     ImmutableList<? extends Action> actions =
         actionTemplate.generateActionsForInputArtifacts(
-            inputTreeFileArtifacts, key, inputFileReader, eventHandler);
+            inputTreeFileArtifacts, key, expansionContext, eventHandler);
     for (Action action : actions) {
       for (Artifact output : action.getOutputs()) {
         Preconditions.checkState(
