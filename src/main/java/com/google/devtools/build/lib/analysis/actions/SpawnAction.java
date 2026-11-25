@@ -742,14 +742,15 @@ public class SpawnAction extends AbstractAction implements CommandAction {
     public SpawnAction buildForStarlarkActionTemplate(ActionOwner owner) {
       NestedSet<Artifact> tools = toolsBuilder.build();
       NestedSet<Artifact> inputs = inputsBuilder.addTransitive(tools).build();
-      return new SpawnAction(
+      return createSpawnAction(
           owner,
           tools,
           inputs,
-          outputs,
+          ImmutableSet.copyOf(outputs),
           resourceSetOrBuilder,
           buildCommandLines(),
           checkNotNull(actionEnvironment),
+          /* configuration= */ null,
           executionInfo,
           progressMessage,
           mnemonic);

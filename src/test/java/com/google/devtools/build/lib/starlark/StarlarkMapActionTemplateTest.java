@@ -1913,6 +1913,115 @@ public final class StarlarkMapActionTemplateTest extends BuildIntegrationTestCas
                 + ".*test/target_output_dir/subdir1.*");
   }
 
+  private void writeUnusedInputsListRule(boolean unusedListIsOutput) throws Exception {
+    write(
+            "unused/tool.sh",
+            """
+            #!/bin/sh
+            out="$1"; unused_list="$2"; used="$3"; unused="$4"
+            cat "$used" "$unused" > "$out"
+            echo "$unused" > "$unused_list"
+            """)
+        .setExecutable(true);
+    write(
+        "unused/defs.bzl",
+        """
+        def _impl(
+                template_ctx,
+                input_directories,
+                output_directories,
+                additional_inputs,
+                tools,
+                additional_params):
+            out = template_ctx.declare_file("out.txt", directory = output_directories["out"])
+            unused_list = template_ctx.declare_file(
+                "out.unused",
+                directory = output_directories["out"],
+            )
+            used = additional_inputs["used"]
+            unused = additional_inputs["unused"]
+            args = template_ctx.args()
+            args.add_all([out, unused_list, used, unused])
+            template_ctx.run(
+                inputs = [used, unused],
+                outputs = [out, unused_list] if additional_params["list_is_output"] else [out],
+                executable = tools["tool"],
+                arguments = [args],
+                unused_inputs_list = unused_list,
+            )
+
+        def _rule_impl(ctx):
+            seed = ctx.actions.declare_directory(ctx.label.name + "_seed")
+            ctx.actions.run_shell(outputs = [seed], command = "touch %s/x" % seed.path)
+            out = ctx.actions.declare_directory(ctx.label.name + "_out")
+            ctx.actions.map_directory(
+                implementation = _impl,
+                input_directories = {"seed": seed},
+                output_directories = {"out": out},
+                additional_inputs = {"used": ctx.file.used, "unused": ctx.file.unused},
+                tools = {"tool": ctx.attr._tool.files_to_run},
+                additional_params = {"list_is_output": ctx.attr.list_is_output},
+            )
+            return [DefaultInfo(files = depset([out]))]
+
+        prune_rule = rule(
+            implementation = _rule_impl,
+            attrs = {
+                "used": attr.label(allow_single_file = True),
+                "unused": attr.label(allow_single_file = True),
+                "list_is_output": attr.bool(),
+                "_tool": attr.label(
+                    default = ":tool.sh",
+                    allow_single_file = True,
+                    executable = True,
+                    cfg = "exec",
+                ),
+            },
+        )
+        """);
+    write(
+        "unused/BUILD",
+        """
+        load(":defs.bzl", "prune_rule")
+        prune_rule(
+            name = "t",
+            used = "used.txt",
+            unused = "unused.txt",
+            list_is_output = %s,
+        )
+        """
+            .formatted(unusedListIsOutput ? "True" : "False"));
+  }
+
+  @Test
+  public void unusedInputsList_changedUnusedInputDoesNotRerunAction() throws Exception {
+    writeUnusedInputsListRule(/* unusedListIsOutput= */ true);
+    write("unused/used.txt", "used 1");
+    write("unused/unused.txt", "unused 1");
+    buildTarget("//unused:t");
+    TreeArtifact out = assertTreeBuilt("//unused:t", "unused/t_out");
+    assertThat(readTreeFile(out, "out.txt")).isEqualTo("used 1\nunused 1\n");
+
+    // The action isn't rerun, so its output still contains the old contents of the unused input.
+    write("unused/unused.txt", "unused 2");
+    buildTarget("//unused:t");
+    assertThat(readTreeFile(out, "out.txt")).isEqualTo("used 1\nunused 1\n");
+
+    write("unused/used.txt", "used 2");
+    buildTarget("//unused:t");
+    assertThat(readTreeFile(out, "out.txt")).isEqualTo("used 2\nunused 2\n");
+  }
+
+  @Test
+  public void unusedInputsList_mustBeAnOutput() throws Exception {
+    writeUnusedInputsListRule(/* unusedListIsOutput= */ false);
+    write("unused/used.txt", "used");
+    write("unused/unused.txt", "unused");
+
+    assertThrows(BuildFailedException.class, () -> buildTarget("//unused:t"));
+    assertContainsError("unused/t_out/out.unused must be one of the outputs of the action");
+  }
+
   /**
    * Writes a fake C++20 modules rule that compiles one "BMI" per module with a fake compiler that
    * records the names of the BMIs it was given. It lives in the mock rules_cc module since it uses

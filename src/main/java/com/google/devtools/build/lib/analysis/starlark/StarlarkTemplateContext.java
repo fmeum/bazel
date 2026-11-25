@@ -29,6 +29,7 @@ import com.google.devtools.build.lib.actions.Artifact.TreeArtifact;
 import com.google.devtools.build.lib.actions.Artifact.TreeFileArtifact;
 import com.google.devtools.build.lib.analysis.FilesToRunProvider;
 import com.google.devtools.build.lib.analysis.actions.SpawnAction;
+import com.google.devtools.build.lib.analysis.actions.StarlarkAction;
 import com.google.devtools.build.lib.cmdline.RepositoryMapping;
 import com.google.devtools.build.lib.collect.nestedset.Depset;
 import com.google.devtools.build.lib.collect.nestedset.NestedSet;
@@ -38,6 +39,7 @@ import com.google.devtools.build.lib.supplier.InterruptibleSupplier;
 import com.google.devtools.build.lib.vfs.PathFragment;
 import java.io.IOException;
 import java.util.List;
+import java.util.Optional;
 import javax.annotation.Nullable;
 import net.starlark.java.eval.EvalException;
 import net.starlark.java.eval.Sequence;
@@ -97,11 +99,25 @@ public final class StarlarkTemplateContext implements StarlarkTemplateContextApi
       Object executableUnchecked,
       Object toolsUnchecked,
       Sequence<?> arguments,
-      Object progressMessage)
+      Object progressMessage,
+      Object unusedInputsList)
       throws EvalException, InterruptedException {
 
-    SpawnAction.Builder builder =
-        newSpawnActionBuilder().addOutputs(Sequence.cast(outputs, Artifact.class, "outputs"));
+    List<Artifact> outputArtifacts = Sequence.cast(outputs, Artifact.class, "outputs");
+    SpawnAction.Builder builder;
+    if (unusedInputsList instanceof Artifact unusedInputsListArtifact) {
+      if (!outputArtifacts.contains(unusedInputsListArtifact)) {
+        throw Starlark.errorf(
+            "unused_inputs_list %s must be one of the outputs of the action",
+            unusedInputsListArtifact.getExecPathString());
+      }
+      builder =
+          new StarlarkAction.Builder(spawnActionBuilder)
+              .setUnusedInputsList(Optional.of(unusedInputsListArtifact));
+    } else {
+      builder = newSpawnActionBuilder();
+    }
+    builder.addOutputs(outputArtifacts);
 
     // The only other type is NoneType, which if specified will use the default progress message of
     // an action.

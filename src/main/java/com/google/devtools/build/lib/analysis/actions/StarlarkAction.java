@@ -133,6 +133,13 @@ public class StarlarkAction extends SpawnAction {
     private Optional<Action> shadowedAction = Optional.empty();
     @Nullable private Artifact stdoutOutput = null;
 
+    public Builder() {}
+
+    /** Creates a builder that is a copy of a {@link SpawnAction.Builder}. */
+    public Builder(SpawnAction.Builder other) {
+      super(other);
+    }
+
     @CanIgnoreReturnValue
     public Builder setUnusedInputsList(Optional<Artifact> unusedInputsList) {
       this.unusedInputsList = unusedInputsList;

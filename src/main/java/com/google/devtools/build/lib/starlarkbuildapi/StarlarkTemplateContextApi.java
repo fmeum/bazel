@@ -161,6 +161,20 @@ public interface StarlarkTemplateContextApi extends StarlarkValue {
             positional = false,
             defaultValue = "None",
             doc = "Progress message to show to the user during the build."),
+        @Param(
+            name = "unused_inputs_list",
+            allowedTypes = {
+              @ParamType(type = FileApi.class),
+              @ParamType(type = NoneType.class),
+            },
+            named = true,
+            positional = false,
+            defaultValue = "None",
+            doc =
+                "One of the <code>outputs</code> of the action that lists the inputs it didn't"
+                    + " use, one exec path per line, as for the parameter of the same name of <a"
+                    + " href=\"../builtins/actions.html#run\"><code>ctx.actions.run</code></a>."
+                    + " Changes to these inputs don't cause the action to be rerun."),
       })
   void run(
       Sequence<?> outputs,
@@ -168,6 +182,7 @@ public interface StarlarkTemplateContextApi extends StarlarkValue {
       Object executableUnchecked,
       Object toolsUnchecked,
       Sequence<?> arguments,
-      Object progressMessage)
+      Object progressMessage,
+      Object unusedInputsList)
       throws EvalException, InterruptedException;
 }
