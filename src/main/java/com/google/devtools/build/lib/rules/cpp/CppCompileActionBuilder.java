@@ -403,7 +403,15 @@ public final class CppCompileActionBuilder implements StarlarkValue {
       realMandatoryInputsBuilder.addTransitive(additionalPrunableHeaders);
     }
     if (modmapFile != null) {
-      realMandatoryInputsBuilder.add(modmapFile).add(Preconditions.checkNotNull(modmapInputFile));
+      realMandatoryInputsBuilder.add(modmapFile);
+      if (modmapInputFile != null) {
+        realMandatoryInputsBuilder.add(modmapInputFile);
+      } else if (moduleFiles != null) {
+        // Without a modmap input file, the module files are exactly the ones used by the
+        // compilation, e.g. because they were computed by an action template from the module
+        // dependencies of the source file. They don't need to be discovered.
+        realMandatoryInputsBuilder.addTransitive(moduleFiles);
+      }
     }
     return realMandatoryInputsBuilder.build();
   }
@@ -648,6 +656,11 @@ public final class CppCompileActionBuilder implements StarlarkValue {
   }
 
   @CanIgnoreReturnValue
+  /**
+   * Sets the file listing the module files used by the compilation, which are then discovered as
+   * inputs among {@link #setModuleFiles}. If no such file is set, all module files are mandatory
+   * inputs.
+   */
   public CppCompileActionBuilder setModmapInputFile(Artifact modmapInputFile) {
     this.modmapInputFile = modmapInputFile;
     return this;

@@ -478,7 +478,19 @@ public final class StarlarkMapActionTemplate extends ActionKeyComputer
 
   @Override
   public String describe() {
+    if (inputDirectories.isEmpty()) {
+      return String.format("Generating actions for %s", outputDirectories.values());
+    }
     return String.format("Expanding %s into actions", getInputTreeArtifacts());
+  }
+
+  @Override
+  @Nullable
+  public Artifact getPrimaryInput() {
+    if (!inputDirectories.isEmpty()) {
+      return getInputTreeArtifacts().get(0);
+    }
+    return allInputs.isEmpty() ? null : allInputs.toList().get(0);
   }
 
   /**

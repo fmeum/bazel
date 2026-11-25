@@ -1741,6 +1741,10 @@ public class CppCompileAction extends AbstractAction
         && !CppFileTypes.CPP_SOURCE.matches(sourceFile.getExecPath())) {
       return ImmutableSet.of();
     }
+    // Without a modmap input file, all module files are mandatory inputs.
+    if (modmapInputFile == null) {
+      return ImmutableSet.of();
+    }
     ImmutableSet<String> usedModulePaths;
     try {
       // Read the file paths as raw bytes, which matches Bazel's internal encoding of path strings

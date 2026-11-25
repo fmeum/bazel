@@ -909,6 +909,7 @@ This function must be top-level, i.e. lambdas and nested functions are not allow
             allowedTypes = {
               @ParamType(type = Dict.class, generic1 = FileApi.class),
             },
+            defaultValue = "{}",
             named = true,
             positional = false,
             doc =

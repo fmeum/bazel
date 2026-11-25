@@ -1174,9 +1174,6 @@ public class StarlarkActionFactory implements StarlarkActionFactoryApi {
     context.checkMutable("actions.map_directory");
 
     RuleContext ruleContext = getRuleContext();
-    if (inputDirectories.size() < 1) {
-      throw Starlark.errorf("actions.map_directory() requires at least one input.");
-    }
     if (outputDirectories.size() < 1) {
       throw Starlark.errorf("actions.map_directory() requires at least one output.");
     }

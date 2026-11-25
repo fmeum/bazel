@@ -149,8 +149,10 @@ public interface ActionTemplate<T extends Action> extends ActionAnalysisMetadata
   }
 
   @Override
-  default TreeArtifact getPrimaryInput() {
-    return getInputTreeArtifacts().get(0);
+  @Nullable
+  default Artifact getPrimaryInput() {
+    ImmutableList<TreeArtifact> inputTreeArtifacts = getInputTreeArtifacts();
+    return inputTreeArtifacts.isEmpty() ? null : inputTreeArtifacts.get(0);
   }
 
   @Override

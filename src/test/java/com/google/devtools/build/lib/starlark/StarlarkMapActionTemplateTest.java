@@ -1017,9 +1017,8 @@ public final class StarlarkMapActionTemplateTest extends BuildIntegrationTestCas
 
   @Test
   @TestParameters("{inputs: '{\"input_dir\": input_dir}', outputs: '{}', errorType: 'output'}")
-  @TestParameters("{inputs: '{}', outputs: '{\"output_dir\": output_dir}', errorType: 'input'}")
-  public void emptyInputOrOutputDirectoriesNotAllowed(
-      String inputs, String outputs, String errorType) throws Exception {
+  public void emptyOutputDirectoriesNotAllowed(String inputs, String outputs, String errorType)
+      throws Exception {
     SkyframeExecutorTestHelper.process(getSkyframeExecutor());
     write(
         "test/rule_def.bzl",
@@ -1046,6 +1045,43 @@ public final class StarlarkMapActionTemplateTest extends BuildIntegrationTestCas
     assertThrows(ViewCreationFailedException.class, () -> buildTarget("//test:target"));
     assertThat(recordingOutErr.errAsLatin1())
         .contains(String.format("actions.map_directory() requires at least one %s.", errorType));
+  }
+
+  @Test
+  public void noInputDirectories_readsAdditionalInputs() throws Exception {
+    SkyframeExecutorTestHelper.process(getSkyframeExecutor());
+    write(
+        "test/rule_def.bzl",
+        """
+        def impl(template_ctx, output_directories, additional_inputs, tools, **kwargs):
+            for name in template_ctx.read(additional_inputs["data"]).strip().split(" "):
+                out = template_ctx.declare_file(name + ".out", directory = output_directories["out"])
+                args = template_ctx.args()
+                args.add_all([out, additional_inputs["data"]])
+                template_ctx.run(
+                    inputs = [additional_inputs["data"]],
+                    outputs = [out],
+                    executable = tools["cat_tool"],
+                    arguments = [args],
+                )
+
+        def rule_impl(ctx):
+            output_dir = ctx.actions.declare_directory(ctx.attr.name + "_output_dir")
+            ctx.actions.map_directory(
+                implementation = impl,
+                output_directories = {"out": output_dir},
+                additional_inputs = {"data": ctx.file.data},
+                tools = {"cat_tool": ctx.attr.cat_tool.files_to_run},
+            )
+            return [DefaultInfo(files = depset([output_dir]))]
+        """);
+    write("test/data.txt", "a b");
+
+    buildTarget("//test:target");
+
+    TreeArtifact outputTree = assertTreeBuilt("test/target_output_dir");
+    assertThat(getChildRelativePaths(outputTree, getTreeArtifactValueFromTemplate(outputTree)))
+        .containsExactly(PathFragment.create("a.out"), PathFragment.create("b.out"));
   }
 
   @Test
