@@ -334,6 +334,45 @@ public abstract class ActionInputPrefetcherTestBase {
   }
 
   @Test
+  public void prefetchFiles_targetBeforeSymlinkWithDistinctMetadata_recordsContentsProxyOnBoth()
+      throws Exception {
+    doTestSameFileThroughDistinctMetadata(/* symlinkFirst= */ false);
+  }
+
+  @Test
+  public void prefetchFiles_symlinkWithDistinctMetadataBeforeTarget_recordsContentsProxyOnBoth()
+      throws Exception {
+    doTestSameFileThroughDistinctMetadata(/* symlinkFirst= */ true);
+  }
+
+  private void doTestSameFileThroughDistinctMetadata(boolean symlinkFirst) throws Exception {
+    Map<ActionInput, FileArtifactValue> metadata = new HashMap<>();
+    Map<HashCode, byte[]> cas = new HashMap<>();
+    Artifact target = createRemoteArtifact("target", "hello world", metadata, cas);
+    // The metadata of the symlink is distinct from that of its target, e.g. because it has been
+    // retained from a previous build, and still records the contents proxy of a previous
+    // materialization of the target.
+    Artifact symlink =
+        createRemoteArtifact(
+            "symlink", "hello world", target.getPath().asFragment(), metadata, cas);
+    Path previousTarget = artifactRoot.getRoot().getRelative("previous_target");
+    FileSystemUtils.writeContent(previousTarget, "hello world".getBytes(UTF_8));
+    metadata.get(symlink).setContentsProxy(FileContentsProxy.create(previousTarget.stat()));
+    AbstractActionInputPrefetcher prefetcher = createPrefetcher(cas);
+
+    for (Artifact input :
+        symlinkFirst ? ImmutableList.of(symlink, target) : ImmutableList.of(target, symlink)) {
+      wait(
+          prefetcher.prefetchFilesInterruptibly(
+              action, ImmutableList.of(input), metadata::get, Priority.MEDIUM, Reason.INPUTS));
+    }
+
+    FileContentsProxy proxy = FileContentsProxy.create(target.getPath().stat());
+    assertThat(metadata.get(target).getContentsProxy()).isEqualTo(proxy);
+    assertThat(metadata.get(symlink).getContentsProxy()).isEqualTo(proxy);
+  }
+
+  @Test
   public void prefetchFiles_fileExistsButContentMismatches_download()
       throws IOException, ExecException, InterruptedException {
     Map<ActionInput, FileArtifactValue> metadata = new HashMap<>();

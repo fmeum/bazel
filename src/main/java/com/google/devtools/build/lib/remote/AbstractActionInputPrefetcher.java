@@ -88,6 +88,20 @@ public abstract class AbstractActionInputPrefetcher implements ActionInputPrefet
 
   private final Reporter reporter;
   private final AsyncTaskCache.NoResult<Path> downloadCache = AsyncTaskCache.NoResult.create();
+
+  /**
+   * For each file in {@link #downloadCache}, the metadata that was passed to the task that
+   * materialized it and whose contents proxy has thus been updated.
+   *
+   * <p>Multiple distinct metadata instances can describe the same file, for example the metadata of
+   * an output of {@code ctx.actions.symlink} that has been retained from a previous build by
+   * Skyframe change pruning and the metadata of the symlink's target. Since {@link #downloadCache}
+   * deduplicates downloads per path, the contents proxy of the other instances has to be updated
+   * separately to prevent them from describing a previous materialization of the file.
+   */
+  private final ConcurrentHashMap<Path, FileArtifactValue> materializedMetadata =
+      new ConcurrentHashMap<>();
+
   private final TempPathGenerator tempPathGenerator;
   private final OutputPermissions outputPermissions;
   private final ConcurrentArtifactPathTrie rewoundActionOutputs = new ConcurrentArtifactPathTrie();
@@ -792,16 +806,36 @@ public abstract class AbstractActionInputPrefetcher implements ActionInputPrefet
                           alreadyDeleted.set(true);
                         }));
 
-    return downloadCache.execute(
-        finalPath,
-        Completable.defer(
-            () -> {
-              if (shouldDownloadFile(finalPath, metadata)) {
-                return download;
-              }
-              return Completable.complete();
-            }),
-        forceRefetch(finalPath));
+    return downloadCache
+        .execute(
+            finalPath,
+            Completable.defer(
+                    () -> {
+                      if (shouldDownloadFile(finalPath, metadata)) {
+                        return download;
+                      }
+                      return Completable.complete();
+                    })
+                .doOnComplete(() -> materializedMetadata.put(finalPath, metadata)),
+            forceRefetch(finalPath))
+        .doOnComplete(() -> maybeCopyContentsProxy(finalPath, metadata));
+  }
+
+  /**
+   * Updates the contents proxy of the given metadata if the file at the given path was materialized
+   * by a download task for a different metadata instance with the same digest.
+   */
+  private void maybeCopyContentsProxy(Path path, FileArtifactValue metadata) {
+    FileArtifactValue materialized = materializedMetadata.get(path);
+    if (materialized == null || materialized == metadata) {
+      return;
+    }
+    FileContentsProxy proxy = materialized.getContentsProxy();
+    if (proxy != null
+        && !proxy.equals(metadata.getContentsProxy())
+        && Arrays.equals(materialized.getDigest(), metadata.getDigest())) {
+      metadata.setContentsProxy(proxy);
+    }
   }
 
   private void finalizeDownload(
@@ -925,7 +959,9 @@ public abstract class AbstractActionInputPrefetcher implements ActionInputPrefet
   public void invalidateDownloads(Iterable<PathFragment> execPaths) {
     for (PathFragment path : execPaths) {
       // Downloads are written to the actual host file system, not any overlays.
-      downloadCache.invalidate(execRoot.getRelative(path).forHostFileSystem());
+      Path hostPath = execRoot.getRelative(path).forHostFileSystem();
+      downloadCache.invalidate(hostPath);
+      materializedMetadata.remove(hostPath);
     }
   }
 
